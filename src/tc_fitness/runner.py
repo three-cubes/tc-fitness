@@ -68,7 +68,7 @@ import os
 import subprocess
 import sys
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -126,6 +126,55 @@ class ConditionalResult:
 # (``subprocess_arg_env`` / ``subprocess_arg_default``) with a generic skip
 # line. A consumer supplies this to reproduce its exact skip text.
 ConditionalCheck = Callable[[RuleEntry], "ConditionalResult | None"]
+
+
+def make_env_path_conditional_check(
+    *,
+    env_var: str,
+    default_rel: str,
+    repo_root: Path,
+    force_skip: Callable[[], bool] | None = None,
+    force_skip_lines: tuple[str, ...] = (),
+    absent_skip_lines: tuple[str, ...] = (),
+) -> ConditionalCheck:
+    """Build a :data:`ConditionalCheck` that resolves a runtime-arg PATH.
+
+    Generalises kairix's ``_make_conditional_check`` + ``_coverage_xml_path``
+    into declarative config. The returned hook, given a rule:
+
+    1. when ``force_skip`` is supplied and returns ``True`` → skip with
+       ``force_skip_lines`` (kairix's ``--skip-coverage`` path), regardless of
+       whether the path exists;
+    2. resolve the path from ``env_var`` (when set + non-empty), else
+       ``repo_root / default_rel``; if it does not exist → skip with
+       ``absent_skip_lines`` (the "report not found" path);
+    3. otherwise → run with the resolved absolute path appended as a single
+       extra arg.
+
+    The env-var name, default relative path, force predicate, and BOTH skip-line
+    sets are CONFIG, so a consumer reproduces its EXACT skip text (the
+    byte-identical-ledger contract). Nothing kairix-specific is baked in.
+
+    Args:
+        env_var: environment variable carrying the path (wins when set).
+        default_rel: repo-relative default path used when ``env_var`` is unset.
+        repo_root: root the ``default_rel`` resolves under.
+        force_skip: zero-arg predicate; ``True`` forces a skip (bound to a flag
+            like ``--skip-coverage``). ``None`` disables the force branch.
+        force_skip_lines: the exact lines printed on a forced skip.
+        absent_skip_lines: the exact lines printed when the path is absent.
+    """
+
+    def _hook(entry: RuleEntry) -> ConditionalResult:
+        if force_skip is not None and force_skip():
+            return ConditionalResult(run=False, skip_lines=force_skip_lines)
+        env_value = os.environ.get(env_var)
+        candidate = Path(env_value) if env_value else (repo_root / default_rel)
+        if not candidate.exists():
+            return ConditionalResult(run=False, skip_lines=absent_skip_lines)
+        return ConditionalResult(run=True, extra_args=(str(candidate),))
+
+    return _hook
 
 
 @dataclass
@@ -707,6 +756,8 @@ def main_cli(
     conditional_check: ConditionalCheck | None = None,
     parallel_subprocess: bool = False,
     max_workers: int = _DEFAULT_MAX_WORKERS,
+    extra_flags: Sequence[tuple[str, dict[str, object]]] = (),
+    post_parse: Callable[[argparse.Namespace], dict[str, object]] | None = None,
 ) -> int:
     """Parse ``--all`` / ``--staged`` / ``--gate`` and dispatch ``rules``.
 
@@ -718,6 +769,14 @@ def main_cli(
         from .catalogue import RULES
         raise SystemExit(main_cli(RULES))
 
+    Consumer-specific flags retire a forked ``main()``: ``extra_flags`` is a
+    sequence of ``(flag, argparse-add_argument-kwargs)`` added to the parser
+    (e.g. ``[("--skip-coverage", {"action": "store_true"})]``), and ``post_parse``
+    maps the parsed :class:`argparse.Namespace` to a dict of EXTRA ``run()``
+    kwargs (e.g. a ``conditional_check`` built from the flag value). The
+    post-parse dict overrides the corresponding ``common`` entries, so a
+    consumer threads its flag into any seam without subclassing the parser.
+
     Returns the process exit code (0 clean, 1 any failure, 2 unknown gate id).
     """
     parser = argparse.ArgumentParser(
@@ -728,9 +787,11 @@ def main_cli(
     group.add_argument("--all", action="store_true", help="run every in-scope rule (default)")
     group.add_argument("--staged", action="store_true", help="run only rules a staged change could trip")
     group.add_argument("--gate", metavar="ID", help="run one rule by catalogue id (e.g. F26)")
+    for flag, kwargs in extra_flags:
+        parser.add_argument(flag, **kwargs)  # type: ignore[arg-type]
     args = parser.parse_args(argv)
 
-    common = {
+    common: dict[str, object] = {
         "repo_root": repo_root,
         "checks_dir": checks_dir,
         "scope_resolver": scope_resolver,
@@ -740,6 +801,8 @@ def main_cli(
         "parallel_subprocess": parallel_subprocess,
         "max_workers": max_workers,
     }
+    if post_parse is not None:
+        common.update(post_parse(args))
 
     if args.gate:
         verdict = run(rules, mode="gate", gate_id=args.gate, **common)  # type: ignore[arg-type]
@@ -759,6 +822,7 @@ __all__ = [
     "PavedRoadFooter",
     "ConditionalCheck",
     "ConditionalResult",
+    "make_env_path_conditional_check",
     "resolve_script",
     "staged_paths",
     "run",

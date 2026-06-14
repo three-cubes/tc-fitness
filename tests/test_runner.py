@@ -31,6 +31,7 @@ from tc_fitness.runner import (
     RunnerConfig,
     Verdicts,
     main_cli,
+    make_env_path_conditional_check,
     resolve_script,
     run,
 )
@@ -485,3 +486,210 @@ def test_verdicts_properties() -> None:
     assert Verdicts(ran=3, failures=["A"]).ok is False
     assert Verdicts(ran=3, failures=[]).exit_code == 0
     assert Verdicts(ran=3, failures=["A"]).exit_code == 1
+
+
+# --------------------------------------------------------------------------- #
+# make_env_path_conditional_check — declarative ConditionalCheck factory (1.4)
+#
+# Generalises kairix's _make_conditional_check + _coverage_xml_path: resolve a
+# runtime-arg path from an env var (else a repo-relative default), run with it
+# appended when present, or skip with the consumer's EXACT skip lines when forced
+# (--skip-coverage-style) or absent. The env-var name, default, force predicate,
+# and both skip-line sets are all CONFIG.
+# --------------------------------------------------------------------------- #
+
+
+def test_conditional_factory_runs_with_resolved_default_path(tmp_path: Path) -> None:
+    report = tmp_path / "coverage.xml"
+    report.write_text("<coverage/>")
+    hook = make_env_path_conditional_check(
+        env_var="MY_COV_XML",
+        default_rel="coverage.xml",
+        repo_root=tmp_path,
+    )
+    entry = RuleEntry(id="F7", gate="f7", check="cov", subprocess_arg_env="MY_COV_XML")
+    result = hook(entry)
+    assert result is not None
+    assert result.run is True
+    assert result.extra_args == (str(report),)
+
+
+def test_conditional_factory_env_var_wins_over_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_report = tmp_path / "from-env.xml"
+    env_report.write_text("<coverage/>")
+    (tmp_path / "coverage.xml").write_text("<coverage/>")  # default also present
+    monkeypatch.setenv("MY_COV_XML", str(env_report))
+    hook = make_env_path_conditional_check(
+        env_var="MY_COV_XML", default_rel="coverage.xml", repo_root=tmp_path
+    )
+    result = hook(RuleEntry(id="F7", gate="f7", check="cov", subprocess_arg_env="MY_COV_XML"))
+    assert result is not None
+    assert result.extra_args == (str(env_report),)
+
+
+def test_conditional_factory_skips_when_path_absent_with_exact_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MY_COV_XML", raising=False)
+    hook = make_env_path_conditional_check(
+        env_var="MY_COV_XML",
+        default_rel="coverage.xml",  # does not exist
+        repo_root=tmp_path,
+        absent_skip_lines=("skip [F7] check_cov.py — coverage report not found", "   run: pytest --cov first"),
+    )
+    result = hook(RuleEntry(id="F7", gate="f7", check="cov", subprocess_arg_env="MY_COV_XML"))
+    assert result is not None
+    assert result.run is False
+    assert result.skip_lines == (
+        "skip [F7] check_cov.py — coverage report not found",
+        "   run: pytest --cov first",
+    )
+
+
+def test_conditional_factory_force_skip_short_circuits_with_exact_lines(tmp_path: Path) -> None:
+    # The --skip-coverage path: force_skip() True ⇒ skip with force_skip_lines,
+    # even if the report exists.
+    (tmp_path / "coverage.xml").write_text("<coverage/>")
+    hook = make_env_path_conditional_check(
+        env_var="MY_COV_XML",
+        default_rel="coverage.xml",
+        repo_root=tmp_path,
+        force_skip=lambda: True,
+        force_skip_lines=("skip [F7] check_cov.py — --skip-coverage",),
+    )
+    result = hook(RuleEntry(id="F7", gate="f7", check="cov", subprocess_arg_env="MY_COV_XML"))
+    assert result is not None
+    assert result.run is False
+    assert result.skip_lines == ("skip [F7] check_cov.py — --skip-coverage",)
+
+
+def test_conditional_factory_force_skip_false_falls_through_to_run(tmp_path: Path) -> None:
+    (tmp_path / "coverage.xml").write_text("<coverage/>")
+    hook = make_env_path_conditional_check(
+        env_var="MY_COV_XML",
+        default_rel="coverage.xml",
+        repo_root=tmp_path,
+        force_skip=lambda: False,
+        force_skip_lines=("unused",),
+    )
+    result = hook(RuleEntry(id="F7", gate="f7", check="cov", subprocess_arg_env="MY_COV_XML"))
+    assert result is not None
+    assert result.run is True
+
+
+def test_conditional_factory_wires_into_runner_skip(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # End-to-end: the factory hook passed as conditional_check skips the rule and
+    # prints the consumer's exact lines.
+    _write_sh_check(checks_dir, "check-cov.sh", exit_code=0)
+    rules = (
+        RuleEntry(
+            id="COVE", gate="cove", check="cov", summary="coverage",
+            script="check-cov.sh", subprocess_arg_env="MY_COV_XML",
+        ),
+    )
+    hook = make_env_path_conditional_check(
+        env_var="MY_COV_XML",
+        default_rel="nope.xml",
+        repo_root=repo_root,
+        absent_skip_lines=("skip [COVE] check-cov.sh — coverage report not found",),
+    )
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, conditional_check=hook)
+    out = _plain(capsys.readouterr().out)
+    assert verdict.skipped == 1
+    assert "skip [COVE] check-cov.sh — coverage report not found" in out
+
+
+# --------------------------------------------------------------------------- #
+# main_cli extra_flags + post_parse — consumer-specific flags (Task 1.4)
+#
+# Retires kairix's forked main()/--skip-coverage: a consumer declares its flag
+# via extra_flags and maps the parsed Namespace to extra run() kwargs (e.g. a
+# conditional_check built from the flag) via post_parse.
+# --------------------------------------------------------------------------- #
+
+
+def test_main_cli_extra_flag_is_parsed_and_threaded_via_post_parse(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The coverage rule would FAIL if dispatched; --skip-coverage must skip it.
+    _write_sh_check(checks_dir, "check-covx.sh", exit_code=1)
+    rules = (
+        RuleEntry(
+            id="CX", gate="cx", check="covx", summary="cov", script="check-covx.sh",
+            subprocess_arg_env="MY_COV_XML",
+        ),
+    )
+
+    seen: dict[str, object] = {}
+
+    def post_parse(ns: object) -> dict[str, object]:
+        seen["skip_coverage"] = ns.skip_coverage  # type: ignore[attr-defined]
+        hook = make_env_path_conditional_check(
+            env_var="MY_COV_XML",
+            default_rel="coverage.xml",
+            repo_root=repo_root,
+            force_skip=lambda: ns.skip_coverage,  # type: ignore[attr-defined]
+            force_skip_lines=("skip [CX] check-covx.sh — --skip-coverage",),
+        )
+        return {"conditional_check": hook}
+
+    rc = main_cli(
+        rules,
+        ["--all", "--skip-coverage"],
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        extra_flags=[("--skip-coverage", {"action": "store_true"})],
+        post_parse=post_parse,
+    )
+    out = _plain(capsys.readouterr().out)
+    assert seen["skip_coverage"] is True
+    assert rc == 0  # the failing rule was skipped
+    assert "skip [CX] check-covx.sh — --skip-coverage" in out
+
+
+def test_main_cli_extra_flag_absent_defaults_and_dispatches(
+    checks_dir: Path, repo_root: Path
+) -> None:
+    # Without --skip-coverage the post_parse hook lets the rule run (and here the
+    # report is absent → the factory skips on absence, not on force).
+    _write_sh_check(checks_dir, "check-covy.sh", exit_code=0)
+    rules = (
+        RuleEntry(
+            id="CY", gate="cy", check="covy", summary="cov", script="check-covy.sh",
+            subprocess_arg_env="MY_COV_XML",
+        ),
+    )
+
+    def post_parse(ns: object) -> dict[str, object]:
+        hook = make_env_path_conditional_check(
+            env_var="MY_COV_XML",
+            default_rel="nope.xml",
+            repo_root=repo_root,
+            force_skip=lambda: ns.skip_coverage,  # type: ignore[attr-defined]
+            force_skip_lines=("forced",),
+            absent_skip_lines=("absent",),
+        )
+        return {"conditional_check": hook}
+
+    rc = main_cli(
+        rules,
+        ["--all"],
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        extra_flags=[("--skip-coverage", {"action": "store_true"})],
+        post_parse=post_parse,
+    )
+    assert rc == 0  # skipped on absence (not forced); no failure registered
+
+
+def test_main_cli_without_extra_flags_is_byte_identical(
+    checks_dir: Path, repo_root: Path
+) -> None:
+    # The default (no extra_flags / post_parse) is unchanged from v0.3.0.
+    _write_py_check(checks_dir, "plain", "return 0")
+    rules = (RuleEntry(id="PL", gate="pl", check="plain", summary="plain"),)
+    assert main_cli(rules, ["--all"], repo_root=repo_root, checks_dir=checks_dir) == 0
