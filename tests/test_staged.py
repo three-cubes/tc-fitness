@@ -322,12 +322,21 @@ def test_binding_narrower_narrows_check_module_python_files_binding(
     assert {p.name for p in mod.python_files("kairix", repo_root=tmp_path)} == {"a.py", "b.py"}
 
 
-def test_binding_narrower_also_narrows_package_level_python_files(tmp_path: Path) -> None:
+def test_binding_narrower_package_level_via_runner_composition(tmp_path: Path) -> None:
+    # The package-level tc_fitness.python_files surface is the RUNNER's job
+    # (restrict_python_files), NOT the binding narrower's — the narrower handles
+    # only the by-value bindings (DEFECT-2: no redundant internal restrict wrap).
+    # Composed exactly as the runner's _run_staged_one does (restrict outer,
+    # narrower inner), the package attribute IS narrowed.
+    from contextlib import ExitStack
+
     (tmp_path / "kairix").mkdir()
     (tmp_path / "kairix" / "a.py").write_text("")
     (tmp_path / "kairix" / "b.py").write_text("")
     narrower = make_binding_narrower()
-    with narrower(tmp_path, ["kairix/a.py"]):
+    with ExitStack() as stack:
+        stack.enter_context(restrict_python_files(tmp_path, ["kairix/a.py"]))
+        stack.enter_context(narrower(tmp_path, ["kairix/a.py"]))
         narrowed = {p.name for p in tc_fitness.python_files("kairix", repo_root=tmp_path)}
     assert narrowed == {"a.py"}
     assert {p.name for p in tc_fitness.python_files("kairix", repo_root=tmp_path)} == {"a.py", "b.py"}
@@ -357,6 +366,105 @@ def test_binding_narrower_extra_method_patches_and_restores(tmp_path: Path) -> N
     # Restored exactly.
     assert _ABC.enumerate_files is original
     assert [p.name for p in inst.enumerate_files()] == ["a.py", "b.py"]
+
+
+def test_binding_narrower_narrows_under_runner_restrict_composition(
+    roots_checks_dir: Path, tmp_path: Path
+) -> None:
+    # DEFECT-2 regression: the SHIPPING path. The runner's _run_staged_one wraps
+    # restrict_python_files(repo_root, staged) AROUND the consumer's narrower
+    # (restrict + narrower nested). Under that composition the package attribute
+    # tc_fitness.python_files is ALREADY rebound to the scoped function before the
+    # narrower captures its "original", so the per-check by-value binding identity
+    # test `bound is real_python_files` never matches → the ~16 kairix check
+    # modules that `from tc_fitness import python_files` are NEVER re-narrowed.
+    # This test composes exactly as the runner does and asserts a real check_*
+    # module binding IS narrowed.
+    (roots_checks_dir / "check_composed_binder.py").write_text(
+        "from tc_fitness import python_files\n"
+    )
+    import importlib
+
+    mod = importlib.import_module("check_composed_binder")
+    (tmp_path / "kairix").mkdir()
+    (tmp_path / "kairix" / "a.py").write_text("")
+    (tmp_path / "kairix" / "b.py").write_text("")
+
+    narrower = make_binding_narrower()
+    # Compose EXACTLY as runner._run_staged_one: restrict_python_files (outer)
+    # then the consumer narrower (inner) — both for the same staged subset.
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        stack.enter_context(restrict_python_files(tmp_path, ["kairix/a.py"]))
+        stack.enter_context(narrower(tmp_path, ["kairix/a.py"]))
+        # The check module's BY-VALUE binding must walk ONLY the staged file.
+        narrowed = {p.name for p in mod.python_files("kairix", repo_root=tmp_path)}
+    assert narrowed == {"a.py"}, (
+        "check module by-value python_files binding was NOT narrowed under the "
+        "runner's restrict+narrower composition (DEFECT-2: stale real_python_files)"
+    )
+    # Restored exactly after both contexts exit.
+    assert {p.name for p in mod.python_files("kairix", repo_root=tmp_path)} == {"a.py", "b.py"}
+
+
+def test_binding_narrower_full_staged_run_narrows_real_check_module(tmp_path: Path) -> None:
+    # DEFECT-2 end-to-end through run(mode="staged"): a check module enumerates
+    # via its by-value python_files binding and records how many files it saw.
+    # With two kairix files on disk but only ONE staged, the narrowed run must
+    # see exactly one file — proving the staged-mode optimisation actually fires
+    # through the real runner composition (and the PASS/FAIL verdict is unchanged:
+    # the check passes either way, so the optimisation is verdict-safe).
+    checks_dir = tmp_path / "scripts" / "checks"
+    checks_dir.mkdir(parents=True)
+    (tmp_path / "kairix").mkdir()
+    (tmp_path / "kairix" / "touched.py").write_text("")
+    (tmp_path / "kairix" / "untouched.py").write_text("")
+    seen_file = tmp_path / "seen_count.txt"
+    (checks_dir / "check_counter.py").write_text(
+        "from pathlib import Path\n"
+        "from tc_fitness import python_files\n"
+        "def main():\n"
+        f"    walked = python_files('kairix', repo_root=Path({str(tmp_path)!r}))\n"
+        f"    Path({str(seen_file)!r}).write_text(str(len(walked)))\n"
+        "    return 0\n"
+    )
+    # Pre-import the check module BEFORE the staged run so its `from tc_fitness
+    # import python_files` binds the ORIGINAL by value — exactly the state the
+    # ~16 already-imported kairix check modules are in when staged mode starts.
+    # (Importing it lazily inside the run would bind the already-scoped function
+    # by import-timing luck and would NOT exercise the binding-narrower defect.)
+    import importlib
+    import sys
+
+    sys.path.insert(0, str(checks_dir))
+    try:
+        importlib.import_module("check_counter")
+        rules = (
+            RuleEntry(
+                id="CNT", gate="cnt", check="counter", summary="counter rule",
+                staged_class="file-local", staged_scope=("kairix",),
+            ),
+        )
+        verdict = run(
+            rules,
+            mode="staged",
+            staged_files=["kairix/touched.py"],
+            repo_root=tmp_path,
+            checks_dir=checks_dir,
+            enumeration_narrower=make_binding_narrower(),
+        )
+    finally:
+        sys.modules.pop("check_counter", None)
+        if str(checks_dir) in sys.path:
+            sys.path.remove(str(checks_dir))
+    assert verdict.ok  # verdict-safe: the check passes regardless of narrowing
+    assert verdict.ran == 1
+    # The narrowed run walked ONLY the one staged file, not both on disk.
+    assert seen_file.read_text() == "1", (
+        "the staged-mode binding-narrowing optimisation did not fire through the "
+        "real runner — the check walked both files instead of just the staged one"
+    )
 
 
 # --------------------------------------------------------------------------- #

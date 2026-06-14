@@ -375,8 +375,6 @@ def make_binding_narrower(
     returned context manager narrows — to the staged set, intersected with what
     each surface would otherwise walk:
 
-    * the package-level ``tc_fitness.python_files`` (via
-      :func:`restrict_python_files`);
     * every already-imported ``check_*`` module's local ``python_files`` name
       (bound BY VALUE at import, so re-patching the package attribute alone
       doesn't reach the local binding);
@@ -384,6 +382,21 @@ def make_binding_narrower(
       the one kairix-specific residue (its ``FitnessRule.enumerate_files`` ABC
       method). The ``(type, method_name)`` pair is CONFIG; the engine bakes in no
       ABC. ``None`` (the default) narrows only the ``python_files`` surfaces.
+
+    Composition with the runner's outer restrict
+    --------------------------------------------
+    The runner's ``_run_staged_one`` ALREADY wraps
+    :func:`restrict_python_files` around this narrower, so this factory narrows
+    ONLY the by-value bindings (no redundant internal restrict — that would
+    double-wrap the package surface). Crucially, under that composition the
+    package attribute ``tc_fitness.python_files`` has ALREADY been rebound to the
+    outer restrict's scoped wrapper, so it can NOT be used as the
+    original-binding identity reference: the pre-imported ``check_*`` modules
+    bound the GENUINE original by value, and that no longer equals the package
+    attribute. This factory therefore discovers the genuine original FROM the
+    check modules themselves (the by-value bindings every pre-imported check
+    shares) before patching, so the per-check narrowing fires under runner
+    composition — the staged-mode optimisation the bug silently no-op'd.
 
     Everything is restored exactly on exit (each patched binding records its
     original). Correctness-preserving for file-local rules: the set a rule
@@ -396,51 +409,66 @@ def make_binding_narrower(
         import tc_fitness
 
         staged_abs = staged_abs_set(repo_root, staged)
-        real_python_files = tc_fitness.python_files
 
-        def _scoped_python_files(
-            *roots: str, repo_root: Path | None = None, **kwargs: object
-        ) -> list[Path]:
-            full = real_python_files(*roots, repo_root=repo_root, **kwargs)
-            return filter_to_staged(full, staged_abs)
+        # Discover the genuine ORIGINAL ``python_files`` binding(s) up-front. The
+        # package attribute may already be the outer restrict's scoped wrapper
+        # (the runner wraps restrict_python_files around us), so capture the
+        # by-value binding every pre-imported ``check_*`` module holds — that is
+        # the genuine original, untouched by the outer restrict. We narrow any
+        # check module bound to one of these original references; each scoped
+        # wrapper closes over its own captured original so narrowing stays
+        # ``original(...) ∩ staged``.
+        check_modules = [
+            module
+            for module in list(sys.modules.values())
+            if getattr(module, "__name__", "").startswith("check_")
+            and getattr(module, "python_files", None) is not None
+        ]
+        original_bindings: set[object] = {m.python_files for m in check_modules}
+        # The current package attribute is also an "original" worth narrowing
+        # when no outer restrict is active (standalone use of this narrower).
+        original_bindings.add(tc_fitness.python_files)
 
-        with restrict_python_files(repo_root, staged):
-            # Patch every already-imported check module that bound python_files
-            # BY VALUE so its local reference also narrows. Record originals to
-            # restore exactly. ``restrict_python_files`` has already rebound the
-            # package attribute, so capture each module's PRE-EXISTING binding.
-            patched_modules: list[tuple[object, object]] = []
-            for module in list(sys.modules.values()):
-                candidate: object = module
-                name = getattr(candidate, "__name__", "")
-                if not name.startswith("check_"):
-                    continue
-                bound = getattr(candidate, "python_files", None)
-                if bound is real_python_files:
-                    patched_modules.append((candidate, real_python_files))
-                    candidate.python_files = _scoped_python_files  # type: ignore[attr-defined]
+        def _make_scoped(real: Callable[..., list[Path]]) -> Callable[..., list[Path]]:
+            def _scoped_python_files(
+                *roots: str, repo_root: Path | None = None, **kwargs: object
+            ) -> list[Path]:
+                full = real(*roots, repo_root=repo_root, **kwargs)
+                return filter_to_staged(full, staged_abs)
 
-            extra_original: Callable[..., Iterable[Path]] | None = None
-            extra_owner: type | None = None
-            extra_name = ""
-            if extra_method is not None:
-                extra_owner, extra_name = extra_method
-                extra_original = getattr(extra_owner, extra_name)
-                real_extra: Callable[..., Iterable[Path]] = extra_original
+            return _scoped_python_files
 
-                def _scoped_extra(self: object, *a: object, **k: object) -> list[Path]:
-                    full = list(real_extra(self, *a, **k))
-                    return filter_to_staged(full, staged_abs)
+        # Patch every already-imported check module that bound python_files BY
+        # VALUE so its local reference also narrows. Each scoped wrapper closes
+        # over the module's OWN original binding; record originals to restore.
+        patched_modules: list[tuple[object, object]] = []
+        for module in check_modules:
+            bound = module.python_files
+            if bound in original_bindings:
+                patched_modules.append((module, bound))
+                module.python_files = _make_scoped(bound)  # type: ignore[attr-defined]
 
-                setattr(extra_owner, extra_name, _scoped_extra)
+        extra_original: Callable[..., Iterable[Path]] | None = None
+        extra_owner: type | None = None
+        extra_name = ""
+        if extra_method is not None:
+            extra_owner, extra_name = extra_method
+            extra_original = getattr(extra_owner, extra_name)
+            real_extra: Callable[..., Iterable[Path]] = extra_original
 
-            try:
-                yield
-            finally:
-                for patched, original in patched_modules:
-                    patched.python_files = original  # type: ignore[attr-defined]
-                if extra_owner is not None and extra_original is not None:
-                    setattr(extra_owner, extra_name, extra_original)
+            def _scoped_extra(self: object, *a: object, **k: object) -> list[Path]:
+                full = list(real_extra(self, *a, **k))
+                return filter_to_staged(full, staged_abs)
+
+            setattr(extra_owner, extra_name, _scoped_extra)
+
+        try:
+            yield
+        finally:
+            for patched, original in patched_modules:
+                patched.python_files = original  # type: ignore[attr-defined]
+            if extra_owner is not None and extra_original is not None:
+                setattr(extra_owner, extra_name, extra_original)
 
     return _narrower
 

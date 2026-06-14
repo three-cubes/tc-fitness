@@ -43,10 +43,16 @@ into a default.
 - **`tc_fitness.staged.make_binding_narrower(*, extra_method=None)`** — a
   declarative `EnumerationNarrower` factory generalising the repo-agnostic half
   of kairix's `_kairix_enumeration_narrower`: narrows every already-imported
-  `check_*` module's by-value `python_files` binding to the staged set (and the
-  package-level `tc_fitness.python_files`), restoring on exit. The one
-  kairix-specific residue — patch *this* ABC's `enumerate_files` — is the
-  optional `extra_method=(SomeClass, "enumerate_files")` argument.
+  `check_*` module's by-value `python_files` binding to the staged set,
+  restoring on exit. The package-level `tc_fitness.python_files` is the runner's
+  job (its `_run_staged_one` wraps `restrict_python_files` around the narrower),
+  so the factory adds NO redundant internal restrict — it narrows only the
+  by-value surfaces. It discovers the genuine ORIGINAL binding from the check
+  modules themselves (not the package attribute, which the outer restrict has
+  already rebound under composition), so the per-check narrowing fires through
+  the real runner. The one kairix-specific residue — patch *this* ABC's
+  `enumerate_files` — is the optional `extra_method=(SomeClass, "enumerate_files")`
+  argument.
 - **`tc_fitness.runner.make_env_path_conditional_check(*, env_var, default_rel,
   repo_root, force_skip=None, force_skip_lines=(), absent_skip_lines=(),
   force_skip_line_fn=None, absent_skip_line_fn=None)`** — a declarative
