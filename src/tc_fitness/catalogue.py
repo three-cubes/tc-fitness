@@ -160,6 +160,24 @@ class RuleEntry:
     # Optional runtime-arg wiring for the rare conditional check (coverage).
     subprocess_arg_env: str | None = None
     subprocess_arg_default: str | None = None
+    # Optional argv-exception wiring (v0.4.0) for the rare check that diverges
+    # from the default ``<checks_dir>/<script>`` invocation:
+    #
+    # * ``script_path_override`` — a REPO-RELATIVE path to the script when it
+    #   lives OUTSIDE the checks dir (e.g. a hermetic smoke test under
+    #   ``tests/smoke/``). When set, the subprocess resolves this path under the
+    #   repo root instead of ``<checks_dir>/<script>``.
+    # * ``static_extra_args`` — args ALWAYS appended to the subprocess argv (e.g.
+    #   a ratchet's ``--allow-missing-current``).
+    # * ``env_gated_extra_args`` — ``(env_var, arg)`` pairs whose ``arg`` is
+    #   appended ONLY when ``env_var`` is set in the environment (e.g.
+    #   ``("ORPHAN_FILES_STRICT", "--strict")``).
+    #
+    # All three are appended AFTER any conditional-check arg, in declaration
+    # order (static before env-gated). Default-safe: empty ⇒ the v0.3.0 argv.
+    script_path_override: str | None = None
+    static_extra_args: tuple[str, ...] = ()
+    env_gated_extra_args: tuple[tuple[str, str], ...] = ()
 
 
 def is_dispatchable(entry: RuleEntry) -> bool:

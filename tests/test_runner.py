@@ -693,3 +693,120 @@ def test_main_cli_without_extra_flags_is_byte_identical(
     _write_py_check(checks_dir, "plain", "return 0")
     rules = (RuleEntry(id="PL", gate="pl", check="plain", summary="plain"),)
     assert main_cli(rules, ["--all"], repo_root=repo_root, checks_dir=checks_dir) == 0
+
+
+# --------------------------------------------------------------------------- #
+# RuleEntry argv-exception fields (Task 1.5)
+#
+# Generalises taz's _SCRIPT_PATH_OVERRIDES (hermetic smoke), _STATIC_EXTRA_ARGS
+# (mutation ratchet --allow-missing-current), _orphan_files_extra
+# (ORPHAN_FILES_STRICT → --strict). All declarative on the RuleEntry now.
+# --------------------------------------------------------------------------- #
+
+
+def test_script_path_override_resolves_outside_checks_dir(
+    tmp_path: Path, repo_root: Path
+) -> None:
+    # The override path is resolved relative to the REPO ROOT, not the checks
+    # dir — taz's hermetic smoke lives at tests/smoke/hermetic.sh.
+    checks_dir = repo_root / "scripts" / "checks"
+    checks_dir.mkdir(parents=True)
+    smoke_dir = repo_root / "tests" / "smoke"
+    smoke_dir.mkdir(parents=True)
+    (smoke_dir / "hermetic.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (smoke_dir / "hermetic.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="HSMOKE", gate="hsmoke", check="hermetic", summary="hermetic smoke",
+            script="hermetic.sh", script_path_override="tests/smoke/hermetic.sh",
+        ),
+    )
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
+    assert verdict.ok
+    assert verdict.ran == 1
+
+
+def test_static_extra_args_always_appended(repo_root: Path) -> None:
+    checks_dir = repo_root / "scripts" / "checks"
+    checks_dir.mkdir(parents=True)
+    # The detector passes only if it sees the static arg.
+    (checks_dir / "check-mut.sh").write_text(
+        '#!/usr/bin/env bash\n[ "$1" = "--allow-missing-current" ] && exit 0 || exit 7\n'
+    )
+    (checks_dir / "check-mut.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="MUT", gate="mut", check="mut", summary="mutation ratchet",
+            script="check-mut.sh", static_extra_args=("--allow-missing-current",),
+        ),
+    )
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
+    assert verdict.ok
+
+
+def test_env_gated_extra_arg_present_only_when_env_set(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checks_dir = repo_root / "scripts" / "checks"
+    checks_dir.mkdir(parents=True)
+    # Detector exits 0 IFF it sees --strict as $1.
+    (checks_dir / "check-orphan.sh").write_text(
+        '#!/usr/bin/env bash\n[ "$1" = "--strict" ] && exit 0 || exit 5\n'
+    )
+    (checks_dir / "check-orphan.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="ORPH", gate="orph", check="orphan", summary="orphan files",
+            script="check-orphan.sh", env_gated_extra_args=(("ORPHAN_FILES_STRICT", "--strict"),),
+        ),
+    )
+    # Env set → the gated arg appears → detector passes.
+    monkeypatch.setenv("ORPHAN_FILES_STRICT", "1")
+    assert run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir).ok
+
+    # Env unset → the gated arg is absent → detector FAILs (proves gating).
+    monkeypatch.delenv("ORPHAN_FILES_STRICT", raising=False)
+    assert not run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir).ok
+
+
+def test_static_and_env_gated_args_order(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # static args come before env-gated args, both after any conditional arg.
+    checks_dir = repo_root / "scripts" / "checks"
+    checks_dir.mkdir(parents=True)
+    (checks_dir / "check-both.sh").write_text(
+        '#!/usr/bin/env bash\n[ "$1" = "--static" ] && [ "$2" = "--gated" ] && exit 0 || exit 4\n'
+    )
+    (checks_dir / "check-both.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="BOTH", gate="both", check="both", summary="both",
+            script="check-both.sh",
+            static_extra_args=("--static",),
+            env_gated_extra_args=(("GATE_ENV", "--gated"),),
+        ),
+    )
+    monkeypatch.setenv("GATE_ENV", "1")
+    assert run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir).ok
+
+
+def test_argv_exception_fields_work_in_parallel_dispatch(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The same argv assembly must hold on the parallel subprocess path.
+    checks_dir = repo_root / "scripts" / "checks"
+    checks_dir.mkdir(parents=True)
+    (checks_dir / "check-par.sh").write_text(
+        '#!/usr/bin/env bash\n[ "$1" = "--s" ] && exit 0 || exit 6\n'
+    )
+    (checks_dir / "check-par.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="PAR", gate="par", check="par", summary="par",
+            script="check-par.sh", static_extra_args=("--s",),
+        ),
+    )
+    assert run(
+        rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True
+    ).ok

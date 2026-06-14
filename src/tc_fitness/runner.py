@@ -393,11 +393,28 @@ def _generic_skip_line(entry: RuleEntry) -> str:
     return f"{_YELLOW}skip [{entry.id}]{_RESET} {resolve_script(entry)} — runtime input not found"
 
 
+def _argv_extra_args(entry: RuleEntry) -> list[str]:
+    """The declarative argv-exception args for ``entry`` (v0.4.0).
+
+    ``static_extra_args`` (always) followed by each ``env_gated_extra_args``
+    pair's ``arg`` whose ``env_var`` is set — in declaration order. Default-safe:
+    an entry with neither yields ``[]`` (the v0.3.0 argv)."""
+    extra: list[str] = list(entry.static_extra_args)
+    for env_var, arg in entry.env_gated_extra_args:
+        if os.environ.get(env_var):
+            extra.append(arg)
+    return extra
+
+
 def _subprocess_argv(entry: RuleEntry, cfg: RunnerConfig) -> _Built:
     """Build the argv + script path for ``entry``'s subprocess, or a skip."""
     script = resolve_script(entry)
     assert cfg.checks_dir is not None
-    script_path = cfg.checks_dir / script
+    if entry.script_path_override is not None:
+        # The script lives OUTSIDE the checks dir — resolve under the repo root.
+        script_path = cfg.repo_root / entry.script_path_override
+    else:
+        script_path = cfg.checks_dir / script
     interpreter = "bash" if script.endswith(_SHELL_SUFFIX) else sys.executable
 
     extra_args: list[str] = []
@@ -406,6 +423,8 @@ def _subprocess_argv(entry: RuleEntry, cfg: RunnerConfig) -> _Built:
         if not decided.run:
             return _Built(skip_lines=decided.skip_lines)
         extra_args = list(decided.extra_args)
+
+    extra_args.extend(_argv_extra_args(entry))
 
     return _Built(argv=[interpreter, str(script_path), *extra_args], script_path=script_path)
 

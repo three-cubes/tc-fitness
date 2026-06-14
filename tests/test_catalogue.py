@@ -25,6 +25,10 @@ def test_defaults_are_conservative() -> None:
     assert e.staged_scope is None
     assert e.script is None
     assert e.subprocess_arg_env is None
+    # v0.4.0 additive argv-exception fields default-safe.
+    assert e.script_path_override is None
+    assert e.static_extra_args == ()
+    assert e.env_gated_extra_args == ()
 
 
 def test_is_dispatchable_true_for_shipped() -> None:
