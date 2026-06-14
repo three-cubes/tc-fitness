@@ -69,10 +69,13 @@ from tc_fitness.runner import (
 )
 from tc_fitness.staged import (
     EnumerationNarrower,
+    LocationMarker,
     ScopeResolver,
     StagedDecision,
     decide,
     filter_to_staged,
+    make_binding_narrower,
+    make_module_roots_resolver,
     resolve_staged_scope,
     restrict_python_files,
     staged_abs_set,
@@ -127,6 +130,7 @@ __all__ = [
     # staged selection
     "ScopeResolver",
     "EnumerationNarrower",
+    "LocationMarker",
     "StagedDecision",
     "decide",
     "resolve_staged_scope",
@@ -134,6 +138,8 @@ __all__ = [
     "filter_to_staged",
     "staged_abs_set",
     "restrict_python_files",
+    "make_module_roots_resolver",
+    "make_binding_narrower",
     # runner
     "Verdicts",
     "RunnerConfig",
