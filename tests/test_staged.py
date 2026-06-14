@@ -201,11 +201,27 @@ def roots_checks_dir(tmp_path: Path) -> Path:
 
 def test_module_roots_from_boundary_rule_attr(roots_checks_dir: Path) -> None:
     # A module-level boundary-rule object carrying a roots tuple → that tuple.
+    # The attr name is CONFIG — passed explicitly (the engine privileges no
+    # repo's convention, so "RULE" is not the default; DEFECT-3).
     (roots_checks_dir / "check_boundary.py").write_text(
         "class _R:\n    roots = ('pkg', 'pkg/sub')\nRULE = _R()\n"
     )
-    resolver = make_module_roots_resolver(checks_dir=roots_checks_dir)
+    resolver = make_module_roots_resolver(
+        checks_dir=roots_checks_dir, boundary_rule_attr="RULE"
+    )
     assert resolver("check_boundary.py") == ("pkg", "pkg/sub")
+
+
+def test_module_roots_boundary_branch_off_by_default(roots_checks_dir: Path) -> None:
+    # DEFECT-3 regression: with NO boundary_rule_attr configured, the engine must
+    # NOT consult kairix's "RULE" convention — that would privilege one repo's
+    # attribute name as the engine default. A module carrying a `RULE` object
+    # with roots is IGNORED; nothing else resolves → None (fail-safe).
+    (roots_checks_dir / "check_unconfigured.py").write_text(
+        "class _R:\n    roots = ('PRIVILEGED',)\nRULE = _R()\n"
+    )
+    resolver = make_module_roots_resolver(checks_dir=roots_checks_dir)
+    assert resolver("check_unconfigured.py") is None
 
 
 def test_module_roots_from_abc_subclass_classvar(roots_checks_dir: Path) -> None:

@@ -262,7 +262,7 @@ LocationMarker = Callable[[object], "tuple[str, ...] | None"]
 
 def make_module_roots_resolver(
     *,
-    boundary_rule_attr: str = "RULE",
+    boundary_rule_attr: str | None = None,
     roots_attr: str = "roots",
     abc_type: type | None = None,
     abc_roots_attr: str | None = None,
@@ -278,8 +278,9 @@ def make_module_roots_resolver(
     filename to the rule's repo-relative scan roots, reading — in order of
     specificity:
 
-    1. a module-level object named ``boundary_rule_attr`` (default ``"RULE"``)
-       carrying a non-empty tuple under ``roots_attr`` (default ``"roots"``);
+    1. when ``boundary_rule_attr`` is given, a module-level object named by it
+       (kairix passes ``"RULE"``) carrying a non-empty tuple under ``roots_attr``
+       (default ``"roots"``);
     2. when ``abc_type`` is given, the check module's OWN subclass of
        ``abc_type`` (one whose ``__module__`` is the check module — the imported
        base and re-exports are skipped) and its non-empty ``abc_roots_attr``
@@ -294,13 +295,17 @@ def make_module_roots_resolver(
     always-in-scope (fail-safe, never a silent skip).
 
     Every attribute name, the ABC type, the location marker, and the fallback
-    roots are CONFIG — the engine bakes in no repo-specific default, so kairix
-    passes ``abc_type=FitnessRule`` / its location marker / ``fallback_roots`` and
+    roots are CONFIG — the engine bakes in NO repo-specific default. In
+    particular ``boundary_rule_attr`` defaults to ``None`` (the boundary-rule
+    branch is OFF unless configured), so kairix's ``"RULE"`` convention is not
+    privileged as the engine default; kairix passes ``boundary_rule_attr="RULE"``
+    / ``abc_type=FitnessRule`` / its location marker / ``fallback_roots`` and
     another repo passes its own.
 
     Args:
         boundary_rule_attr: module-level attribute holding the boundary-rule
-            object (kairix: ``"RULE"``).
+            object (kairix passes ``"RULE"``); ``None`` (default) disables the
+            boundary-rule branch — no repo's convention is privileged.
         roots_attr: attribute on the boundary-rule object holding the roots
             tuple (kairix: ``"roots"``).
         abc_type: the ABC whose in-module subclass declares ``roots``; ``None``
@@ -331,10 +336,11 @@ def make_module_roots_resolver(
         except BaseException:  # pragma: no cover - import hiccup → fail-safe None
             return None
 
-        rule = getattr(module, boundary_rule_attr, None)
-        boundary_roots = getattr(rule, roots_attr, None)
-        if isinstance(boundary_roots, tuple) and boundary_roots:
-            return boundary_roots
+        if boundary_rule_attr is not None:
+            rule = getattr(module, boundary_rule_attr, None)
+            boundary_roots = getattr(rule, roots_attr, None)
+            if isinstance(boundary_roots, tuple) and boundary_roots:
+                return boundary_roots
 
         if abc_type is not None:
             for _name, obj in inspect.getmembers(module, inspect.isclass):

@@ -31,7 +31,7 @@ into a default.
 
 #### Added
 
-- **`tc_fitness.staged.make_module_roots_resolver(*, boundary_rule_attr="RULE",
+- **`tc_fitness.staged.make_module_roots_resolver(*, boundary_rule_attr=None,
   roots_attr="roots", abc_type=None, abc_roots_attr=None,
   location_marker=None, fallback_roots=None, checks_dir_on_path=True)`** — a
   declarative `ScopeResolver` factory generalising kairix's
@@ -39,7 +39,10 @@ into a default.
   staged scan roots from (1) a module-level boundary-rule attribute carrying a
   `roots` tuple, (2) an ABC subclass's `roots` class attribute, (3) an optional
   location-marker fallback, else `fallback_roots`. All attribute/class names are
-  config — nothing kairix-specific is baked in.
+  config — nothing kairix-specific is baked in: `boundary_rule_attr` defaults to
+  `None` (the boundary-rule branch is OFF unless configured), so kairix's
+  `"RULE"` convention is not privileged as the engine default — kairix passes
+  `boundary_rule_attr="RULE"` explicitly.
 - **`tc_fitness.staged.make_binding_narrower(*, extra_method=None)`** — a
   declarative `EnumerationNarrower` factory generalising the repo-agnostic half
   of kairix's `_kairix_enumeration_narrower`: narrows every already-imported
