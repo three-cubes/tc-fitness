@@ -40,7 +40,10 @@ supply its FitnessRule-aware resolver to stay byte-identical.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+import importlib
+import inspect
+import sys
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -241,9 +244,245 @@ def restrict_python_files(repo_root: Path, staged: list[str]) -> Iterator[None]:
         tc_fitness.python_files = real_python_files
 
 
+# ── declarative factories (v0.4.0 seam absorption) ───────────────────────────
+#
+# Two factories that turn the consumer-side ``ScopeResolver`` /
+# ``EnumerationNarrower`` callables kairix hand-codes into declarative engine
+# config. They reproduce kairix's behaviour EXACTLY when the consumer passes its
+# own attr names / ABC type / fallback roots — but the engine bakes in NO
+# repo-domain default (no ``"RULE"``, no ``"kairix"``, no particular ABC). Shared
+# machinery, per-repo domain.
+
+# A location marker generalises kairix's "this check imports the location /
+# singleton engine → walk the production package" branch. Given the imported
+# check module, it returns the scan roots to use, or ``None`` if the marker
+# doesn't apply. The engine never assumes what the marker is.
+LocationMarker = Callable[[object], "tuple[str, ...] | None"]
+
+
+def make_module_roots_resolver(
+    *,
+    boundary_rule_attr: str | None = None,
+    roots_attr: str = "roots",
+    abc_type: type | None = None,
+    abc_roots_attr: str | None = None,
+    location_marker: LocationMarker | None = None,
+    fallback_roots: tuple[str, ...] | None = None,
+    checks_dir: Path | None = None,
+    checks_dir_on_path: bool = True,
+) -> ScopeResolver:
+    """Build a :data:`ScopeResolver` that derives a check module's scan roots.
+
+    Generalises kairix's ``_kairix_scope_resolver`` / ``_roots_from_module``
+    into declarative config. The returned resolver maps a check ``script``
+    filename to the rule's repo-relative scan roots, reading — in order of
+    specificity:
+
+    1. when ``boundary_rule_attr`` is given, a module-level object named by it
+       (kairix passes ``"RULE"``) carrying a non-empty tuple under ``roots_attr``
+       (default ``"roots"``);
+    2. when ``abc_type`` is given, the check module's OWN subclass of
+       ``abc_type`` (one whose ``__module__`` is the check module — the imported
+       base and re-exports are skipped) and its non-empty ``abc_roots_attr``
+       tuple (defaults to ``roots_attr``);
+    3. when ``location_marker`` is given, whatever roots it returns for the
+       imported module (its way of expressing "this kind of check walks the
+       production package");
+    4. otherwise ``fallback_roots`` (default ``None``).
+
+    A ``.sh`` detector (no python module to introspect) and an un-importable
+    module both resolve to ``None`` — the caller treats that as
+    always-in-scope (fail-safe, never a silent skip).
+
+    Every attribute name, the ABC type, the location marker, and the fallback
+    roots are CONFIG — the engine bakes in NO repo-specific default. In
+    particular ``boundary_rule_attr`` defaults to ``None`` (the boundary-rule
+    branch is OFF unless configured), so kairix's ``"RULE"`` convention is not
+    privileged as the engine default; kairix passes ``boundary_rule_attr="RULE"``
+    / ``abc_type=FitnessRule`` / its location marker / ``fallback_roots`` and
+    another repo passes its own.
+
+    Args:
+        boundary_rule_attr: module-level attribute holding the boundary-rule
+            object (kairix passes ``"RULE"``); ``None`` (default) disables the
+            boundary-rule branch — no repo's convention is privileged.
+        roots_attr: attribute on the boundary-rule object holding the roots
+            tuple (kairix: ``"roots"``).
+        abc_type: the ABC whose in-module subclass declares ``roots``; ``None``
+            disables the ABC branch.
+        abc_roots_attr: the roots attribute on the ABC subclass; defaults to
+            ``roots_attr``.
+        location_marker: a ``(module) -> tuple[str, ...] | None`` hook for the
+            "walks the production package" branch; ``None`` disables it.
+        fallback_roots: the roots when nothing else resolves.
+        checks_dir: directory holding the check modules; put on ``sys.path`` for
+            ``import_module`` when ``checks_dir_on_path`` (default).
+        checks_dir_on_path: whether to insert ``checks_dir`` onto ``sys.path``.
+    """
+    effective_abc_roots_attr = abc_roots_attr if abc_roots_attr is not None else roots_attr
+    if checks_dir is not None and checks_dir_on_path:
+        checks_dir_str = str(checks_dir)
+        if checks_dir_str not in sys.path:
+            sys.path.insert(0, checks_dir_str)
+
+    def _module_name_for(script: str) -> str | None:
+        if not script.endswith(".py"):
+            return None
+        return script[: -len(".py")]
+
+    def _roots_from_module(module_name: str) -> tuple[str, ...] | None:
+        try:
+            module = importlib.import_module(module_name)
+        except BaseException:  # pragma: no cover - import hiccup → fail-safe None
+            return None
+
+        if boundary_rule_attr is not None:
+            rule = getattr(module, boundary_rule_attr, None)
+            boundary_roots = getattr(rule, roots_attr, None)
+            if isinstance(boundary_roots, tuple) and boundary_roots:
+                return boundary_roots
+
+        if abc_type is not None:
+            for _name, obj in inspect.getmembers(module, inspect.isclass):
+                if obj is abc_type or not issubclass(obj, abc_type):
+                    continue
+                if obj.__module__ != module.__name__:
+                    # The imported base / re-exports — only the check's OWN
+                    # subclass declares its scan roots.
+                    continue
+                roots = getattr(obj, effective_abc_roots_attr, None)
+                if isinstance(roots, tuple) and roots:
+                    return roots
+
+        if location_marker is not None:
+            marked = location_marker(module)
+            if marked is not None:
+                return marked
+
+        return fallback_roots
+
+    def _resolver(script: str) -> tuple[str, ...] | None:
+        module_name = _module_name_for(script)
+        if module_name is None:
+            return None
+        return _roots_from_module(module_name)
+
+    return _resolver
+
+
+def make_binding_narrower(
+    *,
+    extra_method: tuple[type, str] | None = None,
+) -> EnumerationNarrower:
+    """Build an :data:`EnumerationNarrower` that narrows by-value bindings.
+
+    Generalises the repo-agnostic half of kairix's
+    ``_kairix_enumeration_narrower``. For the duration of the ``with`` block the
+    returned context manager narrows — to the staged set, intersected with what
+    each surface would otherwise walk:
+
+    * every already-imported ``check_*`` module's local ``python_files`` name
+      (bound BY VALUE at import, so re-patching the package attribute alone
+      doesn't reach the local binding);
+    * optionally, the bound method named by ``extra_method`` on the given type —
+      the one kairix-specific residue (its ``FitnessRule.enumerate_files`` ABC
+      method). The ``(type, method_name)`` pair is CONFIG; the engine bakes in no
+      ABC. ``None`` (the default) narrows only the ``python_files`` surfaces.
+
+    Composition with the runner's outer restrict
+    --------------------------------------------
+    The runner's ``_run_staged_one`` ALREADY wraps
+    :func:`restrict_python_files` around this narrower, so this factory narrows
+    ONLY the by-value bindings (no redundant internal restrict — that would
+    double-wrap the package surface). Crucially, under that composition the
+    package attribute ``tc_fitness.python_files`` has ALREADY been rebound to the
+    outer restrict's scoped wrapper, so it can NOT be used as the
+    original-binding identity reference: the pre-imported ``check_*`` modules
+    bound the GENUINE original by value, and that no longer equals the package
+    attribute. This factory therefore discovers the genuine original FROM the
+    check modules themselves (the by-value bindings every pre-imported check
+    shares) before patching, so the per-check narrowing fires under runner
+    composition — the staged-mode optimisation the bug silently no-op'd.
+
+    Everything is restored exactly on exit (each patched binding records its
+    original). Correctness-preserving for file-local rules: the set a rule
+    inspects becomes ``what-it-would-walk ∩ staged`` and the per-file verdict is
+    identical to the full run.
+    """
+
+    @contextmanager
+    def _narrower(repo_root: Path, staged: list[str]) -> Iterator[None]:
+        import tc_fitness
+
+        staged_abs = staged_abs_set(repo_root, staged)
+
+        # Discover the genuine ORIGINAL ``python_files`` binding(s) up-front. The
+        # package attribute may already be the outer restrict's scoped wrapper
+        # (the runner wraps restrict_python_files around us), so capture the
+        # by-value binding every pre-imported ``check_*`` module holds — that is
+        # the genuine original, untouched by the outer restrict. We narrow any
+        # check module bound to one of these original references; each scoped
+        # wrapper closes over its own captured original so narrowing stays
+        # ``original(...) ∩ staged``.
+        check_modules = [
+            module
+            for module in list(sys.modules.values())
+            if getattr(module, "__name__", "").startswith("check_")
+            and getattr(module, "python_files", None) is not None
+        ]
+        original_bindings: set[object] = {m.python_files for m in check_modules}
+        # The current package attribute is also an "original" worth narrowing
+        # when no outer restrict is active (standalone use of this narrower).
+        original_bindings.add(tc_fitness.python_files)
+
+        def _make_scoped(real: Callable[..., list[Path]]) -> Callable[..., list[Path]]:
+            def _scoped_python_files(
+                *roots: str, repo_root: Path | None = None, **kwargs: object
+            ) -> list[Path]:
+                full = real(*roots, repo_root=repo_root, **kwargs)
+                return filter_to_staged(full, staged_abs)
+
+            return _scoped_python_files
+
+        # Patch every already-imported check module that bound python_files BY
+        # VALUE so its local reference also narrows. Each scoped wrapper closes
+        # over the module's OWN original binding; record originals to restore.
+        patched_modules: list[tuple[object, object]] = []
+        for module in check_modules:
+            bound = module.python_files
+            if bound in original_bindings:
+                patched_modules.append((module, bound))
+                module.python_files = _make_scoped(bound)  # type: ignore[attr-defined]
+
+        extra_original: Callable[..., Iterable[Path]] | None = None
+        extra_owner: type | None = None
+        extra_name = ""
+        if extra_method is not None:
+            extra_owner, extra_name = extra_method
+            extra_original = getattr(extra_owner, extra_name)
+            real_extra: Callable[..., Iterable[Path]] = extra_original
+
+            def _scoped_extra(self: object, *a: object, **k: object) -> list[Path]:
+                full = list(real_extra(self, *a, **k))
+                return filter_to_staged(full, staged_abs)
+
+            setattr(extra_owner, extra_name, _scoped_extra)
+
+        try:
+            yield
+        finally:
+            for patched, original in patched_modules:
+                patched.python_files = original  # type: ignore[attr-defined]
+            if extra_owner is not None and extra_original is not None:
+                setattr(extra_owner, extra_name, extra_original)
+
+    return _narrower
+
+
 __all__ = [
     "ScopeResolver",
     "EnumerationNarrower",
+    "LocationMarker",
     "StagedDecision",
     "decide",
     "resolve_staged_scope",
@@ -251,4 +490,6 @@ __all__ = [
     "filter_to_staged",
     "staged_abs_set",
     "restrict_python_files",
+    "make_module_roots_resolver",
+    "make_binding_narrower",
 ]

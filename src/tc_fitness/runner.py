@@ -68,7 +68,7 @@ import os
 import subprocess
 import sys
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -82,10 +82,28 @@ from tc_fitness.staged import (
     restrict_python_files,
 )
 
-_RED = "\033[0;31m"
-_GREEN = "\033[0;32m"
-_YELLOW = "\033[0;33m"
-_RESET = "\033[0m"
+class Colours:
+    """The ANSI colour codes the named verdict ledger uses — a public namespace.
+
+    Promoted to public API (v0.4.0) so a consumer that builds ledger lines by
+    hand (taz) references ``Colours.GREEN`` etc. instead of importing the private
+    ``_GREEN`` module constants. The values are byte-identical to the prior
+    constants; the underscore names below remain as thin back-compat aliases.
+    """
+
+    RED = "\033[0;31m"
+    GREEN = "\033[0;32m"
+    YELLOW = "\033[0;33m"
+    RESET = "\033[0m"
+
+
+# Back-compat module-level aliases (kept until taz migrates off the private
+# imports in Wave 4). They point at the public ``Colours`` values, so a single
+# change to ``Colours`` is reflected everywhere.
+_RED = Colours.RED
+_GREEN = Colours.GREEN
+_YELLOW = Colours.YELLOW
+_RESET = Colours.RESET
 
 _SHELL_SUFFIX = ".sh"
 
@@ -126,6 +144,85 @@ class ConditionalResult:
 # (``subprocess_arg_env`` / ``subprocess_arg_default``) with a generic skip
 # line. A consumer supplies this to reproduce its exact skip text.
 ConditionalCheck = Callable[[RuleEntry], "ConditionalResult | None"]
+
+
+#: A per-entry skip-line builder: given the :class:`RuleEntry`, return the exact
+#: lines to print on a skip. Lets a consumer interpolate ``entry.id`` (and any
+#: other field) so two rules SHARING one script — kairix's F7/F9, both
+#: ``check_per_file_coverage.py`` — emit DISTINCT ``skip [F7]`` / ``skip [F9]``
+#: ledgers instead of one static tuple's identical text.
+SkipLineFn = Callable[[RuleEntry], tuple[str, ...]]
+
+
+def make_env_path_conditional_check(
+    *,
+    env_var: str,
+    default_rel: str,
+    repo_root: Path,
+    force_skip: Callable[[], bool] | None = None,
+    force_skip_lines: tuple[str, ...] = (),
+    absent_skip_lines: tuple[str, ...] = (),
+    force_skip_line_fn: SkipLineFn | None = None,
+    absent_skip_line_fn: SkipLineFn | None = None,
+) -> ConditionalCheck:
+    """Build a :data:`ConditionalCheck` that resolves a runtime-arg PATH.
+
+    Generalises kairix's ``_make_conditional_check`` + ``_coverage_xml_path``
+    into declarative config. The returned hook, given a rule:
+
+    1. when ``force_skip`` is supplied and returns ``True`` → skip with
+       ``force_skip_line_fn(entry)`` if given, else ``force_skip_lines``
+       (kairix's ``--skip-coverage`` path), regardless of whether the path
+       exists;
+    2. resolve the path from ``env_var`` (when set + non-empty), else
+       ``repo_root / default_rel``; if it does not exist → skip with
+       ``absent_skip_line_fn(entry)`` if given, else ``absent_skip_lines`` (the
+       "report not found" path);
+    3. otherwise → run with the resolved absolute path appended as a single
+       extra arg.
+
+    Per-entry skip text (the byte-identity ledger for shared-script rules)
+    --------------------------------------------------------------------
+    The static tuples are fixed at factory-build time, so two rules that share
+    ONE script and differ only by ``entry.id`` — kairix's F7/F9, both
+    ``check_per_file_coverage.py`` — would emit IDENTICAL skip text where kairix
+    emits distinct ``skip [F7]`` / ``skip [F9]`` lines. The ``*_skip_line_fn``
+    callables receive the :class:`RuleEntry` and interpolate per id, so the
+    factory reproduces kairix's seam (``skip [{entry.id}] {resolve_script(entry)}
+    — …``) byte-for-byte. **Precedence: the ``*_line_fn`` wins when provided**;
+    the static tuple remains for the single-rule case (back-compat).
+
+    The env-var name, default relative path, force predicate, and BOTH skip-line
+    surfaces are CONFIG, so a consumer reproduces its EXACT skip text. Nothing
+    kairix-specific is baked in.
+
+    Args:
+        env_var: environment variable carrying the path (wins when set).
+        default_rel: repo-relative default path used when ``env_var`` is unset.
+        repo_root: root the ``default_rel`` resolves under.
+        force_skip: zero-arg predicate; ``True`` forces a skip (bound to a flag
+            like ``--skip-coverage``). ``None`` disables the force branch.
+        force_skip_lines: the exact lines printed on a forced skip (static).
+        absent_skip_lines: the exact lines printed when the path is absent
+            (static).
+        force_skip_line_fn: per-entry forced-skip line builder; wins over
+            ``force_skip_lines`` when given.
+        absent_skip_line_fn: per-entry absent-skip line builder; wins over
+            ``absent_skip_lines`` when given.
+    """
+
+    def _hook(entry: RuleEntry) -> ConditionalResult:
+        if force_skip is not None and force_skip():
+            lines = force_skip_line_fn(entry) if force_skip_line_fn is not None else force_skip_lines
+            return ConditionalResult(run=False, skip_lines=lines)
+        env_value = os.environ.get(env_var)
+        candidate = Path(env_value) if env_value else (repo_root / default_rel)
+        if not candidate.exists():
+            lines = absent_skip_line_fn(entry) if absent_skip_line_fn is not None else absent_skip_lines
+            return ConditionalResult(run=False, skip_lines=lines)
+        return ConditionalResult(run=True, extra_args=(str(candidate),))
+
+    return _hook
 
 
 @dataclass
@@ -187,6 +284,13 @@ class RunnerConfig:
     conditional_check: ConditionalCheck | None = None
     parallel_subprocess: bool = False
     max_workers: int = _DEFAULT_MAX_WORKERS
+    #: Dispatch strategy for pure-python checks. ``"inprocess"`` (default,
+    #: v0.3.0 behaviour) imports the module and calls ``main()`` in-process,
+    #: sharing one ``CheckContext`` AST cache. ``"subprocess"`` routes EVERY
+    #: check — python included — through the guarded subprocess path, so a
+    #: consumer with no shared-context requirement (taz) can drop a hand-rolled
+    #: subprocess dispatch. ``.sh`` detectors run as subprocesses either way.
+    dispatch: str = "inprocess"
 
     def __post_init__(self) -> None:
         self.repo_root = self.repo_root.resolve()
@@ -216,6 +320,17 @@ def _dispatches_in_process(entry: RuleEntry) -> bool:
     if entry.subprocess_arg_env is not None:
         return False
     return not resolve_script(entry).endswith(_SHELL_SUFFIX)
+
+
+def _runs_in_process(entry: RuleEntry, cfg: RunnerConfig) -> bool:
+    """Whether ``entry`` runs in-process, honouring ``cfg.dispatch``.
+
+    ``dispatch="subprocess"`` forces EVERY check — python included — onto the
+    guarded subprocess path (taz's pure-consumer mode). Otherwise the v0.3.0
+    per-entry rule (:func:`_dispatches_in_process`) applies."""
+    if cfg.dispatch == "subprocess":
+        return False
+    return _dispatches_in_process(entry)
 
 
 def _conditional_arg_path(entry: RuleEntry, cfg: RunnerConfig) -> Path | None:
@@ -344,11 +459,28 @@ def _generic_skip_line(entry: RuleEntry) -> str:
     return f"{_YELLOW}skip [{entry.id}]{_RESET} {resolve_script(entry)} — runtime input not found"
 
 
+def _argv_extra_args(entry: RuleEntry) -> list[str]:
+    """The declarative argv-exception args for ``entry`` (v0.4.0).
+
+    ``static_extra_args`` (always) followed by each ``env_gated_extra_args``
+    pair's ``arg`` whose ``env_var`` is set — in declaration order. Default-safe:
+    an entry with neither yields ``[]`` (the v0.3.0 argv)."""
+    extra: list[str] = list(entry.static_extra_args)
+    for env_var, arg in entry.env_gated_extra_args:
+        if os.environ.get(env_var):
+            extra.append(arg)
+    return extra
+
+
 def _subprocess_argv(entry: RuleEntry, cfg: RunnerConfig) -> _Built:
     """Build the argv + script path for ``entry``'s subprocess, or a skip."""
     script = resolve_script(entry)
     assert cfg.checks_dir is not None
-    script_path = cfg.checks_dir / script
+    if entry.script_path_override is not None:
+        # The script lives OUTSIDE the checks dir — resolve under the repo root.
+        script_path = cfg.repo_root / entry.script_path_override
+    else:
+        script_path = cfg.checks_dir / script
     interpreter = "bash" if script.endswith(_SHELL_SUFFIX) else sys.executable
 
     extra_args: list[str] = []
@@ -357,6 +489,8 @@ def _subprocess_argv(entry: RuleEntry, cfg: RunnerConfig) -> _Built:
         if not decided.run:
             return _Built(skip_lines=decided.skip_lines)
         extra_args = list(decided.extra_args)
+
+    extra_args.extend(_argv_extra_args(entry))
 
     return _Built(argv=[interpreter, str(script_path), *extra_args], script_path=script_path)
 
@@ -405,14 +539,25 @@ def _run_one_subprocess(entry: RuleEntry, cfg: RunnerConfig) -> int | None:
 # ── selection ────────────────────────────────────────────────────────────
 
 
-def _select_all(rules: tuple[RuleEntry, ...]) -> list[RuleEntry]:
-    """In-scope rules for ``--all``: dispatchable AND ``run_all``."""
+def select_all(rules: tuple[RuleEntry, ...]) -> list[RuleEntry]:
+    """In-scope rules for ``--all``: dispatchable AND ``run_all``.
+
+    Public (v0.4.0) so a consumer building its own dispatch loop selects the
+    same set the runner does, instead of importing the private ``_select_all``.
+    """
     return [e for e in rules if is_dispatchable(e) and e.run_all]
 
 
-def _select_gate(rules: tuple[RuleEntry, ...], gate_id: str) -> list[RuleEntry]:
-    """Rules whose catalogue ``id`` matches ``gate_id`` (case-insensitive)."""
+def select_gate(rules: tuple[RuleEntry, ...], gate_id: str) -> list[RuleEntry]:
+    """Rules whose catalogue ``id`` matches ``gate_id`` (case-insensitive).
+
+    Public (v0.4.0); the ``--gate <id>`` selector a consumer can reuse."""
     return [e for e in rules if e.id.lower() == gate_id.lower() and is_dispatchable(e)]
+
+
+# Back-compat private aliases (kept until taz migrates off the private imports).
+_select_all = select_all
+_select_gate = select_gate
 
 
 def _staged_decisions(
@@ -513,14 +658,14 @@ def _dispatch(entries: list[RuleEntry], cfg: RunnerConfig) -> Verdicts:
     verdict = Verdicts()
     parallel_verdicts: dict[str, int | None] = {}
     if cfg.parallel_subprocess:
-        subproc_entries = [e for e in deduped if not _dispatches_in_process(e)]
+        subproc_entries = [e for e in deduped if not _runs_in_process(e, cfg)]
         if subproc_entries:
             parallel_verdicts = _run_subprocess_parallel(subproc_entries, cfg)
 
     ctx = CheckContext(repo_root=cfg.repo_root)
     with ctx.install():
         for entry in deduped:
-            if _dispatches_in_process(entry):
+            if _runs_in_process(entry, cfg):
                 result: int | None = _run_one_inprocess(entry, cfg)
             elif cfg.parallel_subprocess:
                 result = parallel_verdicts.get(entry.id)
@@ -550,7 +695,7 @@ def _run_staged_one(
     ``enumeration_narrower``, if any) so the in-process check walks ONLY those
     files. Everything else runs over its full natural scope.
     """
-    if not _dispatches_in_process(entry):
+    if not _runs_in_process(entry, cfg):
         return _run_one_subprocess(entry, cfg)
     if decision.scope_files:
         scope_files = list(decision.scope_files)
@@ -602,17 +747,25 @@ def _dispatch_staged(
     return verdict
 
 
-def _print_aggregate(verdict: Verdicts) -> None:
+def print_aggregate(verdict: Verdicts) -> None:
     """Print the final aggregate verdict line for an ``--all`` / ``--gate``
-    dispatch (byte-identical to kairix's runner)."""
+    dispatch (byte-identical to kairix's runner).
+
+    Public (v0.4.0) so a consumer that runs its own dispatch loop emits the
+    SAME aggregate banner the runner does, instead of importing the private
+    ``_print_aggregate``."""
     print()
     if verdict.failures:
         print(
-            f"{_RED}=== Architecture fitness functions FAILED ==={_RESET} "
+            f"{Colours.RED}=== Architecture fitness functions FAILED ==={Colours.RESET} "
             f"({len(verdict.failures)}/{verdict.ran} rule(s) failed: {', '.join(verdict.failures)})"
         )
     else:
-        print(f"{_GREEN}=== All {verdict.ran} architecture fitness functions passed ==={_RESET}")
+        print(f"{Colours.GREEN}=== All {verdict.ran} architecture fitness functions passed ==={Colours.RESET}")
+
+
+# Back-compat private alias (kept until taz migrates off the private import).
+_print_aggregate = print_aggregate
 
 
 # ── git staged paths ─────────────────────────────────────────────────────
@@ -655,13 +808,16 @@ def run(
     conditional_check: ConditionalCheck | None = None,
     parallel_subprocess: bool = False,
     max_workers: int = _DEFAULT_MAX_WORKERS,
+    dispatch: str = "inprocess",
 ) -> Verdicts:
     """Run ``rules`` in ``mode`` and return the :class:`Verdicts`.
 
     ``mode`` is ``"all"`` (default), ``"staged"`` (pass ``staged_files`` to
-    override the ``git`` call), or ``"gate"`` (with ``gate_id``). The injection
-    kwargs map onto :class:`RunnerConfig`. Always prints the named verdict
-    ledger; the return value carries the structured outcome for embedders."""
+    override the ``git`` call), or ``"gate"`` (with ``gate_id``). ``dispatch`` is
+    ``"inprocess"`` (default, v0.3.0) or ``"subprocess"`` (route every check
+    through the guarded subprocess path). The injection kwargs map onto
+    :class:`RunnerConfig`. Always prints the named verdict ledger; the return
+    value carries the structured outcome for embedders."""
     cfg = RunnerConfig(
         repo_root=repo_root if repo_root is not None else Path.cwd(),
         checks_dir=checks_dir,
@@ -671,6 +827,7 @@ def run(
         conditional_check=conditional_check,
         parallel_subprocess=parallel_subprocess,
         max_workers=max_workers,
+        dispatch=dispatch,
     )
 
     if mode == "gate":
@@ -707,6 +864,9 @@ def main_cli(
     conditional_check: ConditionalCheck | None = None,
     parallel_subprocess: bool = False,
     max_workers: int = _DEFAULT_MAX_WORKERS,
+    dispatch: str = "inprocess",
+    extra_flags: Sequence[tuple[str, dict[str, object]]] = (),
+    post_parse: Callable[[argparse.Namespace], dict[str, object]] | None = None,
 ) -> int:
     """Parse ``--all`` / ``--staged`` / ``--gate`` and dispatch ``rules``.
 
@@ -718,6 +878,14 @@ def main_cli(
         from .catalogue import RULES
         raise SystemExit(main_cli(RULES))
 
+    Consumer-specific flags retire a forked ``main()``: ``extra_flags`` is a
+    sequence of ``(flag, argparse-add_argument-kwargs)`` added to the parser
+    (e.g. ``[("--skip-coverage", {"action": "store_true"})]``), and ``post_parse``
+    maps the parsed :class:`argparse.Namespace` to a dict of EXTRA ``run()``
+    kwargs (e.g. a ``conditional_check`` built from the flag value). The
+    post-parse dict overrides the corresponding ``common`` entries, so a
+    consumer threads its flag into any seam without subclassing the parser.
+
     Returns the process exit code (0 clean, 1 any failure, 2 unknown gate id).
     """
     parser = argparse.ArgumentParser(
@@ -728,9 +896,11 @@ def main_cli(
     group.add_argument("--all", action="store_true", help="run every in-scope rule (default)")
     group.add_argument("--staged", action="store_true", help="run only rules a staged change could trip")
     group.add_argument("--gate", metavar="ID", help="run one rule by catalogue id (e.g. F26)")
+    for flag, kwargs in extra_flags:
+        parser.add_argument(flag, **kwargs)  # type: ignore[arg-type]
     args = parser.parse_args(argv)
 
-    common = {
+    common: dict[str, object] = {
         "repo_root": repo_root,
         "checks_dir": checks_dir,
         "scope_resolver": scope_resolver,
@@ -739,7 +909,10 @@ def main_cli(
         "conditional_check": conditional_check,
         "parallel_subprocess": parallel_subprocess,
         "max_workers": max_workers,
+        "dispatch": dispatch,
     }
+    if post_parse is not None:
+        common.update(post_parse(args))
 
     if args.gate:
         verdict = run(rules, mode="gate", gate_id=args.gate, **common)  # type: ignore[arg-type]
@@ -754,13 +927,19 @@ def main_cli(
 
 
 __all__ = [
+    "Colours",
     "Verdicts",
     "RunnerConfig",
     "PavedRoadFooter",
     "ConditionalCheck",
     "ConditionalResult",
+    "SkipLineFn",
+    "make_env_path_conditional_check",
     "resolve_script",
     "staged_paths",
+    "select_all",
+    "select_gate",
+    "print_aggregate",
     "run",
     "main_cli",
 ]

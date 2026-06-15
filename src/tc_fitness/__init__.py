@@ -19,6 +19,8 @@ untouched, so a consumer pinned to ``@v0.1.0`` / ``@v0.2.0`` keeps working.
 
 from __future__ import annotations
 
+from importlib import metadata as _metadata
+
 from tc_fitness.catalogue import (
     PROPOSED_STATUS,
     RuleEntry,
@@ -55,29 +57,46 @@ from tc_fitness.ratchet import (
     parse_overrides,
 )
 from tc_fitness.runner import (
+    Colours,
     ConditionalCheck,
     ConditionalResult,
     PavedRoadFooter,
     RunnerConfig,
+    SkipLineFn,
     Verdicts,
     main_cli,
+    make_env_path_conditional_check,
+    print_aggregate,
     resolve_script,
     run,
+    select_all,
+    select_gate,
     staged_paths,
 )
 from tc_fitness.staged import (
     EnumerationNarrower,
+    LocationMarker,
     ScopeResolver,
     StagedDecision,
     decide,
     filter_to_staged,
+    make_binding_narrower,
+    make_module_roots_resolver,
     resolve_staged_scope,
     restrict_python_files,
     staged_abs_set,
     staged_in_scope,
 )
 
-__version__ = "0.3.0"
+# Single-sourced from the installed-package metadata (``pyproject.toml`` is the
+# one source of truth). The fallback literal is used only for a bare ``sys.path``
+# checkout where the distribution isn't installed; it must be kept equal to the
+# ``pyproject.toml`` ``version`` so the two never drift (pinned by
+# ``tests/test_version.py``).
+try:
+    __version__ = _metadata.version("three-cubes-fitness")
+except _metadata.PackageNotFoundError:  # pragma: no cover - only when not installed
+    __version__ = "0.4.0"
 
 __all__ = [
     "__version__",
@@ -117,6 +136,7 @@ __all__ = [
     # staged selection
     "ScopeResolver",
     "EnumerationNarrower",
+    "LocationMarker",
     "StagedDecision",
     "decide",
     "resolve_staged_scope",
@@ -124,14 +144,22 @@ __all__ = [
     "filter_to_staged",
     "staged_abs_set",
     "restrict_python_files",
+    "make_module_roots_resolver",
+    "make_binding_narrower",
     # runner
+    "Colours",
     "Verdicts",
     "RunnerConfig",
     "PavedRoadFooter",
     "ConditionalCheck",
     "ConditionalResult",
+    "SkipLineFn",
+    "make_env_path_conditional_check",
     "resolve_script",
     "staged_paths",
+    "select_all",
+    "select_gate",
+    "print_aggregate",
     "run",
     "main_cli",
 ]
