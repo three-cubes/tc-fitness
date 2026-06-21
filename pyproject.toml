@@ -98,3 +98,89 @@ ignore_missing_imports = true
 # dependency of the type check.
 module = ["defusedxml", "defusedxml.*"]
 ignore_missing_imports = true
+
+# ── tc-fitness gate declaration — the engine eats its own dog food ───────────
+# The engine runs THROUGH the gate it ships: `uv run tc-fitness run` reads this
+# block and runs the engine's own quality gate (ruff / format / mypy / pytest)
+# plus its own branch-naming module — the SAME binary both CI and a local run
+# invoke, so local == CI by construction. ci.yml's `check` matrix job shrinks to
+# `setup-uv-cached → uv run tc-fitness run`, keeping the py3.12/3.13 matrix
+# caller-side while the gate's STEPS live here as config, never hand-copied YAML.
+[tool.tc_fitness]
+name = "three-cubes-fitness self gate"
+
+# ruff lint over the package + tests — the engine's own source style gate.
+[[tool.tc_fitness.steps]]
+id = "ruff"
+summary = "ruff check src tests"
+run = ["ruff", "check", "src", "tests"]
+fix = "run `ruff check --fix src tests`"
+next = "re-run `tc-fitness run`"
+
+# ruff format --check over the formatter-gated set (the v0.5.0 gate + the whole
+# v0.6.0 CORE-check package + every CORE check test + branch_naming). The
+# pre-existing lib/ratchet/runner/staged sources predate any formatter config; a
+# repo-wide `ruff format` pass is a separate one-time hygiene commit, so the
+# scope is held identical to ci.yml's format step — same files in, same verdict
+# out (the equivalence law: this step reports the SAME drift CI's step does).
+[[tool.tc_fitness.steps]]
+id = "ruff-format"
+summary = "ruff format --check (gate + v0.6.0 core modules)"
+shell = """
+ruff format --check \
+  src/tc_fitness/gate.py src/tc_fitness/gate_config.py \
+  tests/test_gate.py tests/test_gate_config.py \
+  src/tc_fitness/baseline.py src/tc_fitness/fitness_rule.py \
+  src/tc_fitness/keystone.py src/tc_fitness/core_checks/ \
+  tests/test_baseline.py tests/test_fitness_rule.py \
+  tests/test_keystone.py tests/_core_check_assertions.py \
+  tests/test_core_no_duplicate_string.py \
+  tests/test_core_registry_consistency.py \
+  tests/test_core_security_freshness_design_law.py \
+  src/tc_fitness/checks/branch_naming.py \
+  $(printf 'tests/test_core_%s.py ' \
+    actionable_feedback adr_number_unique ci_fanin_parity \
+    ci_silencers_have_rationale cognitive_complexity coverage_floor \
+    coverage_includes_branches empty_body_intent every_test_has_tier_marker \
+    license_present mutation_survival_ratchet no_commented_out_code \
+    no_env_monkeypatch no_hardcoded_repo_paths no_internal_monkeypatch \
+    no_internal_patches no_internal_patches_ts \
+    no_language_suffix_in_package_names no_logging_secrets \
+    no_noop_test_scripts no_production_suppressions no_real_names \
+    no_test_imports_in_prod no_test_only_kwargs path_naming \
+    posix_path_serialisation readme_resolver_coverage schema_conformance \
+    script_help_smoke shellcheck_disable_with_reason sonar_ignore_rationale \
+    suppressions_have_rationale test_skip_rationale unused_params_named)
+"""
+fix = "run `ruff format` over the listed files"
+next = "re-run `tc-fitness run`"
+
+# mypy --strict over the package. `strict = true` + `files = ["src/tc_fitness"]`
+# live in [tool.mypy], so a bare `mypy` is already the strict, scoped check.
+[[tool.tc_fitness.steps]]
+id = "mypy"
+summary = "mypy --strict src/tc_fitness"
+run = ["mypy"]
+fix = "resolve the type error mypy reports"
+next = "re-run `tc-fitness run`"
+
+# pytest with coverage — the engine's self-test suite (the same command ci.yml
+# ran), producing coverage.xml for the downstream Sonar handoff.
+[[tool.tc_fitness.steps]]
+id = "pytest"
+summary = "pytest (with coverage)"
+run = ["pytest", "-q", "--cov=tc_fitness", "--cov-report=term-missing", "--cov-report=xml"]
+fix = "fix the failing test or the code under test"
+next = "re-run `tc-fitness run`"
+
+# The engine's OWN branch-naming gate, run against the gate. branch_naming is an
+# engine-shipped module (`tc_fitness.checks.branch_naming`) with a `python -m`
+# entrypoint; it gates the LIVE branch name (not a per-file baseline), so it is
+# not a `core:`/FitnessRule check — the faithful binding is its module
+# entrypoint. The engine thus dogfoods its own convention check.
+[[tool.tc_fitness.steps]]
+id = "branch-naming"
+summary = "branch_naming (engine's own convention gate)"
+run = ["python", "-m", "tc_fitness.checks.branch_naming"]
+fix = "rename the branch to the Linear <user>/<team>-<number>-<slug> shape"
+next = "re-run `tc-fitness run`"
