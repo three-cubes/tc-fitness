@@ -21,6 +21,16 @@ from __future__ import annotations
 
 from importlib import metadata as _metadata
 
+from tc_fitness.baseline import (
+    BASELINE_DIRNAME,
+    BASELINE_SUFFIX,
+    baseline_dir,
+    baseline_path,
+    establish_baseline,
+    load_baseline,
+    parse_baseline_text,
+    render_baseline,
+)
 from tc_fitness.catalogue import (
     PROPOSED_STATUS,
     RuleEntry,
@@ -28,6 +38,13 @@ from tc_fitness.catalogue import (
     is_dispatchable,
 )
 from tc_fitness.context import CheckContext
+from tc_fitness.core_checks import (
+    CORE_CHECKS,
+    core_check_consistency,
+    discover_core_check_modules,
+    run_core_check,
+)
+from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.gate import (
     GateOutcome,
     StepResult,
@@ -40,6 +57,19 @@ from tc_fitness.gate_config import (
     find_config_file,
     load_config,
     parse_config,
+)
+from tc_fitness.keystone import (
+    CatalogueConsistencyReport,
+    ShrinkResult,
+    added_since_tag,
+    baseline_shrink_only,
+    catalogue_check_consistency,
+    find_net_new_violations,
+    load_all_baselines,
+    net_new_violations_forbidden,
+    reconcile_catalogue,
+    resolve_previous_tag,
+    staged_added_files,
 )
 from tc_fitness.lib import (
     REPO_ROOT,
@@ -77,6 +107,8 @@ from tc_fitness.runner import (
     RunnerConfig,
     SkipLineFn,
     Verdicts,
+    core_module_name,
+    is_core_check,
     main_cli,
     make_env_path_conditional_check,
     print_aggregate,
@@ -109,7 +141,7 @@ from tc_fitness.staged import (
 try:
     __version__ = _metadata.version("three-cubes-fitness")
 except _metadata.PackageNotFoundError:  # pragma: no cover - only when not installed
-    __version__ = "0.5.0"
+    __version__ = "0.6.0"
 
 __all__ = [
     "__version__",
@@ -179,10 +211,40 @@ __all__ = [
     "SkipLineFn",
     "make_env_path_conditional_check",
     "resolve_script",
+    "is_core_check",
+    "core_module_name",
     "staged_paths",
     "select_all",
     "select_gate",
     "print_aggregate",
     "run",
     "main_cli",
+    # v0.6.0 — per-file baseline I/O
+    "BASELINE_SUFFIX",
+    "BASELINE_DIRNAME",
+    "baseline_dir",
+    "baseline_path",
+    "parse_baseline_text",
+    "load_baseline",
+    "render_baseline",
+    "establish_baseline",
+    # v0.6.0 — FitnessRule ABC + CORE-check convention
+    "FitnessRule",
+    "run_core_check",
+    # v0.6.0 — engine CORE-check registry (catalogue ↔ modules consistency)
+    "CORE_CHECKS",
+    "discover_core_check_modules",
+    "core_check_consistency",
+    # v0.6.0 — keystone drift-enders
+    "load_all_baselines",
+    "find_net_new_violations",
+    "net_new_violations_forbidden",
+    "staged_added_files",
+    "added_since_tag",
+    "ShrinkResult",
+    "resolve_previous_tag",
+    "baseline_shrink_only",
+    "CatalogueConsistencyReport",
+    "reconcile_catalogue",
+    "catalogue_check_consistency",
 ]
