@@ -1,0 +1,74 @@
+version: 2
+
+# Supply-chain hardening: every version update sits in a 7-day cooldown
+# (semver-major: 14 days). Cooldown only applies to version updates —
+# security advisories still surface immediately so CVE patches aren't
+# delayed. Rationale: worm-injection attacks on package managers
+# (PyPI, GitHub Actions) typically get caught and yanked within days of
+# release; the cooldown lets the community surface a compromise before we pull.
+#
+# Targeting note: every `directory` below must contain a parseable manifest on
+# disk — a directory pointed at a non-existent manifest silently produces zero
+# PRs (the failure mode this config exists to avoid). Both targets resolve:
+#   - pip  → `/` holds pyproject.toml + uv.lock (uv-managed, pip ecosystem).
+#   - github-actions → `/` is where Dependabot discovers `.github/workflows/*`.
+#
+# Source: https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+
+updates:
+  # Python dependencies — the dev extra (pytest / mypy / ruff / PyYAML);
+  # runtime deps are deliberately empty (stdlib-only engine), so this governs
+  # the toolchain the self-gate runs through.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: "Australia/Sydney"
+    open-pull-requests-limit: 5
+    labels:
+      - dependency
+      - automated
+    commit-message:
+      prefix: "chore(deps)"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
+    # Group the gate's dev toolchain so minor/patch bumps collapse into one PR.
+    groups:
+      dev-dependencies:
+        patterns:
+          - "pytest*"
+          - "mypy*"
+          - "ruff"
+          - "PyYAML"
+          - "coverage*"
+          - "types-*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions — the CI workflow SHA-pins its actions (checkout,
+  # setup-uv-cached); this keeps those pins current under the same cooldown.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: "Australia/Sydney"
+    open-pull-requests-limit: 3
+    labels:
+      - dependency
+      - automated
+      - github-actions
+    commit-message:
+      prefix: "chore(deps)"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
