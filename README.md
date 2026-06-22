@@ -1,5 +1,8 @@
 # three-cubes-fitness
 
+> **Part of the [Three Cubes Golden Path](https://github.com/three-cubes)** — the paved road every repo's quality gate, CI, and deploy derive from.
+> Sibling: **[tc-pipelines](https://github.com/three-cubes/tc-pipelines)** — the reusable CI workflows that *run* this gate (`uses: …/python-quality-gate.yml@v1`) plus the Azure-VM deploy workflows.
+
 Shared architecture-fitness primitives **and the single runnable quality gate**
 for Three Cubes repositories (`kairix`, `tc-agent-zone`). This package is the
 **single source** for the helper code those repos' fitness-function checks
