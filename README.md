@@ -28,7 +28,7 @@ tc-fitness is the one check every repo uses instead of its own copy:
    ```toml
    [project.optional-dependencies]
    dev = [
-     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.5.0",
+     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.6.1",
    ]
    ```
 
@@ -137,7 +137,7 @@ shell = "git diff --name-only origin/main...HEAD | xargs -r detect-secrets-hook 
 # runner — no second python boot. It names your repo's RuleEntry catalogue.
 [[tool.tc_fitness.steps]]
 id = "fitness"
-summary = "architecture fitness functions"
+summary = "architecture rules"
 catalogue = "scripts.checks._rule_catalogue:ALL_ENTRIES"
 checks_dir = "scripts/checks"
 dispatch = "subprocess"
@@ -335,26 +335,31 @@ assumption doesn't hold. No additive gap was found here — `python_files`,
 
 ## How repositories consume it
 
-Pin to a tag in your `pyproject.toml` (git install — no PyPI publish):
+To add tc-fitness to a repo, follow [How to add it to a repo](#how-to-add-it-to-a-repo)
+above — pin the current tag (`@v0.6.1`) in your `pyproject.toml` and run
+`uv run tc-fitness run`. This section explains how the version pin works.
+
+Pin to a tag (git install — no PyPI publish); never `@main`. The version is the
+contract your checks depend on, so a repo only moves when you bump the tag:
 
 ```toml
 [project.optional-dependencies]
 dev = [
-  # kairix stays on v0.1.0 (the additions are a no-op for it); tc-agent-zone
-  # pins v0.2.0 for the gate_keys / remediation / run-marker / min_len surface.
-  "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.2.0",
+  "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.6.1",
 ]
 ```
 
 or, equivalently, on the command line:
 
 ```bash
-pip install "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.2.0"
+pip install "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.6.1"
 ```
 
-Always pin a tag, never `@main` — the version is the contract your checks depend
-on. Because v0.2.0 is an additive superset, a repo already pinned to `@v0.1.0`
-keeps working unchanged; bump to `@v0.2.0` only when you need the new surface.
+Each release is an additive, backward-compatible superset of the one before, so a
+repo pinned to an older tag keeps working unchanged and bumps only when it needs
+the newer surface. For example, the first two consumers pinned different tags:
+kairix on `@v0.1.0` (the later additions are a no-op for it) and tc-agent-zone on
+`@v0.2.0` (for the `gate_keys` / `remediation` / run-marker / `min_len` surface).
 
 ## The runner (v0.3.0)
 
