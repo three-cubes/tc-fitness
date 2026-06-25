@@ -15,6 +15,8 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-25
+
 ### Fixed
 - **branch-naming gate no longer no-ops on PRs.** On a GitHub `pull_request`
   event the runner checks out the merge commit in *detached HEAD*, so
@@ -28,6 +30,22 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
   the public signature stays back-compatible (new keyword-only `env`).
 
 ### Added
+- **`core:pattern_chokepoint` — confine a pattern to a single chokepoint.** A
+  new repo-agnostic CORE check: any in-scope file OUTSIDE the configured
+  chokepoint allow-list (`exempt_files`) that matches a configured regex
+  `patterns` entry is flagged. For properties that should be derived at one
+  boundary (a leaked token recreates the bug it prevented), this keeps the
+  deciding token out of every other call site. No pattern is baked in — a
+  consumer with no `patterns` flags nothing. Motivated by the neo4j read/write
+  session incident (a `write=` flag threaded through every caller until it was
+  derived once at `client.cypher`).
+- **`core:integrity_state_predicate` — completeness checks must assert STATE,
+  not presence.** A new CORE check: a SQL string running a `LEFT JOIN
+  <state_table> … IS NULL` completeness check on a configured multi-state table
+  must reference one of that table's STATE columns. Flags the placeholder-row
+  gap where a parent passes a presence check while its only child row is an
+  un-promoted placeholder (the chunk-0 / `content_vectors.model` incident). No
+  table is baked in — a consumer with no `state_tables` map flags nothing.
 - **`tc-fitness run --staged` — the canonical `<60s` smoke tier.** Dispatches
   catalogue steps through the runner's existing *sound* per-rule `--staged`
   selection (`tc_fitness.staged`, no false negative on a staged change) and
