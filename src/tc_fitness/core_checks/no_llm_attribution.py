@@ -28,6 +28,7 @@ per-file baseline (``--establish-baseline``); only NET-NEW residue fails.
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -118,6 +119,39 @@ def scan_text(text: str) -> list[Hit]:
     return hits
 
 
+def _is_strippable_line(line: str) -> bool:
+    """True when the whole line is an attribution trailer/credit (safe to drop).
+
+    A trailer (``Co-Authored-By: Claude``), a ``Generated with <tool>`` credit
+    line, or a line that is nothing but the robot emoji. Inline residue (a robot
+    emoji mid-sentence, an anthropic email embedded in prose) is NOT a strippable
+    line — it survives :func:`strip_text` and is then reported as non-strippable.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped == _ROBOT:
+        return True
+    return any(h.signature in ("attribution_trailer", "generated_with") for h in scan_text(line))
+
+
+def strip_text(text: str) -> tuple[str, list[str]]:
+    """Remove whole attribution-trailer/credit lines; return ``(cleaned, dropped)``.
+
+    Preserves the original trailing-newline shape. Genuine human co-author
+    trailers and ordinary prose are kept. Anything the strip cannot safely remove
+    as a whole line remains in ``cleaned`` for the caller to reject.
+    """
+    kept: list[str] = []
+    dropped: list[str] = []
+    for line in text.splitlines():
+        (dropped if _is_strippable_line(line) else kept).append(line)
+    cleaned = "\n".join(kept).rstrip("\n")
+    if text.endswith("\n"):
+        cleaned += "\n"
+    return cleaned, dropped
+
+
 class NoLlmAttribution(FitnessRule):
     """Flags files carrying AI/LLM self-attribution residue."""
 
@@ -144,9 +178,47 @@ def build(
     return rule
 
 
+def _report(path: Path, hits: list[Hit]) -> None:
+    print(f"no_llm_attribution: {len(hits)} attribution signature(s) in {path}:")
+    for h in hits:
+        print(f"  [{h.signature}] {h.match!r}")
+    print(REMEDIATION)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
-    return run_core_check(NoLlmAttribution, argv)
+    """CLI entry.
+
+    File/repo mode (the fitness gate): ``--establish-baseline`` / ``--repo-root``.
+
+    Message mode (the single seam the commit-msg hook and CI leg share):
+
+    * ``--scan-file PATH`` — scan a commit message / PR body; exit 1 on residue.
+      Read-only (CI must never rewrite history).
+    * ``--strip-file PATH`` — strip whole attribution lines IN PLACE, then reject
+      (exit 1) only if non-strippable residue remains. The commit-msg hook mode.
+    """
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args and args[0] in ("--scan-file", "--strip-file"):
+        if len(args) < 2:
+            print(f"usage: {args[0]} PATH", file=sys.stderr)
+            return 2
+        mode, path = args[0], Path(args[1])
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"cannot read {path}: {exc}", file=sys.stderr)
+            return 2
+        if mode == "--strip-file":
+            cleaned, dropped = strip_text(text)
+            if dropped:
+                path.write_text(cleaned, encoding="utf-8")
+            text = cleaned
+        hits = scan_text(text)
+        if hits:
+            _report(path, hits)
+            return 1
+        return 0
+    return run_core_check(NoLlmAttribution, args)
 
 
 if __name__ == "__main__":

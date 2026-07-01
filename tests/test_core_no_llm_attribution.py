@@ -102,3 +102,61 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
     assert rc == 0
     assert (tmp_path / ".architecture" / "baseline" / "no-llm-attribution-files.txt").exists()
+
+
+# ── message-scan / strip CLI: the seam the commit-msg hook + CI leg consume ──
+
+
+def test_strip_text_removes_trailer_and_credit_lines() -> None:
+    from tc_fitness.core_checks.no_llm_attribution import strip_text
+
+    msg = (
+        "feat: do the thing\n\n"
+        "body line\n"
+        f"{ROBOT} Generated with [Claude Code](https://claude.com/claude-code)\n"
+        "Co-Authored-By: Claude <noreply@anthropic.com>\n"
+    )
+    cleaned, stripped = strip_text(msg)
+    assert len(stripped) == 2
+    assert scan_text(cleaned) == []  # nothing left to flag
+    assert "feat: do the thing" in cleaned and "body line" in cleaned
+
+
+def test_strip_text_keeps_genuine_human_coauthor() -> None:
+    from tc_fitness.core_checks.no_llm_attribution import strip_text
+
+    msg = "fix: y\n\nCo-Authored-By: Jane Doe <jane@example.com>\n"
+    cleaned, stripped = strip_text(msg)
+    assert stripped == []
+    assert "Jane Doe" in cleaned
+
+
+def test_main_scan_file_flags_dirty_and_passes_clean(tmp_path: Path) -> None:
+    dirty = tmp_path / "MSG_DIRTY"
+    dirty.write_text("feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n", encoding="utf-8")
+    assert main(["--scan-file", str(dirty)]) == 1
+    # --scan-file does NOT modify the file (CI must not rewrite history).
+    assert "Co-Authored-By: Claude" in dirty.read_text(encoding="utf-8")
+
+    clean = tmp_path / "MSG_CLEAN"
+    clean.write_text("feat: x\n\nplain body\n", encoding="utf-8")
+    assert main(["--scan-file", str(clean)]) == 0
+
+
+def test_main_strip_file_cleans_then_passes(tmp_path: Path) -> None:
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text(
+        f"feat: x\n\nbody\n{ROBOT} Generated with Claude Code\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+        encoding="utf-8",
+    )
+    assert main(["--strip-file", str(msg)]) == 0
+    after = msg.read_text(encoding="utf-8")
+    assert scan_text(after) == []
+    assert "feat: x" in after and "body" in after
+
+
+def test_main_strip_file_rejects_nonstrippable_inline_residue(tmp_path: Path) -> None:
+    # A robot emoji embedded mid-line is not a whole strippable line → hard-reject.
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text(f"feat: shipped it {ROBOT} finally\n", encoding="utf-8")
+    assert main(["--strip-file", str(msg)]) == 1
