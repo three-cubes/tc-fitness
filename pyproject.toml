@@ -82,6 +82,11 @@ ignore = ["E501", "RUF022"]
 # `git log` by name with a fixed argv0 and config-declared refs — the same
 # trusted-argv0 posture as keystone/branch_naming (S603/S607).
 "src/tc_fitness/core_checks/canonical_commit_identity.py" = ["S603", "S607"]
+# new_code_coverage resolves the changed-line set by invoking `git merge-base` /
+# `git diff` by name with a fixed argv0; the only caller-controlled token (the
+# base ref) is validated against a safe-ref charset before use — the same
+# trusted-argv0 posture as canonical_commit_identity/branch_naming (S603/S607).
+"src/tc_fitness/core_checks/new_code_coverage.py" = ["S603", "S607"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -148,7 +153,8 @@ ruff format --check \
     coverage_includes_branches deterministic_tests empty_body_intent \
     engine_version_floor \
     every_test_has_tier_marker \
-    license_present mutation_survival_ratchet no_commented_out_code \
+    license_present mutation_survival_ratchet new_code_coverage \
+    no_commented_out_code \
     no_env_monkeypatch no_hardcoded_repo_paths no_internal_monkeypatch \
     no_internal_patches no_internal_patches_ts \
     no_language_suffix_in_package_names no_llm_attribution no_logging_secrets \
