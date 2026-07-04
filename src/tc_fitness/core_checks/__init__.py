@@ -163,6 +163,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:integrity_state_predicate",
     "core:license_present",
     "core:mutation_survival_ratchet",
+    "core:new_code_coverage",
     "core:no_commented_out_code",
     "core:no_duplicate_string",
     "core:no_env_monkeypatch",
