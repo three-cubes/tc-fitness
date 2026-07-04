@@ -15,6 +15,21 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-04
+
+### Added
+
+- **`new_code_coverage` CORE check** — mirrors SonarCloud's "Coverage on New Code
+  ≥ 80%" merge condition locally. For each in-scope changed file it intersects the
+  lines the branch ADDED (`git diff -U0` vs the merge-base with the trunk) with the
+  Cobertura per-line hits and fails the file when covered/coverable changed lines
+  fall below the floor — so an agent catches uncovered new code before a CI
+  round-trip, not after. A HARD floor (baseline-free: new code is
+  non-grandfatherable), unlike the whole-file `coverage_floor` ratchet. Config:
+  `floor_pct` (80.0), `coverage_report`, `base_ref`, plus inherited
+  `roots`/`extensions`. The git invocation is a DI seam (fixed argv, `base_ref`
+  validated against a safe ref charset, no shell); the coverage XML is XXE-guarded.
+
 ## [0.7.2] - 2026-07-02
 
 ### Added
