@@ -55,7 +55,7 @@ def _clean_sys_modules() -> object:
     before = set(sys.modules)
     yield
     for name in set(sys.modules) - before:
-        if name.startswith(("check_", "_synthetic_cat", "synthetic_cat")):
+        if name.startswith(("check_", "_synthetic_cat", "synthetic_cat", "scripts")):
             del sys.modules[name]
 
 
@@ -363,6 +363,57 @@ def test_main_staged_flag_threads_through(repo: Path, capsys: pytest.CaptureFixt
     # With --staged it is dropped → exit 0.
     assert main(["run", "--repo-root", str(repo), "--staged"]) == 0
     assert "SKIP [expensive]" in _plain(capsys.readouterr().out)
+
+
+def test_main_changed_files_from_threads_diff_scope_through_catalogue(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checks = repo / "scripts" / "checks"
+    checks.mkdir(parents=True)
+    (checks / "__init__.py").write_text("")
+    (repo / "scripts" / "__init__.py").write_text("")
+    (checks / "check_src.py").write_text("def main():\n    return 0\n")
+    (checks / "check_tests.py").write_text("def main():\n    return 1\n")
+    (checks / "changed_cat.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "ALL_ENTRIES = (\n"
+        "    RuleEntry(id='SRC', gate='src', check='src', summary='src', staged_scope=('src',)),\n"
+        "    RuleEntry(id='TESTS', gate='tests', check='tests', summary='tests', staged_scope=('tests',)),\n"
+        ")\n"
+    )
+    changed = repo / "changed-files.txt"
+    changed.write_text("src/app.py\n", encoding="utf-8")
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.changed_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n'
+        '[[steps]]\nid = "expensive"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+
+    rc = main(["run", "--repo-root", str(repo), "--changed-files-from", str(changed)])
+    out = _plain(capsys.readouterr().out)
+
+    assert rc == 0
+    assert "changed smoke" in out
+    assert "run [SRC]" in out
+    assert "skip [TESTS]" in out
+    assert "SKIP [expensive]" in out
+
+
+def test_main_changed_files_from_missing_file_fails_closed(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "expensive"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+
+    rc = main(["run", "--repo-root", str(repo), "--changed-files-from", str(repo / "missing.txt")])
+    err = _plain(capsys.readouterr().err)
+
+    assert rc == 2
+    assert "FAIL --changed-files-from" in err
+    assert "missing.txt" in err
 
 
 # --------------------------------------------------------------------------- #

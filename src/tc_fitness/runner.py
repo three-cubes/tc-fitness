@@ -71,7 +71,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from tc_fitness.catalogue import RuleEntry, is_dispatchable
 from tc_fitness.context import CheckContext
@@ -169,6 +169,20 @@ class ConditionalResult:
 # (``subprocess_arg_env`` / ``subprocess_arg_default``) with a generic skip
 # line. A consumer supplies this to reproduce its exact skip text.
 ConditionalCheck = Callable[[RuleEntry], "ConditionalResult | None"]
+
+
+class _RunKwargs(TypedDict, total=False):
+    repo_root: Path | None
+    checks_dir: Path | None
+    scope_resolver: ScopeResolver | None
+    enumeration_narrower: EnumerationNarrower | None
+    paved_road_footer: PavedRoadFooter | None
+    conditional_check: ConditionalCheck | None
+    parallel_subprocess: bool
+    max_workers: int
+    dispatch: str
+    core_check_configs: Mapping[str, Mapping[str, Any]] | None
+    establish_baseline: bool
 
 
 #: A per-entry skip-line builder: given the :class:`RuleEntry`, return the exact
@@ -921,7 +935,9 @@ def print_aggregate(verdict: Verdicts) -> None:
             f"({len(verdict.failures)}/{verdict.ran} rule(s) failed: {', '.join(verdict.failures)})"
         )
     else:
-        print(f"{Colours.GREEN}=== All {verdict.ran} architecture fitness functions passed ==={Colours.RESET}")
+        print(
+            f"{Colours.GREEN}=== All {verdict.ran} architecture fitness functions passed ==={Colours.RESET}"
+        )
 
 
 # Back-compat private alias (kept until taz migrates off the private import).
@@ -949,6 +965,17 @@ def staged_paths(repo_root: Path) -> list[str]:
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def paths_from_file(path: Path) -> list[str]:
+    """Read a newline-delimited repo-relative changed-file list.
+
+    This is the CI companion to :func:`staged_paths`: a workflow can compute the
+    PR diff once, write it to a file, and pass that explicit list into the same
+    staged-selection machinery. Blank lines are ignored.
+    """
+    text = path.read_text(encoding="utf-8")
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 # ── programmatic + CLI entrypoints ───────────────────────────────────────
@@ -1033,6 +1060,7 @@ def main_cli(
     max_workers: int = _DEFAULT_MAX_WORKERS,
     dispatch: str = "inprocess",
     core_check_configs: Mapping[str, Mapping[str, Any]] | None = None,
+    staged_files: list[str] | None = None,
     extra_flags: Sequence[tuple[str, dict[str, object]]] = (),
     post_parse: Callable[[argparse.Namespace], dict[str, object]] | None = None,
 ) -> int:
@@ -1063,6 +1091,11 @@ def main_cli(
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--all", action="store_true", help="run every in-scope rule (default)")
     group.add_argument("--staged", action="store_true", help="run only rules a staged change could trip")
+    group.add_argument(
+        "--changed-files-from",
+        metavar="PATH",
+        help="run staged selection against an explicit newline-delimited changed-file list",
+    )
     group.add_argument("--gate", metavar="ID", help="run one rule by catalogue id (e.g. F26)")
     parser.add_argument(
         "--establish-baseline",
@@ -1073,7 +1106,7 @@ def main_cli(
         parser.add_argument(flag, **kwargs)  # type: ignore[arg-type]
     args = parser.parse_args(argv)
 
-    common: dict[str, object] = {
+    common: _RunKwargs = {
         "repo_root": repo_root,
         "checks_dir": checks_dir,
         "scope_resolver": scope_resolver,
@@ -1087,18 +1120,33 @@ def main_cli(
         "establish_baseline": bool(args.establish_baseline),
     }
     if post_parse is not None:
-        common.update(post_parse(args))
+        common.update(cast(_RunKwargs, post_parse(args)))
 
     if args.gate:
-        verdict = run(rules, mode="gate", gate_id=args.gate, **common)  # type: ignore[arg-type]
+        verdict = run(rules, mode="gate", gate_id=args.gate, **common)
         if verdict.failures == ["<no-such-gate>"]:
             return 2
         return verdict.exit_code
 
-    if args.staged:
-        return run(rules, mode="staged", **common).exit_code  # type: ignore[arg-type]
+    if args.staged or args.changed_files_from:
+        try:
+            selected_staged_files = (
+                paths_from_file(Path(args.changed_files_from)) if args.changed_files_from else staged_files
+            )
+        except OSError as exc:
+            print(
+                f"{_RED}FAIL --changed-files-from{_RESET} - cannot read {args.changed_files_from}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        return run(
+            rules,
+            mode="staged",
+            staged_files=selected_staged_files,
+            **common,
+        ).exit_code
 
-    return run(rules, mode="all", **common).exit_code  # type: ignore[arg-type]
+    return run(rules, mode="all", **common).exit_code
 
 
 __all__ = [
@@ -1114,6 +1162,7 @@ __all__ = [
     "is_core_check",
     "core_module_name",
     "staged_paths",
+    "paths_from_file",
     "select_all",
     "select_gate",
     "print_aggregate",
