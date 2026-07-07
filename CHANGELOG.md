@@ -15,6 +15,16 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-07
+
+### Added
+
+- **`tc-fitness run --changed-files-from PATH`** — a CI companion to the local
+  `--staged` smoke tier. Workflows can compute the PR diff once, write the
+  repo-relative paths to a newline-delimited file, and run the same sound
+  per-rule staged selection plus `skip_when_staged` drops without reading the
+  git index. Missing diff files fail closed with exit code 2.
+
 ## [0.8.0] - 2026-07-04
 
 ### Added

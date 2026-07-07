@@ -55,7 +55,7 @@ from tc_fitness.gate_config import (
     load_config,
     load_core_check_configs,
 )
-from tc_fitness.runner import Colours, main_cli
+from tc_fitness.runner import Colours, main_cli, paths_from_file
 
 _RED = Colours.RED
 _GREEN = Colours.GREEN
@@ -179,6 +179,7 @@ def _run_catalogue_step(
     *,
     establish_baseline: bool = False,
     staged: bool = False,
+    changed_files: list[str] | None = None,
 ) -> StepResult:
     """Dispatch the consumer's RuleEntry catalogue via the shared runner.
 
@@ -226,7 +227,7 @@ def _run_catalogue_step(
 
     if gate_id:
         argv = ["--gate", gate_id]
-    elif staged:
+    elif staged or changed_files is not None:
         argv = ["--staged"]
     else:
         argv = ["--all"]
@@ -241,6 +242,7 @@ def _run_catalogue_step(
         dispatch=step.dispatch,
         parallel_subprocess=step.parallel,
         core_check_configs=core_check_configs,
+        staged_files=changed_files,
     )
     if rc == 0:
         print(f"{_GREEN}PASS [{step.id}]{_RESET} {label}")
@@ -257,10 +259,16 @@ def _run_step(
     *,
     establish_baseline: bool = False,
     staged: bool = False,
+    changed_files: list[str] | None = None,
 ) -> StepResult:
     if step.kind == "catalogue":
         return _run_catalogue_step(
-            step, repo_root, gate_id, establish_baseline=establish_baseline, staged=staged
+            step,
+            repo_root,
+            gate_id,
+            establish_baseline=establish_baseline,
+            staged=staged,
+            changed_files=changed_files,
         )
     return _run_command_step(step, repo_root)
 
@@ -287,6 +295,7 @@ def run_gate(
     gate_id: str | None = None,
     establish_baseline: bool = False,
     staged: bool = False,
+    changed_files: list[str] | None = None,
 ) -> GateOutcome:
     """Run the configured steps in order; return the aggregate outcome.
 
@@ -298,13 +307,20 @@ def run_gate(
     ``staged`` selects the ``<60s`` smoke tier: catalogue steps run through the
     runner's sound per-rule ``--staged`` selection, and every step a repo has
     flagged ``skip_when_staged`` (its EXPENSIVE full-tree legs) is dropped with a
-    transparent SKIP line. The cheap legs (lint / format / branch-naming) run
-    verbatim. This is the canonical fast-feedback entrypoint
-    ``kairix``'s ``safe-commit.sh --check`` builds on.
+    transparent SKIP line. ``changed_files`` uses the same selection semantics
+    with a caller-supplied PR diff list instead of the git index, which is the CI
+    companion to the local staged smoke. The cheap legs (lint / format /
+    branch-naming) run verbatim.
 
     ``fail_fast`` (from the config) stops at the first gating failure.
     """
-    banner = f"{cfg.name} (staged smoke)" if staged else cfg.name
+    fast_mode = staged or changed_files is not None
+    if changed_files is not None:
+        banner = f"{cfg.name} (changed smoke)"
+    elif staged:
+        banner = f"{cfg.name} (staged smoke)"
+    else:
+        banner = cfg.name
     print(f"=== {banner} ===")
     if cfg.source is not None:
         print(f"    (config: {cfg.source})")
@@ -322,12 +338,19 @@ def run_gate(
 
     outcome = GateOutcome()
     for step in selected:
-        if staged and step.skip_when_staged:
+        if fast_mode and step.skip_when_staged:
             label = step.summary or step.id
             print(f"{_YELLOW}SKIP [{step.id}]{_RESET} {label} (skip_when_staged — not in the <60s smoke)")
             outcome.results.append(StepResult(step.id, "skip"))
             continue
-        result = _run_step(step, repo_root, gate_id, establish_baseline=establish_baseline, staged=staged)
+        result = _run_step(
+            step,
+            repo_root,
+            gate_id,
+            establish_baseline=establish_baseline,
+            staged=staged,
+            changed_files=changed_files,
+        )
         outcome.results.append(result)
         if cfg.fail_fast and result.is_gating_failure:
             print(f"{_YELLOW}fail_fast: stopping at first gating failure ({step.id}){_RESET}")
@@ -346,7 +369,9 @@ def main(argv: list[str] | None = None) -> int:
       ``--repo-root`` overrides CWD; ``--only ID`` runs a subset of steps;
       ``--gate ID`` targets a single fitness rule inside a catalogue step;
       ``--staged`` runs the ``<60s`` smoke tier (catalogue steps in sound
-      per-rule ``--staged`` selection; ``skip_when_staged`` legs dropped).
+      per-rule ``--staged`` selection; ``skip_when_staged`` legs dropped);
+      ``--changed-files-from PATH`` runs the same smoke tier against a CI
+      supplied PR-diff file list.
     """
     parser = argparse.ArgumentParser(
         prog="tc-fitness",
@@ -377,6 +402,11 @@ def main(argv: list[str] | None = None) -> int:
         "mode and drop steps flagged skip_when_staged (the expensive full-tree legs)",
     )
     run_p.add_argument(
+        "--changed-files-from",
+        metavar="PATH",
+        help="the <60s CI smoke tier: run staged selection against a newline-delimited changed-file list",
+    )
+    run_p.add_argument(
         "--establish-baseline",
         action="store_true",
         help="run the catalogue step's core: entries in baseline-adoption mode "
@@ -390,6 +420,16 @@ def main(argv: list[str] | None = None) -> int:
     except GateConfigError as exc:
         print(f"{_RED}FAIL tc-fitness run{_RESET} — {exc}", file=sys.stderr)
         return 2
+    try:
+        changed_files = (
+            paths_from_file(Path(args.changed_files_from).resolve()) if args.changed_files_from else None
+        )
+    except OSError as exc:
+        print(
+            f"{_RED}FAIL --changed-files-from{_RESET} - cannot read {args.changed_files_from}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
 
     outcome = run_gate(
         cfg,
@@ -398,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_id=args.gate,
         establish_baseline=bool(args.establish_baseline),
         staged=bool(args.staged),
+        changed_files=changed_files,
     )
     return outcome.exit_code
 

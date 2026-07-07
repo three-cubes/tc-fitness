@@ -118,6 +118,74 @@ def test_inprocess_pass_emits_run_and_pass_lines(
     assert "=== All 1 architecture fitness functions passed ===" in out
 
 
+def test_main_cli_changed_files_from_uses_explicit_diff_scope(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_py_check(checks_dir, "src_rule", "return 0")
+    _write_py_check(checks_dir, "tests_rule", "return 1")  # would FAIL if dispatched
+    changed = repo_root / "changed-files.txt"
+    changed.write_text("src/service.py\n", encoding="utf-8")
+    rules = (
+        RuleEntry(
+            id="SRC",
+            gate="src",
+            check="src_rule",
+            summary="src rule",
+            staged_class="file-local",
+            staged_scope=("src",),
+        ),
+        RuleEntry(
+            id="TESTS",
+            gate="tests",
+            check="tests_rule",
+            summary="tests rule",
+            staged_class="file-local",
+            staged_scope=("tests",),
+        ),
+    )
+
+    rc = main_cli(
+        rules,
+        ["--changed-files-from", str(changed)],
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+    )
+    out = _plain(capsys.readouterr().out)
+
+    assert rc == 0
+    assert "run [SRC]" in out
+    assert "skip [TESTS]" in out
+    assert "staged selection: 1 ran, 1 skipped" in out
+
+
+def test_main_cli_changed_files_from_missing_file_fails_closed(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_py_check(checks_dir, "src_rule", "return 0")
+    rules = (
+        RuleEntry(
+            id="SRC",
+            gate="src",
+            check="src_rule",
+            summary="src rule",
+            staged_class="file-local",
+            staged_scope=("src",),
+        ),
+    )
+
+    rc = main_cli(
+        rules,
+        ["--changed-files-from", str(repo_root / "missing-files.txt")],
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+    )
+    err = _plain(capsys.readouterr().err)
+
+    assert rc == 2
+    assert "FAIL --changed-files-from" in err
+    assert "missing-files.txt" in err
+
+
 def test_inprocess_fail_records_failure_and_exit_code(
     checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

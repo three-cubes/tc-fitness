@@ -28,7 +28,7 @@ tc-fitness is the one check every repo uses instead of its own copy:
    ```toml
    [project.optional-dependencies]
    dev = [
-     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.6.1",
+     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.8.1",
    ]
    ```
 
@@ -162,8 +162,11 @@ under the step's FAIL. The full schema lives in
 steps, repeatable), `--gate ID` (target one architecture rule inside a catalogue
 step), `--staged` (the `<60s` fast tier — catalogue steps run through the *sound*
 per-rule `--staged` selection, and any step flagged `skip_when_staged` in config,
-e.g. a full `pytest`/`mypy` leg, is dropped). This is the fast-feedback
-entrypoint kairix's `safe-commit.sh --check` builds on.
+e.g. a full `pytest`/`mypy` leg, is dropped), and `--changed-files-from PATH`
+(the CI fast tier — same selection semantics, but the changed paths come from a
+newline-delimited PR-diff file instead of the git index). This is the
+fast-feedback entrypoint kairix's `safe-commit.sh --check` builds on, with
+`--changed-files-from` as the GitHub Actions companion.
 
 ## Library modules
 
@@ -336,7 +339,7 @@ assumption doesn't hold. No additive gap was found here — `python_files`,
 ## How repositories consume it
 
 To add tc-fitness to a repo, follow [How to add it to a repo](#how-to-add-it-to-a-repo)
-above — pin the current tag (`@v0.6.1`) in your `pyproject.toml` and run
+above — pin the current tag (`@v0.8.1`) in your `pyproject.toml` and run
 `uv run tc-fitness run`. This section explains how the version pin works.
 
 Pin to a tag (git install — no PyPI publish); never `@main`. The version is the
@@ -345,14 +348,14 @@ contract your checks depend on, so a repo only moves when you bump the tag:
 ```toml
 [project.optional-dependencies]
 dev = [
-  "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.6.1",
+  "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.8.1",
 ]
 ```
 
 or, equivalently, on the command line:
 
 ```bash
-pip install "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.6.1"
+pip install "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.8.1"
 ```
 
 Each release is an additive, backward-compatible superset of the one before, so a
@@ -379,9 +382,10 @@ from .catalogue import RULES
 raise SystemExit(main_cli(RULES))
 ```
 
-`main_cli` parses `--all` / `--staged` / `--gate <id>` and returns the process
-exit code. For tests and embedding there is a programmatic
-`run(rules, *, mode, staged_files=None, repo_root=None, ...) -> Verdicts`.
+`main_cli` parses `--all` / `--staged` / `--changed-files-from PATH` /
+`--gate <id>` and returns the process exit code. For tests and embedding there
+is a programmatic `run(rules, *, mode, staged_files=None, repo_root=None, ...) ->
+Verdicts`.
 
 ### What the runner does
 
@@ -398,10 +402,10 @@ exit code. For tests and embedding there is a programmatic
   [id]` verdict per rule, then the aggregate verdict; the format kairix's F83
   gate-runner contract depends on.
 - **`--all`** (dispatchable AND `run_all`), **`--gate <id>`** (one rule), and
-  **`--staged`** — the *sound* per-rule staged selection (file-local /
-  relational / always-run), single-sourced on each `RuleEntry`. The hard
-  invariant is **no false negative on a staged change**: when scope can't be
-  resolved, the rule runs (fail-safe).
+  **`--staged`** / **`--changed-files-from PATH`** — the *sound* per-rule
+  staged selection (file-local / relational / always-run), single-sourced on
+  each `RuleEntry`. The hard invariant is **no false negative on a changed
+  path**: when scope can't be resolved, the rule runs (fail-safe).
 - A **footer hook** so a failing rule can point an agent at the repo's own query
   surface.
 
