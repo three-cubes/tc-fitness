@@ -15,6 +15,22 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-08
+
+### Added
+
+- **pytest sharding — `tc-fitness run --shard i/N`.** A step opts in with a new
+  per-step config field `shard_args` (an argv-token list with `{index}`/`{total}`
+  placeholders, e.g. `["--splits", "{total}", "--group", "{index}"]` for
+  pytest-split). When `--shard i/N` is passed, the engine appends the substituted
+  tokens to that step's command and sets `COVERAGE_FILE=.coverage.<i>` so a
+  downstream `coverage combine` merges the shards (branch data preserved). The
+  engine hardcodes no splitter — the tokens are the consumer's declaration.
+  Steps without `shard_args` are untouched, and without `--shard` behaviour is
+  byte-identical, so every existing consumer is unaffected until it opts in. A
+  reusable CI workflow can now matrix `--shard 1/N … N/N` across runners and
+  combine the shard coverage into the single report the Sonar handoff consumes.
+
 ## [0.8.1] - 2026-07-07
 
 ### Added

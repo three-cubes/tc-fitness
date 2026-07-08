@@ -141,6 +141,16 @@ class StepSpec:
     #: the engine bakes in no policy about which legs are "expensive"; the repo
     #: declares it.
     skip_when_staged: bool = False
+    #: Extra argv appended to a ``run`` step's command when ``tc-fitness run
+    #: --shard i/N`` is passed, with ``{index}`` (the 1-based shard i) and
+    #: ``{total}`` (N) substituted per token — e.g.
+    #: ``["--splits", "{total}", "--group", "{index}"]`` for pytest-split. The
+    #: engine also sets ``COVERAGE_FILE=.coverage.<i>`` on that step so a
+    #: downstream ``coverage combine`` merges the shards. Empty (the default)
+    #: means the step is shard-agnostic: ``--shard`` leaves it byte-identical.
+    #: The engine hardcodes no splitter — the tokens are the consumer's
+    #: declaration.
+    shard_args: tuple[str, ...] = ()
 
     @property
     def kind(self) -> str:
@@ -278,6 +288,11 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         )
 
     env = _coerce_env(raw["env"], step_id=step_id) if "env" in raw else {}
+    shard_args = (
+        _coerce_str_tuple(raw["shard_args"], field_name="shard_args", step_id=step_id)
+        if "shard_args" in raw
+        else ()
+    )
 
     return StepSpec(
         id=step_id,
@@ -295,6 +310,7 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         dispatch=dispatch,
         parallel=bool(raw.get("parallel", False)),
         skip_when_staged=bool(raw.get("skip_when_staged", False)),
+        shard_args=shard_args,
     )
 
 

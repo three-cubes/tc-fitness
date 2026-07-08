@@ -123,7 +123,45 @@ def _print_fix_next(step: StepSpec) -> None:
         print(f"   next: {step.next}")
 
 
-def _run_command_step(step: StepSpec, repo_root: Path) -> StepResult:
+def _parse_shard(spec: str) -> tuple[int, int]:
+    """Parse an ``i/N`` shard spec into ``(index, total)``; validate ``1 <= i <= N``.
+
+    Raises ``ValueError`` (agent-actionable) on a malformed spec so ``main`` can map
+    it to the same exit-2 config-error path ``--changed-files-from`` uses.
+    """
+    index_s, sep, total_s = spec.partition("/")
+    if sep != "/" or not index_s.isdigit() or not total_s.isdigit():
+        raise ValueError(
+            f"--shard must be `i/N` with positive integers (got {spec!r}); "
+            "fix: pass e.g. `--shard 2/4`; next: re-run tc-fitness run"
+        )
+    index, total = int(index_s), int(total_s)
+    if total < 1 or not (1 <= index <= total):
+        raise ValueError(
+            f"--shard {spec}: need 1 <= i <= N and N >= 1; "
+            "fix: pass e.g. `--shard 2/4`; next: re-run tc-fitness run"
+        )
+    return index, total
+
+
+def _apply_shard(argv: list[str], env: dict[str, str], step: StepSpec, shard: tuple[int, int]) -> None:
+    """Extend a run step's ``argv`` with its substituted ``shard_args`` and scope
+    ``COVERAGE_FILE`` to this shard, IN PLACE.
+
+    A no-op when the step declares no ``shard_args`` — so ``--shard`` only affects
+    the step(s) that opt in, leaving every other command byte-identical. Uses a
+    literal ``str.replace`` (not ``str.format``) so a stray brace in an argument
+    cannot raise. ``env`` is the fresh per-step dict from :func:`_step_env`, so the
+    ``COVERAGE_FILE`` override does not leak into the parent process.
+    """
+    if not step.shard_args:
+        return
+    index, total = shard
+    argv.extend(arg.replace("{index}", str(index)).replace("{total}", str(total)) for arg in step.shard_args)
+    env["COVERAGE_FILE"] = f".coverage.{index}"
+
+
+def _run_command_step(step: StepSpec, repo_root: Path, *, shard: tuple[int, int] | None = None) -> StepResult:
     """Execute a ``run`` (argv) or ``shell`` (string) step as a child process.
 
     Inherits stdout/stderr so the child's output streams live (no capture) — the
@@ -141,6 +179,10 @@ def _run_command_step(step: StepSpec, repo_root: Path) -> StepResult:
         # one action per step), so the `or ()` is unreachable — present only to
         # satisfy the type checker without an `assert` in shipped code.
         argv = list(step.run or ())
+        if shard is not None:
+            # No-op unless the step declares shard_args; keeps argv[0] (the
+            # program) unchanged for the PATH lookup below.
+            _apply_shard(argv, env, step, shard)
         if not _program_on_path(argv[0], env):
             if step.allow_missing:
                 print(f"{_YELLOW}SKIP [{step.id}]{_RESET} {argv[0]} not on PATH (allow_missing)")
@@ -260,6 +302,7 @@ def _run_step(
     establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
+    shard: tuple[int, int] | None = None,
 ) -> StepResult:
     if step.kind == "catalogue":
         return _run_catalogue_step(
@@ -270,7 +313,7 @@ def _run_step(
             staged=staged,
             changed_files=changed_files,
         )
-    return _run_command_step(step, repo_root)
+    return _run_command_step(step, repo_root, shard=shard)
 
 
 def _print_aggregate(cfg: GateConfig, outcome: GateOutcome) -> None:
@@ -296,6 +339,7 @@ def run_gate(
     establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
+    shard: tuple[int, int] | None = None,
 ) -> GateOutcome:
     """Run the configured steps in order; return the aggregate outcome.
 
@@ -350,6 +394,7 @@ def run_gate(
             establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
+            shard=shard,
         )
         outcome.results.append(result)
         if cfg.fail_fast and result.is_gating_failure:
@@ -407,6 +452,14 @@ def main(argv: list[str] | None = None) -> int:
         help="the <60s CI smoke tier: run staged selection against a newline-delimited changed-file list",
     )
     run_p.add_argument(
+        "--shard",
+        metavar="I/N",
+        help="run shard i of N (e.g. --shard 2/4): append each opted-in step's "
+        "shard_args (with {index}/{total} substituted) to its command and set "
+        "COVERAGE_FILE=.coverage.<i> so a downstream `coverage combine` merges the "
+        "shards. Steps without shard_args are untouched.",
+    )
+    run_p.add_argument(
         "--establish-baseline",
         action="store_true",
         help="run the catalogue step's core: entries in baseline-adoption mode "
@@ -430,6 +483,11 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        shard = _parse_shard(args.shard) if args.shard else None
+    except ValueError as exc:
+        print(f"{_RED}FAIL --shard{_RESET} - {exc}", file=sys.stderr)
+        return 2
 
     outcome = run_gate(
         cfg,
@@ -439,6 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         establish_baseline=bool(args.establish_baseline),
         staged=bool(args.staged),
         changed_files=changed_files,
+        shard=shard,
     )
     return outcome.exit_code
 

@@ -154,17 +154,23 @@ Each step is one of:
 
 Per-step options: `summary`, `cwd`, `env`, `allow_missing` (skip when the program
 isn't on PATH instead of failing), `continue_on_error` (record a FAIL but don't
-fail the aggregate — informational steps), and `fix:` / `next:` lines printed
-under the step's FAIL. The full schema lives in
+fail the aggregate — informational steps), `shard_args` (argv appended to a `run`
+step under `--shard i/N`, with `{index}`/`{total}` substituted — e.g.
+`["--splits", "{total}", "--group", "{index}"]` for pytest-split), and `fix:` /
+`next:` lines printed under the step's FAIL. The full schema lives in
 [`src/tc_fitness/gate_config.py`](src/tc_fitness/gate_config.py).
 
 `tc-fitness run` flags: `--repo-root` (default CWD), `--only ID` (run a subset of
 steps, repeatable), `--gate ID` (target one architecture rule inside a catalogue
 step), `--staged` (the `<60s` fast tier — catalogue steps run through the *sound*
 per-rule `--staged` selection, and any step flagged `skip_when_staged` in config,
-e.g. a full `pytest`/`mypy` leg, is dropped), and `--changed-files-from PATH`
+e.g. a full `pytest`/`mypy` leg, is dropped), `--changed-files-from PATH`
 (the CI fast tier — same selection semantics, but the changed paths come from a
-newline-delimited PR-diff file instead of the git index). This is the
+newline-delimited PR-diff file instead of the git index), and `--shard I/N` (run
+shard *i* of *N*: append each opted-in step's substituted `shard_args` and set
+`COVERAGE_FILE=.coverage.<i>`, so a CI workflow can matrix `--shard 1/N … N/N`
+across runners and `coverage combine` the shard files into one report — the
+`skip_when_staged` full `pytest` leg is the intended target). This is the
 fast-feedback entrypoint kairix's `safe-commit.sh --check` builds on, with
 `--changed-files-from` as the GitHub Actions companion.
 
