@@ -365,6 +365,61 @@ def test_main_staged_flag_threads_through(repo: Path, capsys: pytest.CaptureFixt
     assert "SKIP [expensive]" in _plain(capsys.readouterr().out)
 
 
+def _shard_probe_config(repo: Path, *, with_shard_args: bool) -> Path:
+    """A run step that dumps its trailing argv + COVERAGE_FILE to a marker file.
+
+    Uses ``sys.executable`` as argv[0] so the PATH check passes; the substituted
+    ``shard_args`` (when declared) land as trailing ``sys.argv`` the probe echoes
+    back, and the engine's ``COVERAGE_FILE`` override lands in the probe's env.
+    """
+    marker = repo / "argv.txt"
+    script = repo / "dump.py"
+    script.write_text(
+        "import os, sys, pathlib\n"
+        f"pathlib.Path({str(marker)!r}).write_text("
+        "' '.join(sys.argv[1:]) + '|' + os.environ.get('COVERAGE_FILE', ''))\n"
+    )
+    shard_line = 'shard_args = ["--splits", "{total}", "--group", "{index}"]\n' if with_shard_args else ""
+    _write_config(
+        repo,
+        f'[[steps]]\nid = "t"\nrun = [{sys.executable!r}, {str(script)!r}]\n{shard_line}',
+    )
+    return marker
+
+
+def test_shard_appends_shard_args_and_sets_coverage_file(repo: Path) -> None:
+    marker = _shard_probe_config(repo, with_shard_args=True)
+    assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
+    # {total}->4, {index}->2 appended as trailing argv; COVERAGE_FILE scoped to i.
+    assert marker.read_text() == "--splits 4 --group 2|.coverage.2"
+
+
+def test_no_shard_leaves_command_untouched(repo: Path) -> None:
+    marker = _shard_probe_config(repo, with_shard_args=True)
+    assert run_gate(load_config(repo), repo, shard=None).ok
+    # Back-compat: no --shard → no trailing argv, no COVERAGE_FILE override.
+    assert marker.read_text() == "|"
+
+
+def test_shard_ignores_step_without_shard_args(repo: Path) -> None:
+    marker = _shard_probe_config(repo, with_shard_args=False)
+    assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
+    # Opt-in only: a step without shard_args is untouched even under --shard.
+    assert marker.read_text() == "|"
+
+
+@pytest.mark.parametrize("spec", ["5/4", "0/4", "abc", "2/0", "2"])
+def test_main_invalid_shard_returns_two(repo: Path, capsys: pytest.CaptureFixture[str], spec: str) -> None:
+    _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
+    assert main(["run", "--repo-root", str(repo), "--shard", spec]) == 2
+    assert "FAIL --shard" in _plain(capsys.readouterr().err)
+
+
+def test_main_shard_flag_threads_through(repo: Path) -> None:
+    _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
+    assert main(["run", "--repo-root", str(repo), "--shard", "1/2"]) == 0
+
+
 def test_main_changed_files_from_threads_diff_scope_through_catalogue(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

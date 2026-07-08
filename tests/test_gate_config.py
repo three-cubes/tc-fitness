@@ -194,6 +194,7 @@ def test_optional_step_fields_default(tmp_path: Path) -> None:
     assert step.fix == ""
     assert step.next == ""
     assert step.skip_when_staged is False
+    assert step.shard_args == ()
 
 
 def test_skip_when_staged_parses(tmp_path: Path) -> None:
@@ -202,6 +203,20 @@ def test_skip_when_staged_parses(tmp_path: Path) -> None:
         tmp_path,
     )
     assert cfg.steps[0].skip_when_staged is True
+
+
+def test_shard_args_parses_to_tuple(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = ['--splits', '{total}', '--group', '{index}']\n",
+        tmp_path,
+    )
+    assert cfg.steps[0].shard_args == ("--splits", "{total}", "--group", "{index}")
+
+
+def test_shard_args_must_be_list_of_strings(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = '--splits'\n", tmp_path)
+    assert "list of strings" in str(exc.value)
 
 
 def test_step_fix_next_and_flags_parse(tmp_path: Path) -> None:

@@ -26,8 +26,9 @@ def test_version_matches_installed_metadata() -> None:
     assert tc_fitness.__version__ == metadata_version
 
 
-def test_version_is_v0_8_1() -> None:
-    # v0.8.1 adds the changed-file-list CI smoke mode, additive over v0.8.0.
-    # The literal tracks the pyproject version so the
-    # CHANGELOG entry stays honest and a tag bump can't drift the two apart.
-    assert tc_fitness.__version__ == "0.8.1"
+def test_version_is_v0_9_0() -> None:
+    # v0.9.0 adds pytest sharding (`--shard i/N` + the per-step `shard_args`
+    # config field), a new opt-in surface additive over v0.8.1. The literal
+    # tracks the pyproject version so the CHANGELOG entry stays honest and a
+    # tag bump can't drift the two apart.
+    assert tc_fitness.__version__ == "0.9.0"
