@@ -15,6 +15,26 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-09
+
+### Added
+
+- **In-gate concern-parallelism** — one `tc-fitness run` can now run independent
+  step-groups concurrently instead of forcing every concern (lint ‖ type ‖
+  security ‖ contract) into a scattered set of CI jobs, so the whole gate stays a
+  single replayable `[tool.tc_fitness]` definition (local == CI). New per-step
+  config: `stage` (steps sharing a stage run concurrently — subprocess `run`/
+  `shell` legs on a bounded worker pool, an in-process `catalogue` step on the
+  main thread, overlapping in wall-clock), `depends_on` (a barrier between stages;
+  the union of a stage's members' `depends_on`, else the implicit sequential
+  chain), and `tags` for the new `--tier <name>` selector (smoke/full/nightly).
+  Output is buffered and replayed in registration order so the ledger stays
+  byte-stable; the runner's proven subprocess-parallel replay mechanism is reused.
+  Optional top-level `max_workers` bounds the per-stage pool. A config with no
+  `stage`/`depends_on` runs the untouched sequential path — **byte-identical** to
+  v0.9.0 — so every existing consumer is unaffected until it opts in. New public
+  surface: `Stage`, `plan_stages`.
+
 ## [0.9.0] - 2026-07-08
 
 ### Added

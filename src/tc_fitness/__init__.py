@@ -53,12 +53,14 @@ from tc_fitness.gate import (
 from tc_fitness.gate_config import (
     GateConfig,
     GateConfigError,
+    Stage,
     StepSpec,
     find_config_file,
     load_config,
     load_core_check_configs,
     parse_config,
     parse_core_check_configs,
+    plan_stages,
 )
 from tc_fitness.keystone import (
     CatalogueConsistencyReport,
@@ -143,7 +145,7 @@ from tc_fitness.staged import (
 try:
     __version__ = _metadata.version("three-cubes-fitness")
 except _metadata.PackageNotFoundError:  # pragma: no cover - only when not installed
-    __version__ = "0.9.0"
+    __version__ = "0.10.0"
 
 __all__ = [
     "__version__",
@@ -182,10 +184,12 @@ __all__ = [
     "CheckContext",
     # gate orchestrator (the single runnable gate — `tc-fitness run`)
     "GateConfig",
+    "Stage",
     "StepSpec",
     "GateConfigError",
     "find_config_file",
     "parse_config",
+    "plan_stages",
     "load_config",
     "parse_core_check_configs",
     "load_core_check_configs",
