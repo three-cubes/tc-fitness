@@ -23,17 +23,18 @@ tc-fitness is the one check every repo uses instead of its own copy:
 
 ## How to add it to a repo
 
-1. **Install it.** Pin a specific version in your `pyproject.toml`:
+1. **Install it.** Pin the latest release tag (see [CHANGELOG.md](CHANGELOG.md))
+   in your `pyproject.toml`:
 
    ```toml
    [project.optional-dependencies]
    dev = [
-     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.8.1",
+     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.11.0",
    ]
    ```
 
    Always pin a tag, never `@main` — the version is the contract your checks
-   depend on.
+   depend on, so a repo only moves when you bump the tag.
 
 2. **List your checks.** Add a `[tool.tc_fitness]` block to your `pyproject.toml`
    (or a dedicated `.tc-fitness.toml`). Each entry is one step — a lint run, a
@@ -53,31 +54,60 @@ tc-fitness is the one check every repo uses instead of its own copy:
 
 4. **Point CI at it.** In your GitHub Actions, the CI job shrinks to: check out
    the code, set up `uv`, then run `uv run tc-fitness run`. The check you run
-   locally is the exact same one CI runs.
+   locally is the exact same one CI runs. Call the reusable job from
+   [tc-pipelines](https://github.com/three-cubes/tc-pipelines)
+   (`uses: …/python-quality-gate.yml@<tag>`), pin it to a tag, and SHA-pin every
+   third-party `uses:` — improve the pipeline in tc-pipelines, never fork it into
+   your repo.
 
 ## The daily loop
 
-1. Make your change on a branch.
-2. Run `uv run tc-fitness run` locally and get it green.
-3. Open a pull request.
+1. **Branch off `main`** named `<user>/<team>-<number>-<slug>` — the shape the
+   engine's own `branch_naming` gate enforces (this repo dogfoods
+   `tc_fitness.checks.branch_naming`).
+2. **Run the gate before every push:** `uv run tc-fitness run`, and get it green.
+   Local matches CI by construction — both run this same catalogue. Run your
+   repo's own pytest separately where the gate does not.
+3. **Commit as the `three-cubes-agent` App** and open the PR from that App
+   (short-lived installation token via WIF / Key Vault `kv-tc-agents`), never a
+   human account — a PR author cannot approve their own PR, so bot-authorship is
+   what lets a human maintainer review. Keep authorship clean of AI/LLM
+   attribution; `no_llm_attribution` and `canonical_commit_identity` enforce it.
+
+The full branch / commit / PR / merge procedure is canon in
+[tc-pipelines `governance/standards/development-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/development-workflow.md);
+this repo's contributor specifics live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## What to expect
 
-- **Green merges itself.** When your PR's checks pass, it merges on its own.
-  Routine work does not wait for a human reviewer.
+- **Green auto-merges — except here.** The platform default is auto-merge on a
+  green gate: the App arms `gh pr merge --auto` and GitHub merges the moment every
+  required check (the fan-in Quality gate + SonarCloud) passes, with no human
+  running the merge. Because it IS the gate engine,
+  [`.github/CODEOWNERS`](.github/CODEOWNERS) owns the control-plane paths — the
+  engine source (`src/tc_fitness/`), its config and pins (`pyproject.toml`,
+  `uv.lock`, `.python-version`), CI (`.github/`), and the licence — so a PR
+  touching any of those **holds for a maintainer review and does not auto-merge**;
+  a docs-, test-, or CHANGELOG-only PR auto-merges on green like any other. An
+  agent must never be able to weaken the gate that gates it.
 - **Red you fix.** A failing check is never bypassed. If it fails, you fix your
-  change — you do not force it in. If it is green on your laptop but red in CI,
-  that is a bug in the local setup; fix the setup, do not force the merge.
-- **Changes to the check itself need a human.** Changing the files that define
-  the quality check or CI is the one change that needs a human to approve first.
-  That stops anyone — person or agent — from quietly weakening the check that
-  protects every repo.
+  change — you do not force it in. Green on your laptop but red in CI is a bug in
+  the local setup; fix the setup, do not force the merge.
+- **Merge mechanics.** Merges are a merge commit (squash and rebase are disabled
+  at the repo level). `gh pr merge --admin` is an owner-only logged exception an
+  agent requests and never self-authorises; a ruleset with no bypass actors
+  blocks even an admin.
 
 ## Where to go next
 
 - The canonical standard index: **[tc-pipelines/governance/STANDARDS.md](https://github.com/three-cubes/tc-pipelines/blob/main/governance/STANDARDS.md)**
   — links to everything authoritative. Improve the canonical standard; do not
   fork your own copy.
+- The shared commit / PR / merge procedure: **[tc-pipelines `governance/standards/development-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/development-workflow.md)**
+  — every repo follows it; the `harness_canon_reference` gate requires this
+  reference to be present.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to author or improve a CORE check
+  in this repo and cut a release tag.
 - **[tc-pipelines](https://github.com/three-cubes/tc-pipelines)** — the shared CI
   and deploy steps every repo's GitHub Actions calls (`uses: …/python-quality-gate.yml@v1`).
   These steps *run* this check.
@@ -196,6 +226,31 @@ across runners and `coverage combine` the shard files into one report — the
 composes with `--only`, `--staged` and `--changed-files-from`). This is the
 fast-feedback entrypoint kairix's `safe-commit.sh --check` builds on, with
 `--changed-files-from` as the GitHub Actions companion.
+
+### CORE checks
+
+The `[[tool.tc_fitness.steps]]` list above orchestrates a repo's own commands and
+its `catalogue` of architecture rules. tc-fitness also **ships** a set of
+repo-agnostic CORE checks — the `core:<name>` namespace (coverage, duplication,
+determinism, commit-identity, and more; see [CHANGELOG.md](CHANGELOG.md) for the
+full set). Bind one with a `[tool.tc_fitness.core_checks.<name>]` block that
+scopes it plus a catalogue row that references it:
+
+```toml
+[tool.tc_fitness.core_checks.deterministic_tests]
+roots = ["tests"]
+```
+
+```python
+RuleEntry(id="deterministic-tests", check="core:deterministic_tests",
+          category="test-integrity", summary="Tests are stable across seeds and orders.")
+```
+
+A CORE check with **no config block is a vacuous pass** — the standard adoption
+contract, so repinning to a newer engine never breaks a build until the repo opts
+in. [`docs/STANDARDS.md`](docs/STANDARDS.md) is the worked example
+(`deterministic_tests`); every shipped check binds through the same
+`[tool.tc_fitness.core_checks.<name>]` table.
 
 ## Library modules
 
@@ -368,8 +423,9 @@ assumption doesn't hold. No additive gap was found here — `python_files`,
 ## How repositories consume it
 
 To add tc-fitness to a repo, follow [How to add it to a repo](#how-to-add-it-to-a-repo)
-above — pin the current tag (`@v0.8.1`) in your `pyproject.toml` and run
-`uv run tc-fitness run`. This section explains how the version pin works.
+above — pin the latest release tag (see [CHANGELOG.md](CHANGELOG.md)) in your
+`pyproject.toml` and run `uv run tc-fitness run`. This section explains how the
+version pin works.
 
 Pin to a tag (git install — no PyPI publish); never `@main`. The version is the
 contract your checks depend on, so a repo only moves when you bump the tag:
@@ -377,21 +433,20 @@ contract your checks depend on, so a repo only moves when you bump the tag:
 ```toml
 [project.optional-dependencies]
 dev = [
-  "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.8.1",
+  "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.11.0",
 ]
 ```
 
 or, equivalently, on the command line:
 
 ```bash
-pip install "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.8.1"
+pip install "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.11.0"
 ```
 
 Each release is an additive, backward-compatible superset of the one before, so a
 repo pinned to an older tag keeps working unchanged and bumps only when it needs
-the newer surface. For example, the first two consumers pinned different tags:
-kairix on `@v0.1.0` (the later additions are a no-op for it) and tc-agent-zone on
-`@v0.2.0` (for the `gate_keys` / `remediation` / run-marker / `min_len` surface).
+the newer surface — repin on your own schedule to adopt a newer CORE-check or
+runner surface.
 
 ## The runner (v0.3.0)
 
@@ -507,16 +562,38 @@ looser parse) won.**
 
 ## Development
 
+This repo IS the gate engine. Set up and run its own tests:
+
 ```bash
-pip install -e ".[dev]"
-python -m pytest tests/ -q
+uv sync --all-extras --all-groups
+uv run pytest tests/ -q
 ```
 
-The test suite is the proof the merge is behaviour-preserving: `tests/test_lib.py`
-pins the call patterns each repo's checks depend on, and `tests/test_ratchet.py`
-pins the three reconciled drift decisions (40-char threshold; em-dash AND hyphen;
-`NOSONAR` in the suppression set).
+The package is self-contained: pure stdlib at runtime, PyYAML an optional extra.
+It must never import from `kairix` or `tc-agent-zone` — it is the shared core both
+depend on. `tests/test_lib.py` pins the call patterns consumers' checks depend on;
+`tests/test_ratchet.py` pins the reconciled ratchet grammar (40-char threshold;
+em-dash and hyphen; `NOSONAR` in the suppression set).
 
-The package is self-contained: pure stdlib at runtime, with PyYAML as an optional
-extra. It must never import from `kairix` or `tc-agent-zone` — it is the shared
-core both depend on.
+### Author or improve a CORE check
+
+1. **Add the check** at `src/tc_fitness/core_checks/<name>.py` as a config-driven
+   `FitnessRule` subclass — bake in no repo identity; every knob (`roots`,
+   `extensions`, thresholds) arrives from the consumer's config. Register it in
+   the `CORE_CHECKS` registry so the catalogue exposes it.
+2. **Pair it with a test** at `tests/test_core_<name>.py` — the convention every
+   `core_checks/` module follows.
+3. **Release additively.** Keep every existing public signature byte-identical and
+   make the new surface opt-in with a safe default (a check with no config block
+   is a vacuous pass), then cut a new immutable tag `vX.Y.Z`. The rule and its
+   rationale are canon in [CHANGELOG.md](CHANGELOG.md); do not restate them.
+4. **Consumers bind it** by repinning `three-cubes-fitness` on their own schedule
+   and adding a `[tool.tc_fitness.core_checks.<name>]` block plus the catalogue
+   row (see [CORE checks](#core-checks) above).
+
+Gates live only in tc-fitness — converge up, never fork a parallel gate in a
+consumer repo. To improve the **pipeline** rather than a gate, change the
+tc-pipelines reusable (`python-quality-gate.yml`) or its composite action,
+SHA-pin any third-party `uses:` (Sonar S7637), tag it, and move consumers to the
+tag. The full contributor procedure — including the release-tag steps — is in
+[CONTRIBUTING.md](CONTRIBUTING.md).
