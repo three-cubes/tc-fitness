@@ -68,8 +68,9 @@ Exactly one of ``run`` / ``shell`` / ``catalogue`` is required per step.
 
 from __future__ import annotations
 
+import heapq
 import tomllib  # stdlib since 3.11; requires-python is >=3.12
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -151,6 +152,27 @@ class StepSpec:
     #: The engine hardcodes no splitter — the tokens are the consumer's
     #: declaration.
     shard_args: tuple[str, ...] = ()
+    #: The concurrency group this step belongs to. Steps sharing one non-``None``
+    #: ``stage`` value run CONCURRENTLY within that stage (subprocess ``run`` /
+    #: ``shell`` steps on a bounded worker pool; an in-process ``catalogue`` step
+    #: on the main thread, overlapping the pool). ``None`` (the default) makes the
+    #: step its OWN singleton stage, so a config with no ``stage`` / ``depends_on``
+    #: anywhere reduces to today's sequential registration-order run —
+    #: byte-identically. See :func:`plan_stages`.
+    stage: str | None = None
+    #: Stage names that must fully complete before this step's stage starts (a
+    #: barrier). Declared per-step but semantic at the stage level: a stage's
+    #: predecessor set is the UNION of its members' ``depends_on``. Empty (the
+    #: default) makes the stage implicitly depend on the stage immediately before
+    #: it in first-appearance order — the chain that preserves sequential
+    #: back-compat; a non-empty value OVERRIDES that implicit chain. An unknown
+    #: target or a dependency cycle is a :class:`GateConfigError` at load time.
+    depends_on: tuple[str, ...] = ()
+    #: Tier membership for the ``--tier <name>`` selector. A step runs under
+    #: ``--tier X`` iff ``X`` is in ``tags``. Empty (the default) = the step is in
+    #: no named tier (it runs only in an untiered ``tc-fitness run``). Orthogonal
+    #: to ``stage``: ``tags`` pick WHICH steps run; ``stage`` groups HOW they run.
+    tags: tuple[str, ...] = ()
 
     @property
     def kind(self) -> str:
@@ -169,8 +191,108 @@ class GateConfig:
     steps: tuple[StepSpec, ...]
     name: str = "tc-fitness gate"
     fail_fast: bool = False
+    #: Bound on the per-stage subprocess worker pool (concern-parallelism). Mirrors
+    #: ``runner._DEFAULT_MAX_WORKERS``. Only relevant when steps declare ``stage``.
+    max_workers: int = 8
     #: The file the config was read from (for the banner + error messages).
     source: Path | None = None
+
+
+@dataclass(frozen=True)
+class Stage:
+    """One concurrency group + its predecessor stages, in execution position."""
+
+    name: str
+    steps: tuple[StepSpec, ...]
+    depends_on: frozenset[str]
+
+
+def plan_stages(steps: Sequence[StepSpec], *, strict: bool = True) -> tuple[Stage, ...]:
+    """Group ``steps`` into stages in a deterministic topological execution order.
+
+    Grouping: steps sharing a non-``None`` ``stage`` form one stage; a
+    ``stage is None`` step is its own singleton stage keyed by position — so a
+    config with no stages yields one singleton stage per step in registration
+    order.
+
+    Dependencies: a stage's predecessor set is the UNION of its members'
+    ``depends_on``; when that union is empty the stage implicitly depends on the
+    stage immediately before it in first-appearance order (the sequential chain).
+
+    Order: Kahn's algorithm, ties broken by first-appearance index — so a
+    singleton-only config topo-sorts to EXACTLY registration order.
+
+    ``strict`` (config-load validation over the full step set): a ``depends_on``
+    naming an unknown stage, or a self-dependency, raises :class:`GateConfigError`.
+    Non-strict (run time, after ``--only`` / ``--tier`` filtering removed some
+    stages): an absent dependency is dropped. A dependency cycle ALWAYS raises.
+    """
+    # 1. Bucket into stages, preserving first-appearance order. A stage-less step
+    #    gets a unique positional key so it stays its own singleton stage.
+    keys: list[str] = []
+    members: dict[str, list[StepSpec]] = {}
+    explicit: dict[str, set[str]] = {}
+    named: set[str] = {s.stage for s in steps if s.stage is not None}
+    for pos, s in enumerate(steps):
+        key = s.stage if s.stage is not None else f"\x00{pos}"  # sentinel: unref-able name
+        if key not in members:
+            keys.append(key)
+            members[key] = []
+            explicit[key] = set()
+        members[key].append(s)
+        explicit[key].update(s.depends_on)
+
+    first_index = {key: i for i, key in enumerate(keys)}
+
+    # 2. Resolve each stage's predecessor set: explicit union, else the implicit
+    #    "previous stage in first-appearance order" chain (sequential back-compat).
+    deps: dict[str, set[str]] = {}
+    for i, key in enumerate(keys):
+        dep = set(explicit[key])
+        if dep:
+            for target in sorted(dep):
+                if target == key:
+                    raise GateConfigError(
+                        f"stage {key!r} depends on itself; "
+                        "fix: remove the self-reference from `depends_on`; next: re-run tc-fitness run"
+                    )
+                if target not in named:
+                    if strict:
+                        raise GateConfigError(
+                            f"stage {key!r} depends_on unknown stage {target!r}; "
+                            f"fix: reference a declared stage name (one of {sorted(named)}); "
+                            "next: re-run tc-fitness run"
+                        )
+                    dep.discard(target)  # filtered out by --only/--tier: drop the dangling edge
+        elif i > 0:
+            dep = {keys[i - 1]}
+        deps[key] = dep
+
+    # 3. Kahn topo-sort, ties broken by first-appearance index (singleton-only ⇒
+    #    registration order).
+    indeg = {key: len(deps[key]) for key in keys}
+    succ: dict[str, list[str]] = {key: [] for key in keys}
+    for key in keys:
+        for d in deps[key]:
+            succ[d].append(key)
+    ready = [first_index[key] for key in keys if indeg[key] == 0]
+    heapq.heapify(ready)
+    order: list[str] = []
+    while ready:
+        key = keys[heapq.heappop(ready)]
+        order.append(key)
+        for nxt in succ[key]:
+            indeg[nxt] -= 1
+            if indeg[nxt] == 0:
+                heapq.heappush(ready, first_index[nxt])
+    if len(order) != len(keys):
+        unresolved = sorted(set(keys) - set(order), key=lambda k: first_index[k])
+        cyc = [k for k in unresolved if not k.startswith("\x00")]
+        raise GateConfigError(
+            f"dependency cycle among stages {cyc}; "
+            "fix: break the `depends_on` cycle; next: re-run tc-fitness run"
+        )
+    return tuple(Stage(name=key, steps=tuple(members[key]), depends_on=frozenset(deps[key])) for key in order)
 
 
 def find_config_file(repo_root: Path) -> Path | None:
@@ -293,6 +415,18 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         if "shard_args" in raw
         else ()
     )
+    depends_on = (
+        _coerce_str_tuple(raw["depends_on"], field_name="depends_on", step_id=step_id)
+        if "depends_on" in raw
+        else ()
+    )
+    tags = _coerce_str_tuple(raw["tags"], field_name="tags", step_id=step_id) if "tags" in raw else ()
+    stage = raw.get("stage")
+    if stage is not None and (not isinstance(stage, str) or not stage):
+        raise GateConfigError(
+            f"step {step_id!r} `stage` must be a non-empty string; "
+            'fix: write `stage = "lint"`; next: re-run tc-fitness run'
+        )
 
     return StepSpec(
         id=step_id,
@@ -311,6 +445,9 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         parallel=bool(raw.get("parallel", False)),
         skip_when_staged=bool(raw.get("skip_when_staged", False)),
         shard_args=shard_args,
+        stage=stage,
+        depends_on=depends_on,
+        tags=tags,
     )
 
 
@@ -334,10 +471,12 @@ def parse_config(table: dict[str, Any], *, source: Path) -> GateConfig:
             f"duplicate step id(s) {dupes} in {source.name}; "
             "fix: give every step a unique `id`; next: re-run tc-fitness run"
         )
+    plan_stages(steps, strict=True)  # validate stage references + reject dependency cycles at load time
     return GateConfig(
         steps=steps,
         name=str(table.get("name", "tc-fitness gate")),
         fail_fast=bool(table.get("fail_fast", False)),
+        max_workers=int(table.get("max_workers", 8)),
         source=source,
     )
 
@@ -416,10 +555,12 @@ def load_core_check_configs(repo_root: Path) -> dict[str, Mapping[str, Any]]:
 __all__ = [
     "GateConfig",
     "GateConfigError",
+    "Stage",
     "StepSpec",
     "find_config_file",
     "load_config",
     "load_core_check_configs",
     "parse_config",
     "parse_core_check_configs",
+    "plan_stages",
 ]

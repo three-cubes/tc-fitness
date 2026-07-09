@@ -40,10 +40,14 @@ non-zero iff any gating step failed (a ``continue_on_error`` step never gates).
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import contextlib
+import io
 import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -51,9 +55,11 @@ from pathlib import Path
 from tc_fitness.gate_config import (
     GateConfig,
     GateConfigError,
+    Stage,
     StepSpec,
     load_config,
     load_core_check_configs,
+    plan_stages,
 )
 from tc_fitness.runner import Colours, main_cli, paths_from_file
 
@@ -115,12 +121,21 @@ def _program_on_path(argv0: str, env: dict[str, str]) -> bool:
     return shutil.which(argv0, path=env.get("PATH")) is not None
 
 
+def _fix_next_text(step: StepSpec) -> str:
+    """The step's agent-actionable remediation lines as text (for buffered replay)."""
+    lines = []
+    if step.fix:
+        lines.append(f"   fix: {step.fix}\n")
+    if step.next:
+        lines.append(f"   next: {step.next}\n")
+    return "".join(lines)
+
+
 def _print_fix_next(step: StepSpec) -> None:
     """Print the step's agent-actionable remediation under its FAIL, if declared."""
-    if step.fix:
-        print(f"   fix: {step.fix}")
-    if step.next:
-        print(f"   next: {step.next}")
+    text = _fix_next_text(step)
+    if text:
+        sys.stdout.write(text)
 
 
 def _parse_shard(spec: str) -> tuple[int, int]:
@@ -340,6 +355,7 @@ def run_gate(
     staged: bool = False,
     changed_files: list[str] | None = None,
     shard: tuple[int, int] | None = None,
+    tier: str | None = None,
 ) -> GateOutcome:
     """Run the configured steps in order; return the aggregate outcome.
 
@@ -379,7 +395,48 @@ def run_gate(
                 f"{_RED}unknown step id(s): {sorted(unknown)}{_RESET}; "
                 f"fix: pass an id from {[s.id for s in cfg.steps]}"
             )
+    if tier is not None:
+        # Tier selector: keep only steps tagged `tier` (silently, like --only).
+        selected = tuple(s for s in selected if tier in s.tags)
 
+    runner = _run_scheduled if _has_stages(selected) else _run_sequential
+    outcome = runner(
+        cfg,
+        repo_root,
+        selected,
+        gate_id=gate_id,
+        establish_baseline=establish_baseline,
+        staged=staged,
+        changed_files=changed_files,
+        shard=shard,
+        fast_mode=fast_mode,
+    )
+
+    _print_aggregate(cfg, outcome)
+    return outcome
+
+
+def _has_stages(steps: Sequence[StepSpec]) -> bool:
+    """True iff any step opts into the concern-parallel scheduler. A config with
+    no ``stage`` / ``depends_on`` takes the untouched sequential path — the
+    back-compat gate."""
+    return any(s.stage is not None or s.depends_on for s in steps)
+
+
+def _run_sequential(
+    cfg: GateConfig,
+    repo_root: Path,
+    selected: Sequence[StepSpec],
+    *,
+    gate_id: str | None,
+    establish_baseline: bool,
+    staged: bool,
+    changed_files: list[str] | None,
+    shard: tuple[int, int] | None,
+    fast_mode: bool,
+) -> GateOutcome:
+    """Today's path (v0.9.0): run ``selected`` sequentially, LIVE, in registration
+    order. Physically preserved so a config without stages is byte-identical."""
     outcome = GateOutcome()
     for step in selected:
         if fast_mode and step.skip_when_staged:
@@ -400,9 +457,194 @@ def run_gate(
         if cfg.fail_fast and result.is_gating_failure:
             print(f"{_YELLOW}fail_fast: stopping at first gating failure ({step.id}){_RESET}")
             break
-
-    _print_aggregate(cfg, outcome)
     return outcome
+
+
+@dataclass
+class _StepOutcome:
+    """A stage member's result plus its buffered output, for registration-order replay."""
+
+    result: StepResult
+    out: str = ""
+    err: str = ""
+    printed: bool = False  # True when already emitted live (singleton fast-path)
+
+
+def _run_scheduled(
+    cfg: GateConfig,
+    repo_root: Path,
+    selected: Sequence[StepSpec],
+    *,
+    gate_id: str | None,
+    establish_baseline: bool,
+    staged: bool,
+    changed_files: list[str] | None,
+    shard: tuple[int, int] | None,
+    fast_mode: bool,
+) -> GateOutcome:
+    """Concern-parallel path: group ``selected`` into stages (dependency order),
+    run each stage's members concurrently — subprocess legs on a bounded pool,
+    in-process catalogue on the main thread — then replay each stage's output in
+    registration order so the ledger stays byte-stable."""
+    stages: tuple[Stage, ...] = plan_stages(selected, strict=False)
+    outcome = GateOutcome()
+    for stage in stages:
+        runnable = [s for s in stage.steps if not (fast_mode and s.skip_when_staged)]
+        outcomes = _execute_stage(
+            runnable,
+            repo_root,
+            gate_id,
+            shard=shard,
+            establish_baseline=establish_baseline,
+            staged=staged,
+            changed_files=changed_files,
+            max_workers=cfg.max_workers,
+        )
+        stage_failed = False
+        for s in stage.steps:  # replay in registration order
+            if fast_mode and s.skip_when_staged:
+                label = s.summary or s.id
+                print(f"{_YELLOW}SKIP [{s.id}]{_RESET} {label} (skip_when_staged — not in the <60s smoke)")
+                outcome.results.append(StepResult(s.id, "skip"))
+                continue
+            oc = outcomes[s.id]
+            if not oc.printed:
+                if oc.out:
+                    sys.stdout.write(oc.out)
+                if oc.err:
+                    sys.stderr.write(oc.err)
+            outcome.results.append(oc.result)
+            stage_failed = stage_failed or oc.result.is_gating_failure
+        if cfg.fail_fast and stage_failed:
+            print(f"{_YELLOW}fail_fast: stopping after the failing stage ({stage.name}){_RESET}")
+            break
+    return outcome
+
+
+def _execute_stage(
+    runnable: Sequence[StepSpec],
+    repo_root: Path,
+    gate_id: str | None,
+    *,
+    shard: tuple[int, int] | None,
+    establish_baseline: bool,
+    staged: bool,
+    changed_files: list[str] | None,
+    max_workers: int,
+) -> dict[str, _StepOutcome]:
+    """Run one stage's members concurrently, returning each by id. Subprocess
+    (``run`` / ``shell``) steps go on a bounded ThreadPoolExecutor (captured via
+    pipes); in-process ``catalogue`` steps run on the MAIN thread (they mutate
+    ``sys.stdout`` / ``sys.path`` / the shared AST cache, so a worker thread would
+    corrupt them) while overlapping the pool in wall-clock. One-member stages take
+    a live fast-path — byte-identical to the sequential run."""
+    if len(runnable) <= 1:
+        out: dict[str, _StepOutcome] = {}
+        for s in runnable:
+            res = _run_step(
+                s,
+                repo_root,
+                gate_id,
+                establish_baseline=establish_baseline,
+                staged=staged,
+                changed_files=changed_files,
+                shard=shard,
+            )
+            out[s.id] = _StepOutcome(result=res, printed=True)
+        return out
+
+    subprocess_steps = [s for s in runnable if s.kind in ("run", "shell")]
+    catalogue_steps = [s for s in runnable if s.kind == "catalogue"]
+    outcomes: dict[str, _StepOutcome] = {}
+    workers = min(max_workers, max(1, len(subprocess_steps)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_capture_command_step, s, repo_root, shard=shard): s.id for s in subprocess_steps
+        }
+        # Main thread: capture the in-process catalogue step(s) while the pool
+        # drains the subprocess legs — genuine wall-clock overlap.
+        for s in catalogue_steps:
+            outcomes[s.id] = _capture_catalogue_step(
+                s,
+                repo_root,
+                gate_id,
+                establish_baseline=establish_baseline,
+                staged=staged,
+                changed_files=changed_files,
+            )
+        for fut in concurrent.futures.as_completed(futures):
+            outcomes[futures[fut]] = fut.result()
+    return outcomes
+
+
+def _capture_command_step(step: StepSpec, repo_root: Path, *, shard: tuple[int, int] | None) -> _StepOutcome:
+    """Buffered mirror of :func:`_run_command_step` — identical logic, but framing
+    goes to a StringIO and the child is captured (``capture_output=True``) so a
+    worker thread never writes to the process-global stdout the main thread may be
+    redirecting for a concurrent catalogue step."""
+    env = _step_env(step)
+    cwd = (repo_root / step.cwd).resolve()
+    label = step.summary or step.id
+    out = io.StringIO()
+    out.write(f"{_YELLOW}run [{step.id}]{_RESET} {label}\n")
+
+    if step.kind == "run":
+        argv = list(step.run or ())
+        if shard is not None:
+            _apply_shard(argv, env, step, shard)
+        if not _program_on_path(argv[0], env):
+            if step.allow_missing:
+                out.write(f"{_YELLOW}SKIP [{step.id}]{_RESET} {argv[0]} not on PATH (allow_missing)\n")
+                return _StepOutcome(StepResult(step.id, "skip"), out=out.getvalue())
+            out.write(f"{_RED}FAIL [{step.id}]{_RESET} {argv[0]} not on PATH\n")
+            out.write(f"   fix: install {argv[0]} (or set allow_missing = true for this step)\n")
+            out.write(_fix_next_text(step))
+            return _StepOutcome(
+                StepResult(step.id, "fail", gating=not step.continue_on_error), out=out.getvalue()
+            )
+        proc = subprocess.run(  # noqa: S603 - argv is config, not user input
+            argv, cwd=cwd, env=env, check=False, capture_output=True, text=True
+        )
+    else:  # shell
+        proc = subprocess.run(  # noqa: S602 - shell command is repo-owned config
+            step.shell or "", cwd=cwd, env=env, shell=True, check=False, capture_output=True, text=True
+        )
+
+    out.write(proc.stdout or "")
+    if proc.returncode == 0:
+        out.write(f"{_GREEN}PASS [{step.id}]{_RESET} {label}\n")
+        return _StepOutcome(StepResult(step.id, "pass"), out=out.getvalue(), err=proc.stderr or "")
+    out.write(f"{_RED}FAIL [{step.id}]{_RESET} {label} (exit {proc.returncode})\n")
+    out.write(_fix_next_text(step))
+    return _StepOutcome(
+        StepResult(step.id, "fail", gating=not step.continue_on_error),
+        out=out.getvalue(),
+        err=proc.stderr or "",
+    )
+
+
+def _capture_catalogue_step(
+    step: StepSpec,
+    repo_root: Path,
+    gate_id: str | None,
+    *,
+    establish_baseline: bool,
+    staged: bool,
+    changed_files: list[str] | None,
+) -> _StepOutcome:
+    """Run the in-process catalogue step under a main-thread stdout/stderr redirect
+    so its ledger is buffered for registration-order replay."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        res = _run_catalogue_step(
+            step,
+            repo_root,
+            gate_id,
+            establish_baseline=establish_baseline,
+            staged=staged,
+            changed_files=changed_files,
+        )
+    return _StepOutcome(res, out=out.getvalue(), err=err.getvalue())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -460,6 +702,12 @@ def main(argv: list[str] | None = None) -> int:
         "shards. Steps without shard_args are untouched.",
     )
     run_p.add_argument(
+        "--tier",
+        metavar="NAME",
+        help="run only steps whose `tags` include NAME (e.g. smoke/full/nightly); "
+        "composes with --only, --staged and --changed-files-from",
+    )
+    run_p.add_argument(
         "--establish-baseline",
         action="store_true",
         help="run the catalogue step's core: entries in baseline-adoption mode "
@@ -498,6 +746,7 @@ def main(argv: list[str] | None = None) -> int:
         staged=bool(args.staged),
         changed_files=changed_files,
         shard=shard,
+        tier=args.tier,
     )
     return outcome.exit_code
 

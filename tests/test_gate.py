@@ -514,3 +514,98 @@ def test_main_only_flag_threads_through(repo: Path) -> None:
     )
     # --only a skips the failing b → exit 0.
     assert main(["run", "--repo-root", str(repo), "--only", "a"]) == 0
+
+
+# --------------------------------------------------------------------------- #
+# concern-parallelism: stage / depends_on / tags / --tier (v0.10.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_same_stage_members_run_concurrently(repo: Path) -> None:
+    # Two shells in one stage rendezvous: each touches its marker then polls for
+    # the sibling's. They pass ONLY if run concurrently (sequential execution
+    # would block on a marker the not-yet-started sibling never creates → exit 1).
+    wait = "for _ in $(seq 1 50); do [ -f {o} ] && exit 0; sleep 0.1; done; exit 1"
+    _write_config(
+        repo,
+        f'[[steps]]\nid = "a"\nstage = "p"\nshell = "touch a.m; {wait.format(o="b.m")}"\n'
+        f'[[steps]]\nid = "b"\nstage = "p"\nshell = "touch b.m; {wait.format(o="a.m")}"\n',
+    )
+    assert run_gate(load_config(repo), repo).ok
+
+
+def test_depends_on_is_a_barrier(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "one"\nstage = "s1"\nshell = "echo one >> order.txt"\n'
+        '[[steps]]\nid = "two"\nstage = "s2"\ndepends_on = ["s1"]\nshell = "echo two >> order.txt"\n',
+    )
+    assert run_gate(load_config(repo), repo).ok
+    assert (repo / "order.txt").read_text() == "one\ntwo\n"  # barrier held
+    out = _plain(capsys.readouterr().out)
+    assert out.index("run [one]") < out.index("run [two]")
+
+
+def test_failing_stage_member_gates_and_siblings_still_run(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "good"\nstage = "p"\nrun = ["true"]\n'
+        '[[steps]]\nid = "bad"\nstage = "p"\nrun = ["false"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert not outcome.ok
+    assert "bad" in outcome.gating_failures
+    assert "PASS [good]" in out  # the concurrent sibling ran despite the failure
+
+
+def test_all_singleton_stages_match_sequential_output(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    seq = '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["true"]\n[[steps]]\nid = "c"\nrun = ["true"]\n'
+    _write_config(repo, seq)
+    run_gate(load_config(repo), repo)
+    sequential = _plain(capsys.readouterr().out)
+    staged = (
+        '[[steps]]\nid = "a"\nstage = "sa"\nrun = ["true"]\n'
+        '[[steps]]\nid = "b"\nstage = "sb"\nrun = ["true"]\n'
+        '[[steps]]\nid = "c"\nstage = "sc"\nrun = ["true"]\n'
+    )
+    _write_config(repo, staged)
+    run_gate(load_config(repo), repo)
+    scheduled = _plain(capsys.readouterr().out)
+    # Distinct singleton stages reproduce the live sequential path byte-for-byte.
+    assert scheduled == sequential
+
+
+def test_tier_selects_tagged_steps(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "s"\ntags = ["smoke"]\nrun = ["true"]\n'
+        '[[steps]]\nid = "f"\ntags = ["full"]\nrun = ["false"]\n'
+        '[[steps]]\nid = "plain"\nrun = ["false"]\n',
+    )
+    # --tier smoke runs only the smoke-tagged step; the failing full/plain steps
+    # are filtered out → exit 0.
+    assert main(["run", "--repo-root", str(repo), "--tier", "smoke"]) == 0
+    out = _plain(capsys.readouterr().out)
+    assert "run [s]" in out
+    assert "run [f]" not in out
+    assert "run [plain]" not in out
+
+
+def test_catalogue_step_runs_concurrently_with_subprocess_step(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\nstage = "p"\n'
+        'catalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\nchecks_dir = "scripts/checks"\n'
+        '[[steps]]\nid = "lint"\nstage = "p"\nrun = ["true"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert "PASS [lint]" in out  # subprocess leg (pool)
+    assert "run [fitness]" in out  # in-process catalogue leg (main thread) replayed cleanly

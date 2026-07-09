@@ -156,9 +156,30 @@ Per-step options: `summary`, `cwd`, `env`, `allow_missing` (skip when the progra
 isn't on PATH instead of failing), `continue_on_error` (record a FAIL but don't
 fail the aggregate — informational steps), `shard_args` (argv appended to a `run`
 step under `--shard i/N`, with `{index}`/`{total}` substituted — e.g.
-`["--splits", "{total}", "--group", "{index}"]` for pytest-split), and `fix:` /
+`["--splits", "{total}", "--group", "{index}"]` for pytest-split), `stage` (steps
+sharing a stage run **concurrently**), `depends_on` (stage names that must finish
+first — a barrier), `tags` (membership for the `--tier` selector), and `fix:` /
 `next:` lines printed under the step's FAIL. The full schema lives in
 [`src/tc_fitness/gate_config.py`](src/tc_fitness/gate_config.py).
+
+**Concurrency (v0.10.0).** Give steps a `stage` and they run at the same time —
+subprocess `run`/`shell` legs on a bounded worker pool (`max_workers`, default 8),
+an in-process `catalogue` step on the main thread, overlapping in wall-clock —
+while their output is buffered and replayed in registration order so the ledger
+stays byte-stable. `depends_on` makes one stage wait for another:
+
+```toml
+# lint ‖ type ‖ security run concurrently; the test stage waits for `checks`.
+[[tool.tc_fitness.steps]]
+id = "ruff"    ; stage = "checks" ; run = ["ruff", "check", "."]
+[[tool.tc_fitness.steps]]
+id = "mypy"    ; stage = "checks" ; run = ["mypy", "src"]
+[[tool.tc_fitness.steps]]
+id = "pytest"  ; stage = "test" ; depends_on = ["checks"] ; run = ["pytest"] ; tags = ["full"]
+```
+
+A config with no `stage`/`depends_on` runs the untouched sequential path,
+byte-identical to earlier versions.
 
 `tc-fitness run` flags: `--repo-root` (default CWD), `--only ID` (run a subset of
 steps, repeatable), `--gate ID` (target one architecture rule inside a catalogue
@@ -170,7 +191,9 @@ newline-delimited PR-diff file instead of the git index), and `--shard I/N` (run
 shard *i* of *N*: append each opted-in step's substituted `shard_args` and set
 `COVERAGE_FILE=.coverage.<i>`, so a CI workflow can matrix `--shard 1/N … N/N`
 across runners and `coverage combine` the shard files into one report — the
-`skip_when_staged` full `pytest` leg is the intended target). This is the
+`skip_when_staged` full `pytest` leg is the intended target), and `--tier NAME`
+(run only steps whose `tags` include NAME — e.g. `smoke`/`full`/`nightly` — which
+composes with `--only`, `--staged` and `--changed-files-from`). This is the
 fast-feedback entrypoint kairix's `safe-commit.sh --check` builds on, with
 `--changed-files-from` as the GitHub Actions companion.
 

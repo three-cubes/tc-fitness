@@ -195,6 +195,36 @@ def test_optional_step_fields_default(tmp_path: Path) -> None:
     assert step.next == ""
     assert step.skip_when_staged is False
     assert step.shard_args == ()
+    assert step.stage is None
+    assert step.depends_on == ()
+    assert step.tags == ()
+
+
+def test_stage_depends_on_tags_parse(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid = 'l'\nstage = 'lint'\ntags = ['smoke', 'full']\nrun = ['ruff']\n"
+        "[[steps]]\nid = 't'\nstage = 'test'\ndepends_on = ['lint']\nrun = ['pytest']\n",
+        tmp_path,
+    )
+    assert cfg.steps[0].stage == "lint"
+    assert cfg.steps[0].tags == ("smoke", "full")
+    assert cfg.steps[1].depends_on == ("lint",)
+
+
+def test_depends_on_cycle_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table(
+            "[[steps]]\nid = 'a'\nstage = 'A'\ndepends_on = ['B']\nrun = ['x']\n"
+            "[[steps]]\nid = 'b'\nstage = 'B'\ndepends_on = ['A']\nrun = ['x']\n",
+            tmp_path,
+        )
+    assert "cycle" in str(exc.value)
+
+
+def test_depends_on_unknown_stage_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'a'\nstage = 'A'\ndepends_on = ['Z']\nrun = ['x']\n", tmp_path)
+    assert "unknown stage" in str(exc.value)
 
 
 def test_skip_when_staged_parses(tmp_path: Path) -> None:
