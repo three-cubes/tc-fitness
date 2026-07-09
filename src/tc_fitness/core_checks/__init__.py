@@ -160,6 +160,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:empty_body_intent",
     "core:engine_version_floor",
     "core:every_test_has_tier_marker",
+    "core:harness_canon_reference",
     "core:integrity_state_predicate",
     "core:license_present",
     "core:mutation_survival_ratchet",
