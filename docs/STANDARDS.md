@@ -13,10 +13,8 @@
 
 **Status:** the dynamic half — `core:deterministic_tests` — ships here (SGO-200).
 Its static companion `core:no_test_reruns` (the config-level retry ban) is
-delivered by the PLA-312 loop governor; the two are designed to agree.
-**Origin:** SGO-199 (a ~50%-incidence flake sat undetected in a consumer's coverage
-gate) → converged into the engine by SGO-200. Tied to the loop determinism
-guardrail (PLA-312 loop governor).
+delivered by the PLA-312 loop governor; the two are designed to agree. This entry
+is tied to the loop determinism guardrail (PLA-312 loop governor).
 
 ### The standard
 
