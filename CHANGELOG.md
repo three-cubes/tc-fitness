@@ -15,6 +15,21 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+### Added
+
+- **`core:harness_canon_reference` CORE check** — enforces that a repo's agent
+  harness references ONE central engineering-standards canon rather than a
+  private fork. FAILS on any of three arms: **presence** (required harness
+  entrypoints missing at the repo root — the full set for `repo_type: product`,
+  only `AGENTS.md` for `repo_type: core`, or an explicit any-of `required_files`
+  list), **reference** (no harness file carries both the `banner_marker` and a
+  link matching `standards_ref_pattern`), and **drift** (opt-in via `banner_path`
+  — the inlined canonical banner must match the pinned copy under a normalised
+  compare). Like `deterministic-tests` it is a hard repo-level gate, not a
+  grandfatherable per-file debt. Config lives under
+  `[tool.tc_fitness.core_checks.harness_canon_reference]`; the engine bakes in no
+  repo identity.
+
 ## [0.10.0] - 2026-07-09
 
 ### Added

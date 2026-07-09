@@ -152,7 +152,7 @@ ruff format --check \
     ci_silencers_have_rationale cognitive_complexity coverage_floor \
     coverage_includes_branches deterministic_tests empty_body_intent \
     engine_version_floor \
-    every_test_has_tier_marker \
+    every_test_has_tier_marker harness_canon_reference \
     license_present mutation_survival_ratchet new_code_coverage \
     no_commented_out_code \
     no_env_monkeypatch no_hardcoded_repo_paths no_internal_monkeypatch \
