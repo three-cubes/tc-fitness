@@ -44,6 +44,7 @@ boilerplate around them. Checks needing custom enumeration override
 
 from __future__ import annotations
 
+import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from pathlib import Path
@@ -51,6 +52,11 @@ from typing import Any, ClassVar
 
 from tc_fitness.baseline import establish_baseline, load_baseline
 from tc_fitness.lib import REPO_ROOT, gate
+
+#: Wall-clock ceiling for the ``git ls-files`` enumeration subprocess. A tracked
+#: listing on any real tree returns in well under a second; the bound only guards
+#: against a wedged git process, after which enumeration falls back to a walk.
+_GIT_LS_FILES_TIMEOUT_S = 30
 
 
 class FitnessRule(ABC):
@@ -162,10 +168,55 @@ class FitnessRule(ABC):
         return ext_ok and any(rel.startswith(prefix) for prefix in self._roots)
 
     def enumerate_files(self) -> list[Path]:
-        """Default enumeration: rglob each configured root, skip ``__pycache__``.
+        """Default enumeration: the git-tracked, in-scope files under the repo root.
 
-        Returns absolute paths. Override for custom enumeration (git-tracked
-        listing, Gherkin parsing, single-file scans).
+        Enumerates from ``git ls-files`` — exactly the set a fresh checkout
+        materialises — so untracked and ``.gitignore``-d build/vendor residue
+        (pnpm ``node_modules/.ignored`` trash, vendored test fixtures) is never
+        scanned. This keeps a local run's verdict identical to CI's, which only
+        ever sees tracked files. Returns absolute paths, filtered by
+        :meth:`is_in_scope`.
+
+        Fallback: when the repo root is not a git working tree (e.g. an unpacked
+        source tarball) or ``git`` is unavailable, :meth:`_walk_working_tree`
+        rglob-walks the configured roots, skipping ``__pycache__`` and any
+        ``node_modules`` segment so vendor residue cannot trip a non-git scan
+        either.
+
+        Override for custom enumeration (Gherkin parsing, single-file scans).
+        """
+        tracked = self._git_tracked_files()
+        if tracked is not None:
+            return [self._repo_root / rel for rel in tracked if self.is_in_scope(rel)]
+        return self._walk_working_tree()
+
+    def _git_tracked_files(self) -> list[str] | None:
+        """Repo-relative paths of every git-tracked file, or ``None`` off-git.
+
+        Runs ``git -C <repo_root> ls-files -z`` and returns the NUL-split,
+        repo-relative tracked paths. Returns ``None`` — the signal to fall back
+        to a working-tree walk — when the repo root is not a git working tree
+        (``git`` exits non-zero) or ``git`` is unavailable / wedged. argv0 is the
+        fixed literal ``git`` and ``shell`` is never used; the only variable is
+        the repo-root path.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self._repo_root), "ls-files", "-z"],
+                check=True,
+                capture_output=True,
+                timeout=_GIT_LS_FILES_TIMEOUT_S,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+        return [rel.decode("utf-8", "surrogateescape") for rel in result.stdout.split(b"\x00") if rel]
+
+    def _walk_working_tree(self) -> list[Path]:
+        """Off-git fallback: rglob each configured root, skipping vendor residue.
+
+        Skips ``__pycache__`` and any ``node_modules`` segment so untracked
+        vendor residue cannot trip a scan that has no git tree to filter by.
+        Returns absolute paths.
         """
         out: list[Path] = []
         for root in self._roots:
@@ -175,7 +226,7 @@ class FitnessRule(ABC):
             for path in root_path.rglob("*"):
                 if not path.is_file():
                     continue
-                if "__pycache__" in path.parts:
+                if "__pycache__" in path.parts or "node_modules" in path.parts:
                     continue
                 if path.name.endswith(self._extensions):
                     out.append(path)

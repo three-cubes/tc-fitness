@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from tc_fitness.core_checks.no_llm_attribution import NoLlmAttribution
 from tc_fitness.fitness_rule import FitnessRule
+
+#: An attribution signature `scan_text` flags — the kind of residue vendored test
+#: fixtures and pnpm trash dirs legitimately carry (the issue-25 repro).
+_ATTRIBUTION = "Co-Authored-By: Claude <noreply@anthropic.com>\n"
 
 
 class _BadWord(FitnessRule):
@@ -24,6 +30,16 @@ def _seed(tmp_path: Path, rel: str, body: str) -> None:
     p = tmp_path / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
+
+
+def _git_init_and_add(repo: Path, *tracked: str) -> None:
+    """Init a git repo at ``repo`` and stage ``tracked`` so ``git ls-files`` sees them.
+
+    Staging (``git add``) is enough — ``git ls-files`` reads the index, so no
+    commit (and thus no user identity) is required.
+    """
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", *tracked], cwd=repo, check=True, capture_output=True)
 
 
 def test_abstract_cannot_instantiate() -> None:
@@ -106,3 +122,35 @@ def test_symlinked_repo_root_still_scopes(tmp_path: Path) -> None:
     rule = _BadWord(repo_root=link, roots=("src",))
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
     assert rule.run() == 1  # the net-new offender is detected through the symlink
+
+
+def test_untracked_vendor_residue_is_not_scanned(tmp_path: Path) -> None:
+    # The issue-25 parity fix: a fresh CI checkout sees only tracked files, so a
+    # local run must too. A gitignored pnpm/vendor trash file carrying an
+    # attribution signature must NOT be enumerated — only `git ls-files` does.
+    _seed(tmp_path, "src/clean.py", "x = 1\n")
+    _seed(tmp_path, ".gitignore", "node_modules/\n")
+    _seed(tmp_path, "node_modules/.ignored/x.py", _ATTRIBUTION)
+    _git_init_and_add(tmp_path, "src/clean.py", ".gitignore")  # residue left unstaged
+    rule = NoLlmAttribution(repo_root=tmp_path)
+    violations = {str(p) for p in rule.collect_violations()}
+    assert violations == set()  # the untracked residue is invisible to the scan
+
+
+def test_tracked_file_with_violation_is_still_flagged(tmp_path: Path) -> None:
+    # The fix narrows enumeration to tracked files without weakening detection: a
+    # tracked file that genuinely carries residue is still flagged.
+    _seed(tmp_path, "src/bad.py", _ATTRIBUTION)
+    _git_init_and_add(tmp_path, "src/bad.py")
+    rule = NoLlmAttribution(repo_root=tmp_path)
+    assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
+
+
+def test_non_git_fallback_skips_node_modules(tmp_path: Path) -> None:
+    # An unpacked source tarball (no git tree) falls back to a working-tree walk;
+    # that walk must still exclude `node_modules` so untracked vendor residue
+    # cannot trip a non-git scan either. tmp_path is not a git repo → fallback.
+    _seed(tmp_path, "src/real.py", "BADWORD\n")
+    _seed(tmp_path, "src/node_modules/dep.py", "BADWORD\n")
+    rule = _BadWord(repo_root=tmp_path, roots=("src",))
+    assert {str(p) for p in rule.collect_violations()} == {"src/real.py"}
