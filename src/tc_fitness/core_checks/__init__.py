@@ -151,6 +151,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:actionable_feedback",
     "core:adr_number_unique",
     "core:canonical_commit_identity",
+    "core:ci_consumes_shared_gate",
     "core:ci_fanin_parity",
     "core:ci_silencers_have_rationale",
     "core:cognitive_complexity",

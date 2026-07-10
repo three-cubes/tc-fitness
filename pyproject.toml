@@ -148,7 +148,7 @@ ruff format --check \
   tests/test_core_security_freshness_design_law.py \
   src/tc_fitness/checks/branch_naming.py \
   $(printf 'tests/test_core_%s.py ' \
-    actionable_feedback adr_number_unique ci_fanin_parity \
+    actionable_feedback adr_number_unique ci_consumes_shared_gate ci_fanin_parity \
     ci_silencers_have_rationale cognitive_complexity coverage_floor \
     coverage_includes_branches deterministic_tests empty_body_intent \
     engine_version_floor \
