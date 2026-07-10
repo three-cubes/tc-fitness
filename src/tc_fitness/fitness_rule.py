@@ -170,12 +170,21 @@ class FitnessRule(ABC):
     def enumerate_files(self) -> list[Path]:
         """Default enumeration: the git-tracked, in-scope files under the repo root.
 
-        Enumerates from ``git ls-files`` — exactly the set a fresh checkout
-        materialises — so untracked and ``.gitignore``-d build/vendor residue
-        (pnpm ``node_modules/.ignored`` trash, vendored test fixtures) is never
-        scanned. This keeps a local run's verdict identical to CI's, which only
-        ever sees tracked files. Returns absolute paths, filtered by
-        :meth:`is_in_scope`.
+        Empty ``roots`` enumerate NOTHING by default: with no configured scan
+        root the default enumeration yields ``[]``, so a check run against the
+        class-default config (``_roots == ()``) scans no files. A check that
+        means to scan by extension alone must configure a root (e.g. ``roots``
+        with an empty-prefix entry, which :meth:`is_in_scope` matches on every
+        path) or override :meth:`enumerate_files`. The ``is_in_scope``
+        "empty roots match on extension alone" rule is the scope PREDICATE, not
+        the default enumeration.
+
+        With a configured root, enumerates from ``git ls-files`` — exactly the
+        set a fresh checkout materialises — so untracked and ``.gitignore``-d
+        build/vendor residue (pnpm ``node_modules/.ignored`` trash, vendored test
+        fixtures) is never scanned. This keeps a local run's verdict identical to
+        CI's, which only ever sees tracked files. Returns absolute paths, filtered
+        by :meth:`is_in_scope`.
 
         Fallback: when the repo root is not a git working tree (e.g. an unpacked
         source tarball) or ``git`` is unavailable, :meth:`_walk_working_tree`
@@ -185,6 +194,8 @@ class FitnessRule(ABC):
 
         Override for custom enumeration (Gherkin parsing, single-file scans).
         """
+        if not self._roots:
+            return []
         tracked = self._git_tracked_files()
         if tracked is not None:
             return [self._repo_root / rel for rel in tracked if self.is_in_scope(rel)]
