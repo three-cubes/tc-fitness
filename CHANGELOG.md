@@ -15,6 +15,25 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+### Added
+
+- **`core:ci_consumes_shared_gate` CORE check** — enforces that a repo's CI
+  consumes the ONE shared quality gate rather than a hand-rolled fork. PASSES a
+  repo whose `.github/workflows/*.yml` do at least one of: **(a)** `uses:` the
+  canonical reusable
+  `three-cubes/tc-pipelines/.github/workflows/python-quality-gate.yml@<ref>`, or
+  **(b)** run the shared engine `tc-fitness run` in a job. FAILS a repo that HAS
+  CI workflows but does NEITHER — it forked its quality gate off the shared
+  standard. SKIPS (vacuous pass) a repo with no CI workflows. Like
+  `harness_canon_reference` it is a hard repo-level gate, not a grandfatherable
+  per-file debt. Config lives under
+  `[tool.tc_fitness.core_checks.ci_consumes_shared_gate]`: `workflows_dir`
+  (default `.github/workflows`), `reusable_pattern` / `engine_pattern` (the two
+  detection regexes), and a `warn_only` flag (alias `baseline_ok`) that adopts
+  the check in WARN mode — reports the fork but exits `0` — for a repo
+  mid-onboarding, before flipping to hard-enforce. Config-bound and
+  repo-agnostic (SGO-269).
+
 ## [0.11.1] - 2026-07-10
 
 ### Fixed
