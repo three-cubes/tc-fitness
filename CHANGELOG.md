@@ -15,6 +15,17 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-07-10
+
+### Fixed
+
+- **Package version string** — the distribution now declares `0.11.1`, matching
+  its release tag. The `v0.11.0` tag shipped `core:harness_canon_reference` but
+  declared version `0.10.0`; consumers pin the git ref so resolution was
+  unaffected, and the reported package version now tracks the tag.
+
+## [0.11.0] - 2026-07-09
+
 ### Added
 
 - **`core:harness_canon_reference` CORE check** — enforces that a repo's agent
