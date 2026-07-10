@@ -7,7 +7,8 @@ name: "auto-merge on green"
 # that touches a policy/config path (see .github/CODEOWNERS). Work PRs merge
 # unattended on green; control-plane PRs wait for a human. No human account, no
 # self-approve. Keyed off the fan-in CHECK-RUN (not the umbrella run), so a red
-# informational job (e.g. SonarCloud) never blocks auto-merge.
+# non-required informational job never blocks arming. The repo's hard required
+# checks still gate the actual merge — a red required check is never bypassed.
 #
 # Prerequisites (org-admin, one-time):
 #   - repo/org vars AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID for
