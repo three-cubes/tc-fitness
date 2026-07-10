@@ -15,6 +15,26 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-10
+
+### Changed
+
+- **Default file enumeration scans git-tracked files only** — `FitnessRule.enumerate_files`
+  now enumerates candidates from `git ls-files` (the exact set a fresh checkout
+  materialises) instead of walking the working tree, filtered by `is_in_scope`.
+  Untracked and `.gitignore`-d build/vendor residue — pnpm `node_modules/.ignored`
+  trash dirs, vendored test fixtures that legitimately carry attribution/robot-emoji
+  signatures — is therefore never scanned, so a local run's verdict is identical to
+  CI's (which only ever sees tracked files). This closes a local≠CI parity break the
+  engine exists to end. The blast radius is intentional and additive: **every** default
+  file-scan CORE check (`no_llm_attribution`, `no_duplicate_string`, `cognitive_complexity`,
+  `no_commented_out_code`, `posix_path_serialisation`, …) now scans tracked-only. When the
+  repo root is not a git working tree (an unpacked source tarball) or `git` is unavailable,
+  enumeration falls back to the working-tree walk — now also skipping any `node_modules`
+  segment so vendor residue cannot trip a non-git scan either. Checks that override
+  `enumerate_files` (`new_code_coverage`, `coverage_floor`, …) are unaffected. The public
+  contract is preserved: `enumerate_files` still returns a `list[Path]` of absolute paths (#25).
+
 ## [0.12.0] - 2026-07-10
 
 ### Added
