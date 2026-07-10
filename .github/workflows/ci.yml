@@ -5,8 +5,8 @@ name: CI
 # run invokes (reading the SAME [tool.tc_fitness] block in pyproject.toml), so
 # the gate has one definition and local == CI by construction. The gate's STEPS
 # (ruff / format / mypy / pytest / branch-naming) are config in pyproject, never
-# hand-copied YAML here. The py3.12/3.13 matrix stays caller-side so the gate is
-# exercised under both supported interpreters.
+# hand-copied YAML here. The gate runs on Python 3.12 — the `requires-python >= 3.12`
+# floor and the interpreter the python-quality-gate reusable defaults to.
 
 on:
   push:
@@ -24,9 +24,6 @@ jobs:
   check:
     name: Quality gate
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -36,7 +33,7 @@ jobs:
       - name: Locked uv install (org composite)
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           sync-args: "--all-extras"
 
       # The single runnable gate. Reads [tool.tc_fitness] and runs ruff / format
