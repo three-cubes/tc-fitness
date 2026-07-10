@@ -385,7 +385,7 @@ wheels = [
 
 [[package]]
 name = "three-cubes-fitness"
-version = "0.10.0"
+version = "0.11.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
