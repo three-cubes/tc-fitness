@@ -26,9 +26,9 @@ def test_version_matches_installed_metadata() -> None:
     assert tc_fitness.__version__ == metadata_version
 
 
-def test_version_is_v0_11_1() -> None:
-    # v0.11.1 corrects the declared package version: v0.11.0 shipped
-    # `core:harness_canon_reference` but left the version string at 0.10.0. The
-    # literal tracks the pyproject version so the CHANGELOG entry stays honest and
-    # a tag bump can't drift the two apart.
-    assert tc_fitness.__version__ == "0.11.1"
+def test_version_is_v0_12_0() -> None:
+    # v0.12.0 adds the `core:ci_consumes_shared_gate` CORE check (SGO-269), a new
+    # opt-in surface additive over v0.11.1. The literal tracks the pyproject
+    # version so the CHANGELOG entry stays honest and a tag bump can't drift the
+    # two apart.
+    assert tc_fitness.__version__ == "0.12.0"

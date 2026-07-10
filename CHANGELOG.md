@@ -15,6 +15,8 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-10
+
 ### Added
 
 - **`core:ci_consumes_shared_gate` CORE check** — enforces that a repo's CI
