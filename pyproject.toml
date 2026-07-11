@@ -96,6 +96,12 @@ ignore = ["E501", "RUF022"]
 # caller-controlled token (the base ref) is validated against a safe-ref charset
 # before use — the same trusted-argv0 posture as new_code_coverage (S603/S607).
 "src/tc_fitness/core_checks/contract_change_has_test.py" = ["S603", "S607"]
+# checkov_iac_security runs the trusted `checkov` binary (resolved to an absolute
+# path via shutil.which) over the consumer's config-declared scan dir, as a fixed
+# argv list with no shell — the same trusted-binary posture the gate itself uses;
+# the binary is absent-tolerant (soft-skip), so this is not attacker-controlled
+# input (S404 the import, S603 the call).
+"src/tc_fitness/core_checks/checkov_iac_security.py" = ["S404", "S603"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -157,7 +163,8 @@ ruff format --check \
   tests/test_core_security_freshness_design_law.py \
   src/tc_fitness/checks/branch_naming.py \
   $(printf 'tests/test_core_%s.py ' \
-    actionable_feedback adr_number_unique ci_consumes_shared_gate ci_fanin_parity \
+    actionable_feedback adr_number_unique bicep_arm_lint checkov_iac_security \
+    ci_consumes_shared_gate ci_fanin_parity \
     ci_silencers_have_rationale cognitive_complexity contract_change_has_test coverage_floor \
     coverage_includes_branches deterministic_tests empty_body_intent \
     engine_version_floor \

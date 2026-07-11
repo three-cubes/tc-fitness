@@ -15,6 +15,35 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+### Added
+
+- **`bicep_arm_lint` CORE check** — Bicep static analysis for the SonarSource
+  `azureresourcemanager:*` rules the Bicep CLI's built-in linter does not cover:
+  empty object/array literals as property values (S6954) and property order
+  within a resource block (S6975/S6956). A stdlib-only, AST-free line walker with
+  zero external tooling — the detectors (`bicep_findings` + the empty-literal /
+  property-order passes) are pure and assert-on-able. A per-file `FitnessRule`
+  keyed on the `.bicep` extension, gating NET-NEW offending files vs
+  `.architecture/baseline/<name>-files.txt`. Config: `roots` (where the `.bicep`
+  tree lives) via `[tool.tc_fitness.core_checks.bicep_arm_lint]`. Purely additive —
+  a consumer inherits it only by adding the `core:bicep_arm_lint` catalogue row +
+  config block (SGO-297).
+- **`checkov_iac_security` CORE check** — an IaC-security gate that wraps Checkov
+  over a consumer's Infrastructure-as-Code directory and FAILs on NET-NEW
+  misconfigurations vs a shrink-only baseline. A Checkov finding's identity is
+  `<check_id>|<file_path>|<resource>` — a line-independent KEY, and one file can
+  carry several findings — so this is a bespoke **key-baselined** gate (the shape
+  `branch_naming` takes when the per-file `FitnessRule` model does not apply),
+  reading/writing `.architecture/baseline/<name>-findings.txt` via the canonical
+  `parse_baseline_text` contract. Checkov is CONSUMER-provided: the check
+  soft-skips (exit 0) when the `checkov` binary is absent, so **the engine adds no
+  runtime dependency** — it stays pure-stdlib, and a consumer pins Checkov into
+  its own tool environment. The Checkov invocation is a dependency-injected
+  `runner` seam, so the contract test drives the diff/baseline logic with canned
+  Checkov JSON (no binary, no network, no internal patching). Config: `scan_dir`,
+  `framework`, `name`, `timeout` via `[tool.tc_fitness.core_checks.checkov_iac_security]`.
+  Purely additive (SGO-297).
+
 ## [0.14.0] - 2026-07-11
 
 ### Added
