@@ -26,11 +26,11 @@ def test_version_matches_installed_metadata() -> None:
     assert tc_fitness.__version__ == metadata_version
 
 
-def test_version_is_v0_13_1() -> None:
-    # v0.13.1 restores the pre-v0.13.0 empty-roots contract: with no configured
-    # scan root the default enumeration yields nothing, so a check dispatched
-    # against the class-default config scans no files (v0.13.0's git-tracked
-    # enumeration regressed this to scan the whole tracked tree by extension). The
-    # literal tracks the pyproject version so the CHANGELOG entry stays honest and
-    # a tag bump can't drift the two apart.
-    assert tc_fitness.__version__ == "0.13.1"
+def test_version_is_v0_14_0() -> None:
+    # v0.14.0 adds the contract_change_has_test CORE check: a change touching a
+    # contract-surface file must also touch a test file, mirroring — and closing
+    # the door on a repeat of — the v0.13.0 empty-roots regression, which shipped
+    # a shared-base change with no test asserting the new contract. The literal
+    # tracks the pyproject version so the CHANGELOG entry stays honest and a tag
+    # bump can't drift the two apart.
+    assert tc_fitness.__version__ == "0.14.0"
