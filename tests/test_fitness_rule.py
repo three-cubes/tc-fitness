@@ -170,3 +170,19 @@ def test_non_git_fallback_skips_node_modules(tmp_path: Path) -> None:
     _seed(tmp_path, "src/node_modules/dep.py", "BADWORD\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
     assert {str(p) for p in rule.collect_violations()} == {"src/real.py"}
+
+
+def test_run_core_check_with_no_config_scans_nothing(tmp_path: Path) -> None:
+    # Consumer contract at the engine↔consumer boundary: a CORE check dispatched
+    # with NO config (`run_core_check` with `config=None` → the rule's empty-roots
+    # class defaults) — the path a consumer's subprocess dispatch takes — must
+    # scan NOTHING, not the whole repo. This is the exact boundary the v0.13.0
+    # empty-roots regression escaped through: a tracked file carrying attribution
+    # residue must NOT be flagged when the check runs with defaults (rc 0). Under
+    # the regression this scanned the whole tree, found the residue, and returned
+    # rc 1 — so this test goes red on v0.13.0 and green on the restored contract.
+    from tc_fitness.core_checks import run_core_check
+
+    _seed(tmp_path, "app/mod.py", _ATTRIBUTION)
+    _git_init_and_add(tmp_path, "app/mod.py")
+    assert run_core_check(NoLlmAttribution, ["--repo-root", str(tmp_path)]) == 0
