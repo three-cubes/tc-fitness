@@ -155,6 +155,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:ci_fanin_parity",
     "core:ci_silencers_have_rationale",
     "core:cognitive_complexity",
+    "core:contract_change_has_test",
     "core:coverage_floor",
     "core:coverage_includes_branches",
     "core:deterministic_tests",

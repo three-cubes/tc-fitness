@@ -15,6 +15,25 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-11
+
+### Added
+
+- **`contract_change_has_test` CORE check** — a change that touches a
+  *contract-surface* file (the shared base every consumer inherits, default
+  `src/tc_fitness/fitness_rule.py`) but touches NO test file (default globs
+  `tests/**`) now FAILs. This is the exact class that let the v0.13.0 empty-roots
+  regression ship: the shared base changed, no test asserted the new enumeration
+  contract, and the break reached `main` and every consumer. The check sources the
+  changed-file set the same way `new_code_coverage` does — a `git merge-base` +
+  `git diff --name-only` DI seam, so an unsafe/unresolvable base ref or a failed
+  git invocation soft-passes. Config: `contract_surface` (globs), `test_globs`
+  (globs), `base_ref`. Like `new_code_coverage` it is a HARD gate: the change set
+  is recomputed against the merge-base on every branch, so a missing test is a
+  fresh defect, non-grandfatherable — `--establish-baseline` freezes the empty set.
+  Purely additive: a consumer inherits it only by adding the `core:contract_change_has_test`
+  catalogue row + config block (SGO-274).
+
 ## [0.13.1] - 2026-07-10
 
 ### Fixed

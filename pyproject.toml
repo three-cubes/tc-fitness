@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "three-cubes-fitness"
-version = "0.13.1"
+version = "0.14.0"
 description = "Shared architecture-fitness primitives + the single runnable quality gate for Three Cubes repos (kairix, tc-agent-zone): the `tc-fitness run` gate orchestrator (one binary CI and local both invoke), baseline-gating helpers, agent-actionable emit/YAML helpers, the unified ratchet grammar, the catalogue-driven repo-agnostic check runner, and the declarative seam-absorption factories + branch-naming gate."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -91,6 +91,11 @@ ignore = ["E501", "RUF022"]
 # base ref) is validated against a safe-ref charset before use — the same
 # trusted-argv0 posture as canonical_commit_identity/branch_naming (S603/S607).
 "src/tc_fitness/core_checks/new_code_coverage.py" = ["S603", "S607"]
+# contract_change_has_test resolves the changed-FILE set by invoking `git
+# merge-base` / `git diff --name-only` by name with a fixed argv0; the only
+# caller-controlled token (the base ref) is validated against a safe-ref charset
+# before use — the same trusted-argv0 posture as new_code_coverage (S603/S607).
+"src/tc_fitness/core_checks/contract_change_has_test.py" = ["S603", "S607"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -153,7 +158,7 @@ ruff format --check \
   src/tc_fitness/checks/branch_naming.py \
   $(printf 'tests/test_core_%s.py ' \
     actionable_feedback adr_number_unique ci_consumes_shared_gate ci_fanin_parity \
-    ci_silencers_have_rationale cognitive_complexity coverage_floor \
+    ci_silencers_have_rationale cognitive_complexity contract_change_has_test coverage_floor \
     coverage_includes_branches deterministic_tests empty_body_intent \
     engine_version_floor \
     every_test_has_tier_marker harness_canon_reference \
