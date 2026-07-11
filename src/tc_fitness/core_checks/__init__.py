@@ -150,7 +150,9 @@ def run_core_check(
 CORE_CHECKS: tuple[str, ...] = (
     "core:actionable_feedback",
     "core:adr_number_unique",
+    "core:bicep_arm_lint",
     "core:canonical_commit_identity",
+    "core:checkov_iac_security",
     "core:ci_consumes_shared_gate",
     "core:ci_fanin_parity",
     "core:ci_silencers_have_rationale",
