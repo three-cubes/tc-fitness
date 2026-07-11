@@ -124,25 +124,41 @@ def test_symlinked_repo_root_still_scopes(tmp_path: Path) -> None:
     assert rule.run() == 1  # the net-new offender is detected through the symlink
 
 
+def test_empty_roots_enumerate_nothing(tmp_path: Path) -> None:
+    # The empty-roots guard: with NO configured root, the default enumeration
+    # yields nothing even when the git repo has tracked in-scope files. Scanning
+    # by extension alone requires an explicit root (``roots=("",)``) or an
+    # ``enumerate_files`` override — an unconfigured check scans no files, so a
+    # check dispatched against the class-default config never scans the whole repo.
+    _seed(tmp_path, "src/tracked.py", "x = 'BADWORD'\n")
+    _git_init_and_add(tmp_path, "src/tracked.py")
+    rule = _BadWord(repo_root=tmp_path)  # class-default empty roots
+    assert rule.enumerate_files() == []
+    assert rule.collect_violations() == set()  # nothing enumerated → nothing flagged
+
+
 def test_untracked_vendor_residue_is_not_scanned(tmp_path: Path) -> None:
     # The issue-25 parity fix: a fresh CI checkout sees only tracked files, so a
     # local run must too. A gitignored pnpm/vendor trash file carrying an
     # attribution signature must NOT be enumerated — only `git ls-files` does.
+    # ``roots=("",)`` is the explicit scan-all root (every path starts with the
+    # empty prefix), so the whole tracked tree is enumerated by extension.
     _seed(tmp_path, "src/clean.py", "x = 1\n")
     _seed(tmp_path, ".gitignore", "node_modules/\n")
     _seed(tmp_path, "node_modules/.ignored/x.py", _ATTRIBUTION)
     _git_init_and_add(tmp_path, "src/clean.py", ".gitignore")  # residue left unstaged
-    rule = NoLlmAttribution(repo_root=tmp_path)
+    rule = NoLlmAttribution(repo_root=tmp_path, roots=("",))
     violations = {str(p) for p in rule.collect_violations()}
     assert violations == set()  # the untracked residue is invisible to the scan
 
 
 def test_tracked_file_with_violation_is_still_flagged(tmp_path: Path) -> None:
     # The fix narrows enumeration to tracked files without weakening detection: a
-    # tracked file that genuinely carries residue is still flagged.
+    # tracked file that genuinely carries residue is still flagged. ``roots=("",)``
+    # is the explicit scan-all root (the whole tracked tree, by extension).
     _seed(tmp_path, "src/bad.py", _ATTRIBUTION)
     _git_init_and_add(tmp_path, "src/bad.py")
-    rule = NoLlmAttribution(repo_root=tmp_path)
+    rule = NoLlmAttribution(repo_root=tmp_path, roots=("",))
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
 
 

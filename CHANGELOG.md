@@ -15,6 +15,25 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-10
+
+### Fixed
+
+- **Empty roots enumerate nothing by default** — `FitnessRule.enumerate_files`
+  now returns `[]` when no scan root is configured (`_roots == ()`), restoring the
+  pre-v0.13.0 contract that the default enumeration over empty roots yields nothing.
+  v0.13.0's switch to `git ls-files` enumeration filtered the tracked set by
+  `is_in_scope`, which matches on extension alone when `roots` is empty — so a check
+  dispatched against the class-default config (`run_core_check` with no config →
+  `_roots == ()`) scanned the whole tracked tree instead of nothing. That regressed
+  consumers dispatching a default-config check as a probe: it went from clean (nothing
+  scanned) to flagging every pre-existing offender in the repo. The `is_in_scope`
+  "empty roots match on extension alone" rule describes the scope PREDICATE, not the
+  default enumeration: a check that means to scan by extension alone must configure a
+  root (`roots=("",)`, whose empty prefix matches every path) or override
+  `enumerate_files`. The real gate — which passes explicit `roots` — is unaffected;
+  this only restores the empty-roots default path (SGO-271).
+
 ## [0.13.0] - 2026-07-10
 
 ### Changed
