@@ -110,6 +110,18 @@ def test_parse_line_coverage_joins_source_and_reads_hits(tmp_path: Path) -> None
     assert parse_line_coverage(p) == {"src/a.py": {10: 1, 11: 0}, "src/b.py": {1: 3}}
 
 
+def test_parse_line_coverage_dot_source_stays_repo_relative(tmp_path: Path) -> None:
+    """A ``<source>.</source>`` root (normalised repo-root coverage — the shape a
+    multi-``--cov``-root report is collapsed to for Sonar) keeps the class
+    filenames repo-relative. Prepending ``.`` would yield ``./scripts/x.py`` keys
+    that never match the repo-relative changed-line paths, so the hard floor would
+    silently soft-PASS on every changed file — the exact regression this guards.
+    """
+    report = _report({"scripts/lib/x.py": {10: 1, 11: 0}}, source=".")
+    p = _seed(tmp_path, "coverage.xml", report)
+    assert parse_line_coverage(p) == {"scripts/lib/x.py": {10: 1, 11: 0}}
+
+
 def test_parse_line_coverage_missing_report_empty(tmp_path: Path) -> None:
     assert parse_line_coverage(tmp_path / "nope.xml") == {}
 
