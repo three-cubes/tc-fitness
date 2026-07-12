@@ -41,3 +41,44 @@ jobs:
       # the env is already synced from the LOCKED lockfile above.
       - name: Self gate (tc-fitness run)
         run: uv run --no-sync --no-build tc-fitness run
+
+  # no-attribution — the dedicated required context (Autonomous Delivery
+  # decision D1): reject AI/LLM self-attribution residue in the PR's commits +
+  # title/body. The engine dogfoods its OWN detector — it runs the in-repo
+  # `tc_fitness.core_checks.no_llm_attribution` module against the locked
+  # checkout via `uv run`, NOT a `git+` pin, so the CI leg is single-sourced
+  # with the shipped commit-msg hook and can never drift.
+  no-attribution:
+    name: no-attribution
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # pinned (org standard)
+      - name: Reject AI/LLM self-attribution in commits + PR title/body
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # tc-fitness IS the engine (self): provision the package into the venv,
+          # then run its own module — never a git+ pin (single-sourced detector).
+          uv sync --all-extras
+          module="tc_fitness.core_checks.no_llm_attribution"
+          workdir="$(mktemp -d)"; trap 'rm -rf "$workdir"' EXIT; rc=0
+          scan() { if ! uv run --no-sync python -m "$module" --scan-file "$2"; then echo "::error::no-attribution: residue in $1." >&2; rc=1; fi; }
+          scan_advisory() { if ! uv run --no-sync python -m "$module" --scan-file "$2"; then echo "::warning::no-attribution: possible residue in $1 (advisory)." >&2; fi; }
+          shas="$(git rev-list "${PR_BASE_SHA}..${PR_HEAD_SHA}")"
+          while IFS= read -r sha; do [[ -z "$sha" ]] && continue; git log -1 --format=%B "$sha" > "$workdir/c-$sha.txt"; scan "commit $sha" "$workdir/c-$sha.txt"; done <<< "$shas"
+          printf '%s' "$PR_TITLE" > "$workdir/t.txt"; scan "PR title" "$workdir/t.txt"
+          printf '%s' "$PR_BODY" > "$workdir/b.txt"; scan_advisory "PR body" "$workdir/b.txt"
+          exit "$rc"
