@@ -64,6 +64,14 @@ DEFAULT_EXEMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^gh-pages$"),
     re.compile(r"^renovate/"),  # Renovate
     re.compile(r"^dependabot/"),  # Dependabot
+    # Conventional Branch operational prefixes (conventionalbranch.org): denote
+    # operational work that need not map to a Linear item, matching the org
+    # branch-naming ruleset. Linear feature branches still use the
+    # <user>/<team>-<number>-<slug> shape below.
+    re.compile(
+        r"^(feat|feature|fix|bugfix|hotfix|release|docs|chore|ci|build"
+        r"|refactor|test|perf|style|revert|experiment|deps)/"
+    ),
 )
 
 
