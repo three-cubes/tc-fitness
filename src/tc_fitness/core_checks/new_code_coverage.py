@@ -127,6 +127,15 @@ def parse_line_coverage(report_path: Path, *, element_tree: Any | None = None) -
 
     source_roots = [s.text.strip().strip("/") for s in root.iter("source") if s.text and s.text.strip()]
     source_prefix = source_roots[0] if source_roots else ""
+    # A "." source root means the class filenames are ALREADY repo-relative — the
+    # shape pytest-cov emits when coverage is normalised to a single repo-root
+    # source (e.g. a multi-`--cov`-root report collapsed to `<source>.</source>`
+    # so Sonar's Cobertura sensor resolves it). Treating "." as a prefix would
+    # yield `./<path>` keys that never match the repo-relative changed-line paths,
+    # so every changed file reads as "no measurable new code" and the hard floor
+    # silently soft-PASSES. Normalise it to an empty prefix.
+    if source_prefix == ".":
+        source_prefix = ""
 
     out: dict[str, dict[int, int]] = {}
     for cls in root.iter("class"):
