@@ -30,7 +30,7 @@ def test_linear_shape_passes() -> None:
 
 
 def test_non_linear_shape_fails() -> None:
-    rc = check_branch("feature/random-thing")  # no team-number segment
+    rc = check_branch("broken-branch-name")  # not <user>/<team>-<number>, not exempt
     assert rc == 1
 
 
@@ -55,10 +55,10 @@ def test_exempt_patterns_default_cover_automation() -> None:
 
 
 def test_custom_exempt_patterns_extend() -> None:
-    extra = (*DEFAULT_EXEMPT_PATTERNS, re.compile(r"^release/"))
-    assert check_branch("release/2026.6", exempt_patterns=extra) == 0
-    # Without the extra pattern it fails.
-    assert check_branch("release/2026.6") == 1
+    extra = (*DEFAULT_EXEMPT_PATTERNS, re.compile(r"^qa/"))
+    assert check_branch("qa/smoke", exempt_patterns=extra) == 0
+    # Without the extra pattern it fails (qa/ is not a default-exempt prefix).
+    assert check_branch("qa/smoke") == 1
 
 
 def test_custom_pattern_overrides_shape() -> None:
@@ -128,8 +128,8 @@ def test_pr_event_resolves_head_ref_over_detached_head(tmp_path: Path) -> None:
 def test_pr_event_bad_branch_name_now_FAILS() -> None:
     # The regression the bug masked: a non-conforming PR branch name must FAIL,
     # not silently pass as the exempt "HEAD" did before the fix.
-    branch = current_branch(env={GITHUB_HEAD_REF_ENV: "feature/random-thing"})
-    assert branch == "feature/random-thing"
+    branch = current_branch(env={GITHUB_HEAD_REF_ENV: "broken-branch-name"})
+    assert branch == "broken-branch-name"
     assert check_branch(branch) == 1
 
 
@@ -168,7 +168,7 @@ def test_push_event_uses_git_branch(tmp_path: Path) -> None:
     run("config", "user.email", "t@example.com")
     run("config", "user.name", "t")
     run("commit", "--allow-empty", "-q", "-m", "c0")
-    run("checkout", "-q", "-b", "feature/not-linear")
+    run("checkout", "-q", "-b", "broken-branch-name")
     branch = current_branch(tmp_path, env={})
-    assert branch == "feature/not-linear"
+    assert branch == "broken-branch-name"
     assert check_branch(branch) == 1  # the gate bites on push too
