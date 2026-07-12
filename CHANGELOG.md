@@ -15,6 +15,15 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+### Changed
+
+- **`branch_naming` exempts Conventional Branch operational prefixes by default.**
+  `feat|feature|fix|bugfix|hotfix|release|docs|chore|ci|build|refactor|test|perf|style|revert|experiment|deps`
+  branches now pass without a Linear `<user>/<team>-<number>-<slug>` segment,
+  matching the org branch-naming ruleset: operational work need not map to a
+  Linear item, while feature branches still carry the Linear shape. Additive —
+  no previously-passing branch now fails.
+
 ## [0.14.1] - 2026-07-12
 
 ### Fixed
