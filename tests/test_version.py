@@ -26,11 +26,11 @@ def test_version_matches_installed_metadata() -> None:
     assert tc_fitness.__version__ == metadata_version
 
 
-def test_version_is_v0_14_0() -> None:
-    # v0.14.0 adds the contract_change_has_test CORE check: a change touching a
-    # contract-surface file must also touch a test file, mirroring — and closing
-    # the door on a repeat of — the v0.13.0 empty-roots regression, which shipped
-    # a shared-base change with no test asserting the new contract. The literal
-    # tracks the pyproject version so the CHANGELOG entry stays honest and a tag
-    # bump can't drift the two apart.
-    assert tc_fitness.__version__ == "0.14.0"
+def test_version_is_v0_14_1() -> None:
+    # v0.14.1 fixes new_code_coverage soft-passing on a normalised `<source>.</source>`
+    # coverage report: the check prepended the `.` source to every filename, so the
+    # repo-relative changed-line paths never matched and the changed-line floor was a
+    # no-op wherever coverage is normalised to the repo root. The literal tracks the
+    # pyproject version so the CHANGELOG entry stays honest and a tag bump can't drift
+    # the two apart.
+    assert tc_fitness.__version__ == "0.14.1"
