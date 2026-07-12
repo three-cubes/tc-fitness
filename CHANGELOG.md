@@ -15,6 +15,22 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-07-12
+
+### Fixed
+
+- **`new_code_coverage` no longer soft-passes on `.`-source coverage.**
+  `parse_line_coverage` prepended the first `<source>` to every class filename,
+  so a normalised `<source>.</source>` report (the repo-root shape a
+  multi-`--cov`-root `coverage.xml` is collapsed to for Sonar's Cobertura
+  sensor) produced `./scripts/x.py` keys that never matched the repo-relative
+  changed-line paths from `git diff`. Every changed file then read as "no
+  measurable new code" and the hard floor silently PASSED — a no-op wherever
+  coverage is normalised to the repo root. A `.` source prefix is now treated as
+  empty so filenames stay repo-relative.
+
+## [0.14.0]
+
 ### Added
 
 - **`bicep_arm_lint` CORE check** — Bicep static analysis for the SonarSource
