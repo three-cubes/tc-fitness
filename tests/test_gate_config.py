@@ -235,6 +235,44 @@ def test_skip_when_staged_parses(tmp_path: Path) -> None:
     assert cfg.steps[0].skip_when_staged is True
 
 
+@pytest.mark.parametrize(
+    ("step_body", "kind"),
+    [
+        ("catalogue = 'mod:RULES'", "catalogue"),
+        ("shell = 'pytest'", "shell"),
+    ],
+)
+def test_shard_args_on_a_step_that_cannot_split_is_rejected(
+    tmp_path: Path, step_body: str, kind: str
+) -> None:
+    """Only a `run` step is split, so declaring shard_args elsewhere must fail.
+
+    gate.py applies the shard arguments inside its `kind == "run"` branch, so a
+    shell or catalogue step accepts the key and ignores it. If the loader
+    allowed that, a repo could declare it, have its pipeline fan the step across
+    N runners, pay N times the compute and gain nothing — while every runner did
+    the whole job and the gate still reported green.
+    """
+    with pytest.raises(GateConfigError) as excinfo:
+        parse_config_table(
+            f"[[steps]]\nid = 'x'\n{step_body}\nshard_args = ['--splits', '{{total}}']\n",
+            tmp_path,
+        )
+    message = str(excinfo.value)
+    assert "shard_args" in message
+    assert kind in message
+    # The message has to name the wrong outcome, not just refuse: the failure it
+    # prevents is silent, so a reader who has not hit it needs telling why the
+    # key looks harmless.
+    assert "fix:" in message and "next:" in message
+
+
+@pytest.mark.parametrize("step_body", ["catalogue = 'mod:RULES'", "shell = 'pytest'"])
+def test_a_step_that_cannot_split_still_parses_without_shard_args(tmp_path: Path, step_body: str) -> None:
+    cfg = parse_config_table(f"[[steps]]\nid = 'x'\n{step_body}\n", tmp_path)
+    assert cfg.steps[0].shard_args == ()
+
+
 def test_shard_args_parses_to_tuple(tmp_path: Path) -> None:
     cfg = parse_config_table(
         "[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = ['--splits', '{total}', '--group', '{index}']\n",
