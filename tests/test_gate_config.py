@@ -235,33 +235,41 @@ def test_skip_when_staged_parses(tmp_path: Path) -> None:
     assert cfg.steps[0].skip_when_staged is True
 
 
-def test_shard_args_on_a_catalogue_step_is_rejected(tmp_path: Path) -> None:
-    """A catalogue step cannot be split, so declaring shard_args must fail loudly.
+@pytest.mark.parametrize(
+    ("step_body", "kind"),
+    [
+        ("catalogue = 'mod:RULES'", "catalogue"),
+        ("shell = 'pytest'", "shell"),
+    ],
+)
+def test_shard_args_on_a_step_that_cannot_split_is_rejected(
+    tmp_path: Path, step_body: str, kind: str
+) -> None:
+    """Only a `run` step is split, so declaring shard_args elsewhere must fail.
 
-    `--shard` is threaded to command steps only; a catalogue step ignores it. If
-    the loader accepted the key, a repo could declare it, fan the step across N
-    runners, pay N times the compute and gain nothing — while every runner ran
-    the whole catalogue and the gate still reported green.
+    gate.py applies the shard arguments inside its `kind == "run"` branch, so a
+    shell or catalogue step accepts the key and ignores it. If the loader
+    allowed that, a repo could declare it, have its pipeline fan the step across
+    N runners, pay N times the compute and gain nothing — while every runner did
+    the whole job and the gate still reported green.
     """
     with pytest.raises(GateConfigError) as excinfo:
         parse_config_table(
-            "[[steps]]\nid = 'cat'\ncatalogue = 'mod:RULES'\n"
-            "shard_args = ['--splits', '{total}']\n",
+            f"[[steps]]\nid = 'x'\n{step_body}\nshard_args = ['--splits', '{{total}}']\n",
             tmp_path,
         )
     message = str(excinfo.value)
-    assert "cat" in message
     assert "shard_args" in message
-    # The message has to say what the wrong outcome is, not just that it is
-    # disallowed: the failure it prevents is silent, so a reader who has not hit
-    # it needs telling why the key looks harmless.
+    assert kind in message
+    # The message has to name the wrong outcome, not just refuse: the failure it
+    # prevents is silent, so a reader who has not hit it needs telling why the
+    # key looks harmless.
     assert "fix:" in message and "next:" in message
 
 
-def test_catalogue_step_without_shard_args_still_parses(tmp_path: Path) -> None:
-    cfg = parse_config_table(
-        "[[steps]]\nid = 'cat'\ncatalogue = 'mod:RULES'\n", tmp_path
-    )
+@pytest.mark.parametrize("step_body", ["catalogue = 'mod:RULES'", "shell = 'pytest'"])
+def test_a_step_that_cannot_split_still_parses_without_shard_args(tmp_path: Path, step_body: str) -> None:
+    cfg = parse_config_table(f"[[steps]]\nid = 'x'\n{step_body}\n", tmp_path)
     assert cfg.steps[0].shard_args == ()
 
 

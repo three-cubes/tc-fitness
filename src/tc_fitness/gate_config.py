@@ -415,17 +415,20 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         if "shard_args" in raw
         else ()
     )
-    if shard_args and catalogue is not None:
-        # `--shard` reaches command steps only; a catalogue step ignores it. Left
-        # accepted, a repo can declare `shard_args`, fan the step across N
-        # runners, pay N times the compute, gain nothing, and still report green
-        # because every runner ran the whole catalogue.
+    if shard_args and run is None:
+        # Only a `run` step is split: gate.py applies the shard arguments inside
+        # its `kind == "run"` branch, so a `shell` or `catalogue` step accepts
+        # the key and ignores it. Left accepted, a repo can declare `shard_args`,
+        # have its pipeline fan the step across N runners, pay N times the
+        # compute, gain nothing because every runner did the whole job, and
+        # still see the gate report green.
+        kind = "catalogue" if catalogue is not None else "shell"
         raise GateConfigError(
-            f"step {step_id!r} declares `shard_args` on a catalogue step, which "
-            "the engine cannot split: each shard would run the ENTIRE catalogue, "
-            "costing N times the compute for no speedup while still passing. "
-            "fix: remove `shard_args` from this step, or convert it to a `run` "
-            "step whose command accepts the shard arguments; "
+            f"step {step_id!r} declares `shard_args` on a {kind} step, which the "
+            "engine cannot split: every shard would run the ENTIRE step, costing "
+            "N times the compute for no speedup while still passing. "
+            "fix: remove `shard_args`, or express the step as `run = [...]` so "
+            "the shard arguments reach the command; "
             "next: re-run tc-fitness run"
         )
     depends_on = (
