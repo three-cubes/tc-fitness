@@ -235,6 +235,36 @@ def test_skip_when_staged_parses(tmp_path: Path) -> None:
     assert cfg.steps[0].skip_when_staged is True
 
 
+def test_shard_args_on_a_catalogue_step_is_rejected(tmp_path: Path) -> None:
+    """A catalogue step cannot be split, so declaring shard_args must fail loudly.
+
+    `--shard` is threaded to command steps only; a catalogue step ignores it. If
+    the loader accepted the key, a repo could declare it, fan the step across N
+    runners, pay N times the compute and gain nothing — while every runner ran
+    the whole catalogue and the gate still reported green.
+    """
+    with pytest.raises(GateConfigError) as excinfo:
+        parse_config_table(
+            "[[steps]]\nid = 'cat'\ncatalogue = 'mod:RULES'\n"
+            "shard_args = ['--splits', '{total}']\n",
+            tmp_path,
+        )
+    message = str(excinfo.value)
+    assert "cat" in message
+    assert "shard_args" in message
+    # The message has to say what the wrong outcome is, not just that it is
+    # disallowed: the failure it prevents is silent, so a reader who has not hit
+    # it needs telling why the key looks harmless.
+    assert "fix:" in message and "next:" in message
+
+
+def test_catalogue_step_without_shard_args_still_parses(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid = 'cat'\ncatalogue = 'mod:RULES'\n", tmp_path
+    )
+    assert cfg.steps[0].shard_args == ()
+
+
 def test_shard_args_parses_to_tuple(tmp_path: Path) -> None:
     cfg = parse_config_table(
         "[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = ['--splits', '{total}', '--group', '{index}']\n",

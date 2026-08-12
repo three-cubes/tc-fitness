@@ -415,6 +415,19 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         if "shard_args" in raw
         else ()
     )
+    if shard_args and catalogue is not None:
+        # `--shard` reaches command steps only; a catalogue step ignores it. Left
+        # accepted, a repo can declare `shard_args`, fan the step across N
+        # runners, pay N times the compute, gain nothing, and still report green
+        # because every runner ran the whole catalogue.
+        raise GateConfigError(
+            f"step {step_id!r} declares `shard_args` on a catalogue step, which "
+            "the engine cannot split: each shard would run the ENTIRE catalogue, "
+            "costing N times the compute for no speedup while still passing. "
+            "fix: remove `shard_args` from this step, or convert it to a `run` "
+            "step whose command accepts the shard arguments; "
+            "next: re-run tc-fitness run"
+        )
     depends_on = (
         _coerce_str_tuple(raw["depends_on"], field_name="depends_on", step_id=step_id)
         if "depends_on" in raw
