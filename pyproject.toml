@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "three-cubes-fitness"
-version = "0.14.1"
+version = "0.14.2"
 description = "Shared architecture-fitness primitives + the single runnable quality gate for Three Cubes repos (kairix, tc-agent-zone): the `tc-fitness run` gate orchestrator (one binary CI and local both invoke), baseline-gating helpers, agent-actionable emit/YAML helpers, the unified ratchet grammar, the catalogue-driven repo-agnostic check runner, and the declarative seam-absorption factories + branch-naming gate."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -178,7 +178,8 @@ ruff format --check \
     no_test_imports_in_prod no_test_only_kwargs path_naming \
     posix_path_serialisation readme_resolver_coverage schema_conformance \
     script_help_smoke shellcheck_disable_with_reason sonar_ignore_rationale \
-    suppressions_have_rationale test_skip_rationale unused_params_named)
+    suppressions_have_rationale test_skip_rationale untrusted_automation_boundary \
+    unused_params_named)
 """
 fix = "run `ruff format` over the listed files"
 next = "re-run `tc-fitness run`"

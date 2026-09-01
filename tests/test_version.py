@@ -11,6 +11,8 @@ the assertion degrades to "the literal is a well-formed version string".
 from __future__ import annotations
 
 import importlib.metadata
+import tomllib
+from pathlib import Path
 
 import tc_fitness
 
@@ -26,11 +28,7 @@ def test_version_matches_installed_metadata() -> None:
     assert tc_fitness.__version__ == metadata_version
 
 
-def test_version_is_v0_14_1() -> None:
-    # v0.14.1 fixes new_code_coverage soft-passing on a normalised `<source>.</source>`
-    # coverage report: the check prepended the `.` source to every filename, so the
-    # repo-relative changed-line paths never matched and the changed-line floor was a
-    # no-op wherever coverage is normalised to the repo root. The literal tracks the
-    # pyproject version so the CHANGELOG entry stays honest and a tag bump can't drift
-    # the two apart.
-    assert tc_fitness.__version__ == "0.14.1"
+def test_version_matches_project_declaration() -> None:
+    """The runtime literal and the single project declaration cannot drift."""
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    assert tc_fitness.__version__ == project["project"]["version"]
