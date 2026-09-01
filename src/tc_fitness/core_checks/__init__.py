@@ -194,6 +194,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:sonar_ignore_rationale",
     "core:suppressions_have_rationale",
     "core:test_skip_rationale",
+    "core:untrusted_automation_boundary",
     "core:unused_params_named",
 )
 

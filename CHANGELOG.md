@@ -15,6 +15,20 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-09-01
+
+### Added
+
+- **`untrusted_automation_boundary` CORE check** — a config-bound GitHub Actions
+  trust-boundary gate for autonomous responders. It rejects a job that combines
+  a configured autonomous action with `id-token: write`, cloud login, a
+  configured credential environment variable, or a configured token/publish
+  command. It also requires the action's configured contract input to live under
+  a configured runtime-contract root. The rule is additive and opt-in: a
+  consumer binds workflow paths plus its own action, credential, and runtime
+  contract surfaces under
+  `[tool.tc_fitness.core_checks.untrusted_automation_boundary]`.
+
 ### Changed
 
 - **`branch_naming` exempts Conventional Branch operational prefixes by default.**
