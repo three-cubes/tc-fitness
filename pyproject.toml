@@ -175,7 +175,7 @@ ruff format --check \
     no_internal_patches no_internal_patches_ts \
     no_language_suffix_in_package_names no_llm_attribution no_logging_secrets \
     no_noop_test_scripts no_production_suppressions no_real_names \
-    no_test_imports_in_prod no_test_only_kwargs path_naming \
+    no_test_doubles_in_runtime_tiers no_test_imports_in_prod no_test_only_kwargs path_naming \
     posix_path_serialisation readme_resolver_coverage schema_conformance \
     script_help_smoke shellcheck_disable_with_reason sonar_ignore_rationale \
     suppressions_have_rationale test_skip_rationale untrusted_automation_boundary \
