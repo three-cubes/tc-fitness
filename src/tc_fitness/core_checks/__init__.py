@@ -182,6 +182,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:no_noop_test_scripts",
     "core:no_production_suppressions",
     "core:no_real_names",
+    "core:no_test_doubles_in_runtime_tiers",
     "core:no_test_imports_in_prod",
     "core:no_test_only_kwargs",
     "core:path_naming",
