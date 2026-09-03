@@ -8,7 +8,8 @@ claimed as evidence and make a passing result non-probative.
 The consumer supplies its runtime marker vocabulary. This check rejects the
 common Python double forms only inside a test carrying one of those markers:
 ``monkeypatch`` mutation, ``unittest.mock`` construction or patching, and
-classes or constructors named ``Fake*``, ``Stub*``, or ``Mock*``.
+classes or constructors named ``Fake*``, ``Stub*``, or ``Mock*`` (including a
+leading private underscore). It also rejects synthetic ``sys.modules`` injection.
 """
 
 from __future__ import annotations
@@ -35,6 +36,11 @@ REMEDIATION = _remediation(
 
 _MONKEYPATCH_MUTATORS = frozenset({"setattr", "setenv", "delenv", "setitem", "delitem", "delattr"})
 _DOUBLE_CLASS_PREFIXES = ("Fake", "Stub", "Mock")
+
+
+def _is_double_name(name: str) -> bool:
+    """Return true when a private or public name identifies a test double."""
+    return name.lstrip("_").startswith(_DOUBLE_CLASS_PREFIXES)
 
 
 def _dotted_name(value: ast.expr) -> str | None:
@@ -177,11 +183,146 @@ def _fixture_closure(
     return tuple(resolved)
 
 
+def _function_argument_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...]:
+    """Return positional and keyword-only argument names in declaration order."""
+    return tuple(
+        argument.arg for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+    )
+
+
+def _initial_monkeypatch_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+    """Return fixture parameters that hold pytest's monkeypatch object directly."""
+    return frozenset(name for name in _function_argument_names(node) if name == "monkeypatch")
+
+
+def _scope_bindings(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Return names local to a function without descending into nested scopes."""
+    bindings = set(_function_argument_names(node))
+
+    class ScopeBindingVisitor(ast.NodeVisitor):
+        def visit_Name(self, child: ast.Name) -> None:
+            if isinstance(child.ctx, ast.Store):
+                bindings.add(child.id)
+
+        def visit_FunctionDef(self, child: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, child: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, child: ast.ClassDef) -> None:
+            return
+
+    visitor = ScopeBindingVisitor()
+    for statement in node.body:
+        visitor.visit(statement)
+    return bindings
+
+
+def _helpers_for_runtime_test(
+    tree: ast.Module,
+    test: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: Mapping[str, str],
+) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Return module helpers plus non-test methods on the test's enclosing class."""
+    helpers = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and not node.name.startswith("test_")
+        and not _is_fixture(node, aliases)
+    }
+    for candidate in tree.body:
+        if not isinstance(candidate, ast.ClassDef) or test not in candidate.body:
+            continue
+        helpers.update(
+            {
+                node.name: node
+                for node in candidate.body
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                and not node.name.startswith("test_")
+                and not _is_fixture(node, aliases)
+            }
+        )
+        break
+    return helpers
+
+
+def _bound_monkeypatch_names(
+    call: ast.Call,
+    helper: ast.FunctionDef | ast.AsyncFunctionDef,
+    monkeypatch_names: frozenset[str],
+) -> frozenset[str]:
+    """Propagate monkeypatch identity from a helper call into its parameters."""
+    parameters = list(_function_argument_names(helper))
+    if isinstance(call.func, ast.Attribute) and parameters and parameters[0] in {"self", "cls"}:
+        parameters = parameters[1:]
+    bound: set[str] = set()
+    for argument, parameter in zip(call.args, parameters, strict=False):
+        if isinstance(argument, ast.Name) and argument.id in monkeypatch_names:
+            bound.add(parameter)
+    for keyword in call.keywords:
+        if (
+            keyword.arg in parameters
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id in monkeypatch_names
+        ):
+            bound.add(keyword.arg)
+    return frozenset(bound)
+
+
+def _in_file_helper_closure(
+    tree: ast.Module,
+    test: ast.FunctionDef | ast.AsyncFunctionDef,
+    nodes: Iterable[ast.FunctionDef | ast.AsyncFunctionDef],
+    aliases: Mapping[str, str],
+) -> tuple[tuple[ast.FunctionDef | ast.AsyncFunctionDef, frozenset[str]], ...]:
+    """Return helpers called from runtime nodes with bound monkeypatch parameter names."""
+    helpers = _helpers_for_runtime_test(tree, test, aliases)
+
+    def called_helpers(
+        items: Iterable[tuple[ast.FunctionDef | ast.AsyncFunctionDef, frozenset[str]]],
+    ) -> set[tuple[ast.FunctionDef | ast.AsyncFunctionDef, frozenset[str]]]:
+        requested: set[tuple[ast.FunctionDef | ast.AsyncFunctionDef, frozenset[str]]] = set()
+        for item, monkeypatch_names in items:
+            local_bindings = _scope_bindings(item)
+            for call in ast.walk(item):
+                if not isinstance(call, ast.Call):
+                    continue
+                helper_name: str | None = None
+                if isinstance(call.func, ast.Name) and call.func.id not in local_bindings:
+                    helper_name = call.func.id
+                elif (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in {"self", "cls"}
+                ):
+                    helper_name = call.func.attr
+                helper = helpers.get(helper_name) if helper_name else None
+                if helper is not None:
+                    requested.add((helper, _bound_monkeypatch_names(call, helper, monkeypatch_names)))
+        return requested
+
+    requested = called_helpers((node, _initial_monkeypatch_names(node)) for node in nodes)
+    resolved: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, frozenset[str]]] = []
+    seen: set[tuple[int, frozenset[str]]] = set()
+    while requested:
+        helper, monkeypatch_names = requested.pop()
+        key = (id(helper), monkeypatch_names)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append((helper, monkeypatch_names))
+        requested.update(called_helpers(((helper, monkeypatch_names),)))
+    return tuple(resolved)
+
+
 def _call_is_test_double(
     node: ast.Call,
     *,
     aliases: Mapping[str, str],
     forbidden_keyword_arguments: frozenset[str],
+    monkeypatch_names: frozenset[str],
 ) -> bool:
     """Recognise common test-double construction and monkeypatch mutation."""
     if any(
@@ -191,27 +332,57 @@ def _call_is_test_double(
     if (
         isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "monkeypatch"
+        and node.func.value.id in monkeypatch_names
     ):
         return node.func.attr in _MONKEYPATCH_MUTATORS
     resolved = _resolved_name(node.func, aliases)
     if resolved and resolved.startswith("unittest.mock."):
         return True
-    return bool(resolved and resolved.rsplit(".", maxsplit=1)[-1].startswith(_DOUBLE_CLASS_PREFIXES))
+    return bool(resolved and _is_double_name(resolved.rsplit(".", maxsplit=1)[-1]))
+
+
+def _is_synthetic_module_value(value: ast.expr | None, aliases: Mapping[str, str]) -> bool:
+    """Return true when an assigned value constructs or names a synthetic module."""
+    if value is None:
+        return False
+    if isinstance(value, ast.Call):
+        resolved = _resolved_name(value.func, aliases)
+        if resolved == "types.ModuleType":
+            return True
+        return bool(resolved and _is_double_name(resolved.rsplit(".", maxsplit=1)[-1]))
+    if isinstance(value, ast.Name):
+        return _is_double_name(value.id)
+    resolved = _resolved_name(value, aliases)
+    return bool(resolved and _is_double_name(resolved.rsplit(".", maxsplit=1)[-1]))
+
+
+def _is_synthetic_module_injection(node: ast.Assign | ast.AnnAssign, aliases: Mapping[str, str]) -> bool:
+    """Return true when a test assigns a synthetic module into ``sys.modules``."""
+    targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+    return _is_synthetic_module_value(node.value, aliases) and any(
+        isinstance(target, ast.Subscript) and _resolved_name(target.value, aliases) == "sys.modules"
+        for target in targets
+    )
 
 
 def _nodes_contain_test_double(
-    nodes: Iterable[ast.AST], *, aliases: Mapping[str, str], forbidden_keyword_arguments: frozenset[str]
+    nodes: Iterable[tuple[ast.AST, frozenset[str]]],
+    *,
+    aliases: Mapping[str, str],
+    forbidden_keyword_arguments: frozenset[str],
 ) -> bool:
     """True when any supplied syntax subtree declares or invokes a test double."""
-    for root in nodes:
+    for root, monkeypatch_names in nodes:
         for node in ast.walk(root):
-            if isinstance(node, ast.ClassDef) and node.name.startswith(_DOUBLE_CLASS_PREFIXES):
+            if isinstance(node, ast.ClassDef) and _is_double_name(node.name):
+                return True
+            if isinstance(node, ast.Assign | ast.AnnAssign) and _is_synthetic_module_injection(node, aliases):
                 return True
             if isinstance(node, ast.Call) and _call_is_test_double(
                 node,
                 aliases=aliases,
                 forbidden_keyword_arguments=forbidden_keyword_arguments,
+                monkeypatch_names=monkeypatch_names,
             ):
                 return True
     return False
@@ -255,8 +426,14 @@ def file_has_runtime_tier_test_double(
     forbidden_keywords = frozenset(forbidden_keyword_arguments)
     aliases = _import_aliases(tree)
     for test in _runtime_tests(tree, aliases=aliases, runtime_markers=runtime):
+        fixture_closure = _fixture_closure(tree, test, aliases)
+        runtime_nodes = (test, *fixture_closure)
+        helper_closure = _in_file_helper_closure(tree, test, runtime_nodes, aliases)
         if _nodes_contain_test_double(
-            (test, *_fixture_closure(tree, test, aliases)),
+            (
+                *((node, _initial_monkeypatch_names(node)) for node in runtime_nodes),
+                *helper_closure,
+            ),
             aliases=aliases,
             forbidden_keyword_arguments=forbidden_keywords,
         ):
