@@ -92,6 +92,52 @@ def test_rejects_double_in_transitive_in_file_helper_called_by_runtime_test(tmp_
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+def test_rejects_monkeypatch_passed_to_a_renamed_helper_parameter(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\npytestmark = pytest.mark.e2e\n\ndef _configure_client(mp):\n"
+        "    mp.setattr('vendor.client.send', lambda: None)\n\ndef test_live(monkeypatch):\n"
+        "    _configure_client(monkeypatch)\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_allows_restoring_a_real_module_in_runtime_tier(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import sys\nimport pytest\npytestmark = pytest.mark.e2e\n\n"
+        "saved_module = sys.modules.get('vendor.client')\n\ndef test_live():\n"
+        "    sys.modules['vendor.client'] = saved_module\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is False
+
+
+def test_ignores_module_helper_shadowed_by_a_local_binding(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\nfrom unittest.mock import Mock\npytestmark = pytest.mark.e2e\n\n"
+        "def check():\n    return Mock()\n\ndef test_live(live_client):\n"
+        "    check = live_client.check\n    check()\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is False
+
+
+def test_rejects_monkeypatch_in_a_runtime_test_class_helper_method(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\n\n@pytest.mark.e2e\nclass TestJourney:\n"
+        "    def _configure(self, mp):\n"
+        "        mp.setattr('vendor.client.send', lambda: None)\n\n"
+        "    def test_live(self, monkeypatch):\n"
+        "        self._configure(monkeypatch)\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
 def test_rejects_underscore_prefixed_fake_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
