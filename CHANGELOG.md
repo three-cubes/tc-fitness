@@ -15,6 +15,16 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-09-03
+
+### Added
+
+- **Canonical Semgrep OWASP permissions policy** —
+  `materialize_owasp_permissions_policy` derives a checked ruleset from a
+  consumer's pinned upstream snapshot. It rejects snapshot drift and treats
+  only group/other permission bits as non-owner access, so private `0o700`
+  directories remain private while shared modes still produce findings.
+
 ## [0.15.0] - 2026-09-03
 
 ### Added

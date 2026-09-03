@@ -122,6 +122,10 @@ from tc_fitness.runner import (
     select_gate,
     staged_paths,
 )
+from tc_fitness.semgrep_policy import (
+    OWASP_INSECURE_FILE_PERMISSIONS_RULE_ID,
+    materialize_owasp_permissions_policy,
+)
 from tc_fitness.staged import (
     EnumerationNarrower,
     LocationMarker,
@@ -145,7 +149,7 @@ from tc_fitness.staged import (
 try:
     __version__ = _metadata.version("three-cubes-fitness")
 except _metadata.PackageNotFoundError:  # pragma: no cover - only when not installed
-    __version__ = "0.15.0"
+    __version__ = "0.15.1"
 
 __all__ = [
     "__version__",
@@ -227,6 +231,9 @@ __all__ = [
     "print_aggregate",
     "run",
     "main_cli",
+    # canonical Semgrep policy materialisation
+    "OWASP_INSECURE_FILE_PERMISSIONS_RULE_ID",
+    "materialize_owasp_permissions_policy",
     # v0.6.0 — per-file baseline I/O
     "BASELINE_SUFFIX",
     "BASELINE_DIRNAME",
