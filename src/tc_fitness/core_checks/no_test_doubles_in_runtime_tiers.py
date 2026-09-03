@@ -8,7 +8,8 @@ claimed as evidence and make a passing result non-probative.
 The consumer supplies its runtime marker vocabulary. This check rejects the
 common Python double forms only inside a test carrying one of those markers:
 ``monkeypatch`` mutation, ``unittest.mock`` construction or patching, and
-classes or constructors named ``Fake*``, ``Stub*``, or ``Mock*``.
+classes or constructors named ``Fake*``, ``Stub*``, or ``Mock*`` (including a
+leading private underscore). It also rejects synthetic ``sys.modules`` injection.
 """
 
 from __future__ import annotations
@@ -35,6 +36,11 @@ REMEDIATION = _remediation(
 
 _MONKEYPATCH_MUTATORS = frozenset({"setattr", "setenv", "delenv", "setitem", "delitem", "delattr"})
 _DOUBLE_CLASS_PREFIXES = ("Fake", "Stub", "Mock")
+
+
+def _is_double_name(name: str) -> bool:
+    """Return true when a private or public name identifies a test double."""
+    return name.lstrip("_").startswith(_DOUBLE_CLASS_PREFIXES)
 
 
 def _dotted_name(value: ast.expr) -> str | None:
@@ -177,6 +183,39 @@ def _fixture_closure(
     return tuple(resolved)
 
 
+def _in_file_helper_closure(
+    tree: ast.Module,
+    nodes: Iterable[ast.AST],
+    aliases: Mapping[str, str],
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    """Return module helpers called directly or transitively by the supplied nodes."""
+    helpers = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and not node.name.startswith("test_")
+        and not _is_fixture(node, aliases)
+    }
+
+    def called_helper_names(items: Iterable[ast.AST]) -> set[str]:
+        return {
+            call.func.id
+            for item in items
+            for call in ast.walk(item)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in helpers
+        }
+
+    requested = called_helper_names(nodes)
+    resolved: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    while requested:
+        helper = helpers.pop(requested.pop(), None)
+        if helper is None:
+            continue
+        resolved.append(helper)
+        requested.update(called_helper_names((helper,)))
+    return tuple(resolved)
+
+
 def _call_is_test_double(
     node: ast.Call,
     *,
@@ -197,7 +236,16 @@ def _call_is_test_double(
     resolved = _resolved_name(node.func, aliases)
     if resolved and resolved.startswith("unittest.mock."):
         return True
-    return bool(resolved and resolved.rsplit(".", maxsplit=1)[-1].startswith(_DOUBLE_CLASS_PREFIXES))
+    return bool(resolved and _is_double_name(resolved.rsplit(".", maxsplit=1)[-1]))
+
+
+def _is_synthetic_module_injection(node: ast.Assign | ast.AnnAssign, aliases: Mapping[str, str]) -> bool:
+    """Return true when a test assigns a synthetic module into ``sys.modules``."""
+    targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+    return any(
+        isinstance(target, ast.Subscript) and _resolved_name(target.value, aliases) == "sys.modules"
+        for target in targets
+    )
 
 
 def _nodes_contain_test_double(
@@ -206,7 +254,9 @@ def _nodes_contain_test_double(
     """True when any supplied syntax subtree declares or invokes a test double."""
     for root in nodes:
         for node in ast.walk(root):
-            if isinstance(node, ast.ClassDef) and node.name.startswith(_DOUBLE_CLASS_PREFIXES):
+            if isinstance(node, ast.ClassDef) and _is_double_name(node.name):
+                return True
+            if isinstance(node, ast.Assign | ast.AnnAssign) and _is_synthetic_module_injection(node, aliases):
                 return True
             if isinstance(node, ast.Call) and _call_is_test_double(
                 node,
@@ -255,8 +305,10 @@ def file_has_runtime_tier_test_double(
     forbidden_keywords = frozenset(forbidden_keyword_arguments)
     aliases = _import_aliases(tree)
     for test in _runtime_tests(tree, aliases=aliases, runtime_markers=runtime):
+        fixture_closure = _fixture_closure(tree, test, aliases)
+        helper_closure = _in_file_helper_closure(tree, (test, *fixture_closure), aliases)
         if _nodes_contain_test_double(
-            (test, *_fixture_closure(tree, test, aliases)),
+            (test, *fixture_closure, *helper_closure),
             aliases=aliases,
             forbidden_keyword_arguments=forbidden_keywords,
         ):

@@ -69,6 +69,49 @@ def test_rejects_fixture_double_used_by_individually_marked_test(tmp_path: Path)
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+def test_rejects_double_in_in_file_helper_called_by_runtime_test(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\npytestmark = pytest.mark.e2e\n\ndef _configure_client(monkeypatch):\n"
+        "    monkeypatch.setattr('vendor.client.send', lambda: None)\n\ndef test_live(monkeypatch):\n"
+        "    _configure_client(monkeypatch)\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_rejects_double_in_transitive_in_file_helper_called_by_runtime_test(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\npytestmark = pytest.mark.e2e\n\ndef _patch_client(monkeypatch):\n"
+        "    monkeypatch.setattr('vendor.client.send', lambda: None)\n\ndef _configure_client(monkeypatch):\n"
+        "    _patch_client(monkeypatch)\n\ndef test_live(monkeypatch):\n"
+        "    _configure_client(monkeypatch)\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_rejects_underscore_prefixed_fake_in_runtime_tier(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\npytestmark = pytest.mark.e2e\n\nclass _FakeClient:\n    pass\n\ndef test_live():\n"
+        "    assert _FakeClient()\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_rejects_synthetic_module_injection_in_runtime_tier(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import sys\nimport types\nimport pytest\npytestmark = pytest.mark.e2e\n\ndef test_live():\n"
+        "    sys.modules['vendor.client'] = types.ModuleType('vendor.client')\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
 def test_rejects_all_monkeypatch_mutation_methods_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
