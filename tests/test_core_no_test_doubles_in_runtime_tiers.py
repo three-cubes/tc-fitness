@@ -39,6 +39,76 @@ def test_rejects_mock_in_individually_marked_runtime_tier(tmp_path: Path) -> Non
     assert file_has_runtime_tier_test_double(path, runtime_markers=("pvt",)) is True
 
 
+def test_allows_real_http_patch_method_in_runtime_tier(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\npytestmark = pytest.mark.e2e\n\ndef test_live(client):\n"
+        "    assert client.patch('/health').status_code == 200\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is False
+
+
+def test_rejects_mock_in_runtime_marked_test_class(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\nfrom unittest.mock import Mock\n\n@pytest.mark.e2e\nclass TestJourney:\n"
+        "    def test_live(self):\n        client = Mock()\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_rejects_fixture_double_used_by_individually_marked_test(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\nfrom unittest.mock import Mock\n\n@pytest.fixture\ndef client():\n"
+        "    return Mock()\n\n@pytest.mark.e2e\ndef test_live(client):\n    assert client\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_rejects_all_monkeypatch_mutation_methods_in_runtime_tier(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\npytestmark = pytest.mark.e2e\n\ndef test_live(monkeypatch):\n"
+        "    monkeypatch.setitem(registry, 'client', fake_client)\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_resolves_pytest_import_aliases(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest as pt\nfrom unittest.mock import Mock\n\n@pt.mark.e2e\ndef test_live():\n"
+        "    client = Mock()\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_rejects_imported_unittest_patch_object(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\nfrom unittest.mock import patch\n\n@pytest.mark.e2e\ndef test_live():\n"
+        "    with patch.object(client, 'send'):\n        assert True\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_resolves_imported_pytest_mark_alias(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "from pytest import mark as m\nfrom unittest.mock import Mock\n\n@m.e2e\ndef test_live():\n"
+        "    assert Mock()\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
 def test_rejects_configured_simulation_seam_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,

@@ -33,64 +33,175 @@ REMEDIATION = _remediation(
     forbidden="@pytest.mark.e2e\ndef test_live(monkeypatch):\n    monkeypatch.setattr(client, 'send', fake)",
 )
 
-_DOUBLE_CONSTRUCTORS = frozenset({"Mock", "MagicMock", "AsyncMock", "patch"})
-_MONKEYPATCH_MUTATORS = frozenset({"setattr", "setenv", "delenv"})
+_MONKEYPATCH_MUTATORS = frozenset({"setattr", "setenv", "delenv", "setitem", "delitem", "delattr"})
 _DOUBLE_CLASS_PREFIXES = ("Fake", "Stub", "Mock")
 
 
-def _marker_names(value: ast.expr) -> set[str]:
+def _dotted_name(value: ast.expr) -> str | None:
+    """Return a dotted syntax name without resolving import aliases."""
+    if isinstance(value, ast.Name):
+        return value.id
+    if isinstance(value, ast.Attribute):
+        parent = _dotted_name(value.value)
+        return f"{parent}.{value.attr}" if parent else None
+    return None
+
+
+def _import_aliases(tree: ast.Module) -> dict[str, str]:
+    """Map local import bindings to their fully-qualified package names."""
+    aliases: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                binding = imported.asname or imported.name.split(".", maxsplit=1)[0]
+                aliases[binding] = imported.name if imported.asname else binding
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for imported in node.names:
+                if imported.name == "*":
+                    continue
+                aliases[imported.asname or imported.name] = f"{node.module}.{imported.name}"
+    return aliases
+
+
+def _resolved_name(value: ast.expr, aliases: Mapping[str, str]) -> str | None:
+    """Return a dotted name with an imported root binding resolved."""
+    dotted = _dotted_name(value)
+    if dotted is None:
+        return None
+    root, *suffix = dotted.split(".")
+    resolved_root = aliases.get(root, root)
+    return ".".join((resolved_root, *suffix))
+
+
+def _marker_names(value: ast.expr, aliases: Mapping[str, str]) -> set[str]:
     """Return ``pytest.mark.<name>`` references held by an expression."""
     if isinstance(value, ast.List | ast.Tuple):
-        return set().union(*(_marker_names(element) for element in value.elts))
+        return set().union(*(_marker_names(element, aliases) for element in value.elts))
     if isinstance(value, ast.Call):
-        return _marker_names(value.func)
-    if (
-        isinstance(value, ast.Attribute)
-        and isinstance(value.value, ast.Attribute)
-        and value.value.attr == "mark"
-        and isinstance(value.value.value, ast.Name)
-        and value.value.value.id == "pytest"
-    ):
-        return {value.attr}
+        return _marker_names(value.func, aliases)
+    resolved = _resolved_name(value, aliases)
+    if resolved and resolved.startswith("pytest.mark."):
+        return {resolved.removeprefix("pytest.mark.").split(".", maxsplit=1)[0]}
     return set()
 
 
-def _module_markers(tree: ast.Module) -> set[str]:
+def _module_markers(tree: ast.Module, aliases: Mapping[str, str]) -> set[str]:
     """Return module-level pytest marker names."""
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         if any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets):
-            return _marker_names(node.value)
+            return _marker_names(node.value, aliases)
     return set()
 
 
-def _function_markers(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+def _function_markers(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+    aliases: Mapping[str, str],
+) -> set[str]:
     """Return direct pytest marker names on one test function."""
-    return set().union(*(_marker_names(decorator) for decorator in node.decorator_list))
+    return set().union(*(_marker_names(decorator, aliases) for decorator in node.decorator_list))
 
 
-def _call_is_test_double(node: ast.Call, *, forbidden_keyword_arguments: frozenset[str]) -> bool:
+def _is_fixture(node: ast.FunctionDef | ast.AsyncFunctionDef, aliases: Mapping[str, str]) -> bool:
+    """Return true when a function is registered as a pytest fixture."""
+    for decorator in node.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if _resolved_name(target, aliases) == "pytest.fixture":
+            return True
+    return False
+
+
+def _fixture_name(node: ast.FunctionDef | ast.AsyncFunctionDef, aliases: Mapping[str, str]) -> str:
+    """Return the public fixture name, including an explicit pytest alias."""
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call) or _resolved_name(decorator.func, aliases) != "pytest.fixture":
+            continue
+        for keyword in decorator.keywords:
+            if (
+                keyword.arg == "name"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, str)
+            ):
+                return keyword.value.value
+    return node.name
+
+
+def _autouse_fixture_names(tree: ast.Module, aliases: Mapping[str, str]) -> set[str]:
+    """Return names of module fixtures that pytest supplies without an argument."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) or not _is_fixture(node, aliases):
+            continue
+        for decorator in node.decorator_list:
+            if (
+                not isinstance(decorator, ast.Call)
+                or _resolved_name(decorator.func, aliases) != "pytest.fixture"
+            ):
+                continue
+            if any(
+                keyword.arg == "autouse"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+                for keyword in decorator.keywords
+            ):
+                names.add(_fixture_name(node, aliases))
+    return names
+
+
+def _fixture_closure(
+    tree: ast.Module,
+    test: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: Mapping[str, str],
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    """Return fixtures used directly or transitively by one runtime test."""
+    fixtures = {
+        _fixture_name(node, aliases): node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _is_fixture(node, aliases)
+    }
+    requested = {
+        argument.arg for argument in (*test.args.posonlyargs, *test.args.args, *test.args.kwonlyargs)
+    } | _autouse_fixture_names(tree, aliases)
+    resolved: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    while requested:
+        name = requested.pop()
+        fixture = fixtures.pop(name, None)
+        if fixture is None:
+            continue
+        resolved.append(fixture)
+        requested.update(
+            argument.arg
+            for argument in (*fixture.args.posonlyargs, *fixture.args.args, *fixture.args.kwonlyargs)
+        )
+    return tuple(resolved)
+
+
+def _call_is_test_double(
+    node: ast.Call,
+    *,
+    aliases: Mapping[str, str],
+    forbidden_keyword_arguments: frozenset[str],
+) -> bool:
     """Recognise common test-double construction and monkeypatch mutation."""
     if any(
         keyword.arg in forbidden_keyword_arguments for keyword in node.keywords if keyword.arg is not None
     ):
         return True
-    if isinstance(node.func, ast.Name):
-        return node.func.id in _DOUBLE_CONSTRUCTORS or node.func.id.startswith(_DOUBLE_CLASS_PREFIXES)
-    if not isinstance(node.func, ast.Attribute):
-        return False
-    if isinstance(node.func.value, ast.Name) and node.func.value.id == "monkeypatch":
+    if (
+        isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "monkeypatch"
+    ):
         return node.func.attr in _MONKEYPATCH_MUTATORS
-    return node.func.attr in _DOUBLE_CONSTRUCTORS or (
-        node.func.attr == "object"
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "patch"
-    )
+    resolved = _resolved_name(node.func, aliases)
+    if resolved and resolved.startswith("unittest.mock."):
+        return True
+    return bool(resolved and resolved.rsplit(".", maxsplit=1)[-1].startswith(_DOUBLE_CLASS_PREFIXES))
 
 
 def _nodes_contain_test_double(
-    nodes: Iterable[ast.AST], *, forbidden_keyword_arguments: frozenset[str]
+    nodes: Iterable[ast.AST], *, aliases: Mapping[str, str], forbidden_keyword_arguments: frozenset[str]
 ) -> bool:
     """True when any supplied syntax subtree declares or invokes a test double."""
     for root in nodes:
@@ -99,10 +210,34 @@ def _nodes_contain_test_double(
                 return True
             if isinstance(node, ast.Call) and _call_is_test_double(
                 node,
+                aliases=aliases,
                 forbidden_keyword_arguments=forbidden_keyword_arguments,
             ):
                 return True
     return False
+
+
+def _runtime_tests(
+    tree: ast.Module,
+    *,
+    aliases: Mapping[str, str],
+    runtime_markers: frozenset[str],
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    """Return test functions carrying direct, module, or enclosing-class runtime marks."""
+    module_markers = _module_markers(tree, aliases)
+    runtime_tests: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+
+    def visit(nodes: Iterable[ast.stmt], inherited_markers: set[str]) -> None:
+        for node in nodes:
+            if isinstance(node, ast.ClassDef):
+                visit(node.body, inherited_markers | _function_markers(node, aliases))
+            elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                markers = inherited_markers | _function_markers(node, aliases)
+                if node.name.startswith("test_") and markers & runtime_markers:
+                    runtime_tests.append(node)
+
+    visit(tree.body, module_markers)
+    return tuple(runtime_tests)
 
 
 def file_has_runtime_tier_test_double(
@@ -118,14 +253,12 @@ def file_has_runtime_tier_test_double(
         return False
     runtime = frozenset(runtime_markers)
     forbidden_keywords = frozenset(forbidden_keyword_arguments)
-    if _module_markers(tree) & runtime:
-        return _nodes_contain_test_double(tree.body, forbidden_keyword_arguments=forbidden_keywords)
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-            and node.name.startswith("test_")
-            and _function_markers(node) & runtime
-            and _nodes_contain_test_double((node,), forbidden_keyword_arguments=forbidden_keywords)
+    aliases = _import_aliases(tree)
+    for test in _runtime_tests(tree, aliases=aliases, runtime_markers=runtime):
+        if _nodes_contain_test_double(
+            (test, *_fixture_closure(tree, test, aliases)),
+            aliases=aliases,
+            forbidden_keyword_arguments=forbidden_keywords,
         ):
             return True
     return False
