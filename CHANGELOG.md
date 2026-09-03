@@ -15,6 +15,19 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-03
+
+### Added
+
+- **`no_test_doubles_in_runtime_tiers` CORE check** — rejects recognised test
+  doubles only in tests that declare configured runtime markers such as `e2e`,
+  `journey`, `pvt`, or `vertical`. The check follows direct, class, module, and
+  fixture-derived runtime markings; it detects `monkeypatch` mutations,
+  `unittest.mock` constructors and patches, and `Fake*`, `Stub*`, and `Mock*`
+  classes or constructors. Unit and contract tests remain outside its configured
+  runtime scope. Consumers opt in by configuring markers and binding
+  `core:no_test_doubles_in_runtime_tiers` in their catalogue.
+
 ## [0.14.2] - 2026-09-01
 
 ### Added
