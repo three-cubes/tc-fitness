@@ -100,6 +100,31 @@ def _cfg(**extra: Any) -> Mapping[str, Any]:
     return base
 
 
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run real git against a disposable repository."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _git_repo(tmp_path: Path) -> Path:
+    """Create a repository whose current commit is also ``origin/main``."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    _git(repo, "config", "user.name", "Coverage Test")
+    _git(repo, "config", "user.email", "coverage-test@example.invalid")
+    _seed(repo, "src/a.py", "existing = 1\n")
+    _git(repo, "add", "src/a.py")
+    _git(repo, "commit", "--quiet", "-m", "base")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return repo
+
+
 # --------------------------------------------------------------------------- #
 # Pure parser: per-line Cobertura coverage.
 # --------------------------------------------------------------------------- #
@@ -210,6 +235,51 @@ def test_parse_added_lines_multiple_hunks_one_file() -> None:
 # --------------------------------------------------------------------------- #
 # Rule end-to-end via the injected git seam.
 # --------------------------------------------------------------------------- #
+
+
+def test_working_tree_added_lines_match_post_commit_measurement(tmp_path: Path) -> None:
+    """Unstaged, staged, and committed forms of one source tree agree."""
+    repo = _git_repo(tmp_path)
+    _seed(repo, "src/a.py", "existing = 1\nuncovered = 2\n")
+    _seed(repo, "coverage.xml", _report({"a.py": {1: 1, 2: 0}}))
+
+    unstaged = build(_cfg(), repo_root=repo)
+    unstaged_measurement = unstaged._measured
+    unstaged_verdict = unstaged.run()
+    _git(repo, "add", "src/a.py")
+    staged = build(_cfg(), repo_root=repo)
+    staged_measurement = staged._measured
+    staged_verdict = staged.run()
+    _git(repo, "commit", "--quiet", "-m", "change")
+    committed = build(_cfg(), repo_root=repo)
+    committed_measurement = committed._measured
+    committed_verdict = committed.run()
+
+    assert unstaged_measurement == staged_measurement == committed_measurement == {"src/a.py": (0, 1)}
+    assert (unstaged_verdict, staged_verdict, committed_verdict) == (1, 1, 1)
+
+
+def test_untracked_source_is_measured_before_first_commit(tmp_path: Path) -> None:
+    """A new source file cannot disappear from the local changed-line floor."""
+    repo = _git_repo(tmp_path)
+    _seed(repo, "src/new.py", "uncovered = 1\n")
+    _seed(repo, "coverage.xml", _report({"new.py": {1: 0}}))
+
+    rule = build(_cfg(), repo_root=repo)
+
+    assert rule.run() == 1
+
+
+def test_ignored_untracked_source_does_not_change_the_ci_equivalent_tree(tmp_path: Path) -> None:
+    """Build residue excluded by Git remains outside local measurement."""
+    repo = _git_repo(tmp_path)
+    _seed(repo, ".gitignore", "src/generated.py\n")
+    _seed(repo, "src/generated.py", "uncovered = 1\n")
+    _seed(repo, "coverage.xml", _report({"generated.py": {1: 0}}))
+
+    rule = build(_cfg(), repo_root=repo)
+
+    assert rule.run() == 0
 
 
 def test_below_floor_changed_lines_are_a_violation(tmp_path: Path) -> None:
