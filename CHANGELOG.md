@@ -15,6 +15,15 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-09-07
+
+### Fixed
+
+- **Changed-line coverage now measures the complete local checkout** —
+  committed, staged, unstaged, and untracked non-ignored source files are
+  compared with the merge base. A pre-commit local gate and post-commit CI now
+  score the same source tree.
+
 ## [0.15.1] - 2026-09-03
 
 ### Added

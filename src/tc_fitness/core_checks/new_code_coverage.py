@@ -8,12 +8,12 @@ isolation — the lines a branch ADDED or CHANGED versus the trunk — and block
 when their coverage is below a floor (80% by default). This rule mirrors that
 condition LOCALLY so an agent catches it before the CI round-trip, not after.
 
-"New code" is the set of right-side lines in
-``git diff -U0 $(git merge-base <base_ref> HEAD)...HEAD`` — added lines per file,
-brand-new files included (a new file's whole body is "added"). For each in-scope
-changed file present in the coverage report, the rule intersects those added
-lines with the lines the report actually recorded (``coverable_changed``), counts
-those with a non-zero hit (``covered_changed``), and FAILS the file when
+"New code" is the set of right-side lines between the merge base and the current
+checkout. That includes committed, staged, unstaged, and untracked source, so a
+local pre-push run and CI score the same source tree. For each in-scope changed
+file present in the coverage report, the rule intersects those added lines with
+the lines the report actually recorded (``coverable_changed``), counts those with
+a non-zero hit (``covered_changed``), and FAILS the file when
 ``covered_changed / coverable_changed`` is below the floor. A file whose added
 lines are all non-coverable (blank lines, comments, lines the report never
 recorded) contributes no measurable new code and is not a violation.
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import importlib
 import re
+import stat
 import subprocess
 from collections.abc import Callable, Mapping
 from functools import cached_property
@@ -67,7 +68,8 @@ _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 #: A git command runner: takes the git sub-arguments (argv0 ``git`` is fixed by
 #: the runner, never the caller) and the working directory, returns the
 #: completed process. The DI seam a test overrides to feed canned diff output.
-GitRunner = Callable[[list[str], Path], "subprocess.CompletedProcess[str]"]
+GitResult = subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]
+GitRunner = Callable[[list[str], Path], GitResult]
 
 REMEDIATION = _remediation(
     fix=(
@@ -211,7 +213,12 @@ def parse_added_lines(diff_text: str) -> dict[str, set[int]]:
     return added
 
 
-def _default_git_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+def _decode_git_output(output: str | bytes) -> str:
+    """Decode Git's byte-preserving output without losing valid path bytes."""
+    return output if isinstance(output, str) else output.decode("utf-8", "surrogateescape")
+
+
+def _default_git_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
     """Run ``git <args>`` in ``cwd`` and capture its output (the default seam).
 
     argv0 is the fixed literal ``git`` (never a caller-supplied path) and
@@ -222,7 +229,6 @@ def _default_git_runner(args: list[str], cwd: Path) -> subprocess.CompletedProce
         ["git", *args],
         cwd=cwd,
         capture_output=True,
-        text=True,
         check=False,
     )
 
@@ -263,7 +269,7 @@ class NewCodeCoverage(FitnessRule):
         return report if report.is_absolute() else self._repo_root / report
 
     def _changed_lines(self) -> dict[str, set[int]]:
-        """Right-side added lines per repo-relative path since the merge-base.
+        """Added lines from the merge-base through the current checkout.
 
         Returns ``{}`` (→ a soft PASS) when the base ref is unsafe/unresolvable,
         the merge-base can't be computed, or the diff command fails — none of
@@ -274,13 +280,43 @@ class NewCodeCoverage(FitnessRule):
         merge_base = self.git_runner(["merge-base", self.base_ref, "HEAD"], self._repo_root)
         if merge_base.returncode != 0:
             return {}
-        base = merge_base.stdout.strip()
+        base = _decode_git_output(merge_base.stdout).strip()
         if not base:
             return {}
-        diff = self.git_runner(["diff", "-U0", f"{base}...HEAD"], self._repo_root)
+        # Comparing the base tree to the checkout includes committed, staged,
+        # and unstaged changes. ``base...HEAD`` omits the latter two and made a
+        # pre-commit local gate pass code that CI rejected after it was committed.
+        diff = self.git_runner(["diff", "-U0", base, "--"], self._repo_root)
         if diff.returncode != 0:
             return {}
-        return parse_added_lines(diff.stdout)
+        changed = parse_added_lines(_decode_git_output(diff.stdout))
+        changed.update(self._untracked_added_lines())
+        return changed
+
+    def _untracked_added_lines(self) -> dict[str, set[int]]:
+        """All physical lines in untracked, non-ignored, in-scope source files."""
+        result = self.git_runner(
+            ["ls-files", "--others", "--exclude-standard", "-z", "--"],
+            self._repo_root,
+        )
+        if result.returncode != 0:
+            return {}
+
+        added: dict[str, set[int]] = {}
+        for rel in _decode_git_output(result.stdout).split("\0"):
+            if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+                continue
+            if not self.is_in_scope(rel):
+                continue
+            path = self._repo_root / rel
+            try:
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    continue
+                line_count = len(path.read_bytes().splitlines())
+            except OSError:
+                continue
+            added[rel] = set(range(1, line_count + 1))
+        return added
 
     @cached_property
     def _measured(self) -> dict[str, tuple[int, int]]:
