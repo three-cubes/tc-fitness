@@ -68,7 +68,8 @@ _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 #: A git command runner: takes the git sub-arguments (argv0 ``git`` is fixed by
 #: the runner, never the caller) and the working directory, returns the
 #: completed process. The DI seam a test overrides to feed canned diff output.
-GitRunner = Callable[[list[str], Path], "subprocess.CompletedProcess[str]"]
+GitResult = subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]
+GitRunner = Callable[[list[str], Path], GitResult]
 
 REMEDIATION = _remediation(
     fix=(
@@ -212,7 +213,12 @@ def parse_added_lines(diff_text: str) -> dict[str, set[int]]:
     return added
 
 
-def _default_git_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+def _decode_git_output(output: str | bytes) -> str:
+    """Decode Git's byte-preserving output without losing valid path bytes."""
+    return output if isinstance(output, str) else output.decode("utf-8", "surrogateescape")
+
+
+def _default_git_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
     """Run ``git <args>`` in ``cwd`` and capture its output (the default seam).
 
     argv0 is the fixed literal ``git`` (never a caller-supplied path) and
@@ -223,7 +229,6 @@ def _default_git_runner(args: list[str], cwd: Path) -> subprocess.CompletedProce
         ["git", *args],
         cwd=cwd,
         capture_output=True,
-        text=True,
         check=False,
     )
 
@@ -275,7 +280,7 @@ class NewCodeCoverage(FitnessRule):
         merge_base = self.git_runner(["merge-base", self.base_ref, "HEAD"], self._repo_root)
         if merge_base.returncode != 0:
             return {}
-        base = merge_base.stdout.strip()
+        base = _decode_git_output(merge_base.stdout).strip()
         if not base:
             return {}
         # Comparing the base tree to the checkout includes committed, staged,
@@ -284,7 +289,7 @@ class NewCodeCoverage(FitnessRule):
         diff = self.git_runner(["diff", "-U0", base, "--"], self._repo_root)
         if diff.returncode != 0:
             return {}
-        changed = parse_added_lines(diff.stdout)
+        changed = parse_added_lines(_decode_git_output(diff.stdout))
         changed.update(self._untracked_added_lines())
         return changed
 
@@ -298,7 +303,7 @@ class NewCodeCoverage(FitnessRule):
             return {}
 
         added: dict[str, set[int]] = {}
-        for rel in result.stdout.split("\0"):
+        for rel in _decode_git_output(result.stdout).split("\0"):
             if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
                 continue
             if not self.is_in_scope(rel):

@@ -8,13 +8,17 @@ canned ``merge-base`` / ``diff`` output — no real repository, no monkeypatchin
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
+import tc_fitness.core_checks.new_code_coverage as new_code_coverage
 from tc_fitness.core_checks.new_code_coverage import (
     build,
     main,
@@ -268,6 +272,32 @@ def test_untracked_source_is_measured_before_first_commit(tmp_path: Path) -> Non
     rule = build(_cfg(), repo_root=repo)
 
     assert rule.run() == 1
+
+
+def test_git_output_decodes_non_utf8_bytes_losslessly() -> None:
+    raw = b"src/bad_\xff.py\0"
+    decoder = getattr(new_code_coverage, "_decode_git_output", None)
+
+    assert decoder is not None
+    assert decoder(raw) == "src/bad_\udcff.py\0"
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS rejects invalid UTF-8 filenames")
+def test_untracked_source_with_non_utf8_filename_is_enumerated_losslessly(tmp_path: Path) -> None:
+    """Git's byte-preserving path output must not abort the local gate."""
+    repo = _git_repo(tmp_path)
+    raw_name = b"bad_\xff.py"
+    raw_path = os.path.join(os.fsencode(repo), b"src", raw_name)
+    descriptor = os.open(raw_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        os.write(descriptor, b"uncovered = 1\n")
+    finally:
+        os.close(descriptor)
+
+    rule = build(_cfg(), repo_root=repo)
+
+    decoded_name = raw_name.decode("utf-8", "surrogateescape")
+    assert rule._changed_lines()[f"src/{decoded_name}"] == {1}
 
 
 def test_ignored_untracked_source_does_not_change_the_ci_equivalent_tree(tmp_path: Path) -> None:
