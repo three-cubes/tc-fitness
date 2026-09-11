@@ -1,0 +1,170 @@
+"""Subprocess-level tests for the tc-fitness-runtime-contract executable."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+from tc_fitness.core_checks._runtime_contracts import CONTRACT_SCHEMA, EVIDENCE_SCHEMA, canonical_json_bytes
+
+
+def _registry() -> dict[str, object]:
+    return {
+        "schema": CONTRACT_SCHEMA,
+        "environments": {
+            "prod": {
+                "targets": {
+                    "hermes": {
+                        "filesystem": {},
+                        "access": {},
+                        "deployment": {},
+                        "evidence": {},
+                    }
+                }
+            }
+        },
+    }
+
+
+def _run(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [sys.executable, "-m", "tc_fitness.runtime_contract", *args],
+        check=False,
+        capture_output=True,
+    )
+
+
+def test_resolve_and_digest_write_canonical_results(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_bytes(canonical_json_bytes(_registry()))
+    resolved = tmp_path / "resolved.json"
+    digest_result = tmp_path / "digest.json"
+
+    result = _run(
+        "resolve",
+        "--contract",
+        str(registry),
+        "--environment",
+        "prod",
+        "--target",
+        "hermes",
+        "--output",
+        str(resolved),
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert resolved.read_bytes() == canonical_json_bytes(json.loads(resolved.read_bytes()))
+
+    result = _run(
+        "digest",
+        "--contract",
+        str(registry),
+        "--environment",
+        "prod",
+        "--target",
+        "hermes",
+        "--output",
+        str(digest_result),
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert json.loads(digest_result.read_bytes()) == {
+        "contract_digest": "sha256:" + hashlib.sha256(resolved.read_bytes()).hexdigest()
+    }
+
+
+def test_verify_evidence_accepts_independent_identity_values(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_bytes(canonical_json_bytes(_registry()))
+    resolved = tmp_path / "resolved.json"
+    assert (
+        _run(
+            "resolve",
+            "--contract",
+            str(registry),
+            "--environment",
+            "prod",
+            "--target",
+            "hermes",
+            "--output",
+            str(resolved),
+        ).returncode
+        == 0
+    )
+    source_sha = "a" * 40
+    image_digest = "sha256:" + "b" * 64
+    evidence = {
+        "schema": EVIDENCE_SCHEMA,
+        "contract_digest": "sha256:" + hashlib.sha256(resolved.read_bytes()).hexdigest(),
+        "source_sha": source_sha,
+        "image_digest": image_digest,
+        "host_id": "vm-1",
+        "runtime_user": "openclaw",
+        "run_id": 1,
+        "attempt_id": 1,
+        "captured_at": datetime.now(UTC).isoformat(),
+        "checks": [
+            {
+                "id": "runtime-probe",
+                "status": "passed",
+                "observation": {"kind": "process", "state": "healthy"},
+            }
+        ],
+        "artifacts": [],
+    }
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_bytes(canonical_json_bytes(evidence))
+    output = tmp_path / "verification.json"
+
+    result = _run(
+        "verify-evidence",
+        "--contract",
+        str(registry),
+        "--environment",
+        "prod",
+        "--target",
+        "hermes",
+        "--evidence",
+        str(evidence_path),
+        "--expected-source-sha",
+        source_sha,
+        "--expected-image-digest",
+        image_digest,
+        "--expected-host-id",
+        "vm-1",
+        "--expected-runtime-user",
+        "openclaw",
+        "--required-check",
+        "runtime-probe",
+        "--max-age-seconds",
+        "300",
+        "--output",
+        str(output),
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert json.loads(output.read_bytes()) == {"findings": [], "valid": True}
+
+
+def test_cli_returns_one_and_writes_findings_for_bad_input(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"schema":"wrong"}', encoding="utf-8")
+    output = tmp_path / "result.json"
+    result = _run(
+        "resolve",
+        "--contract",
+        str(bad),
+        "--environment",
+        "prod",
+        "--target",
+        "hermes",
+        "--output",
+        str(output),
+    )
+    assert result.returncode == 1
+    payload = json.loads(output.read_bytes())
+    assert payload["valid"] is False
+    assert payload["findings"][0]["fix"]
+    assert payload["findings"][0]["next"]
+    assert payload["findings"][0]["run"]

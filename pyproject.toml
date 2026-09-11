@@ -29,6 +29,7 @@ dependencies = []
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and
 # CI's reusable workflow invokes the same binary — one definition of the gate.
 tc-fitness = "tc_fitness.gate:main"
+tc-fitness-runtime-contract = "tc_fitness.runtime_contract:main"
 
 [project.optional-dependencies]
 yaml = ["PyYAML>=6.0"]
@@ -156,8 +157,11 @@ ruff format --check \
   tests/test_gate.py tests/test_gate_config.py \
   src/tc_fitness/baseline.py src/tc_fitness/fitness_rule.py \
   src/tc_fitness/keystone.py src/tc_fitness/core_checks/ \
+  src/tc_fitness/runtime_contract.py \
   tests/test_baseline.py tests/test_fitness_rule.py \
   tests/test_keystone.py tests/_core_check_assertions.py \
+  tests/test_runtime_contracts.py tests/test_runtime_contract_cli.py \
+  tests/test_core_runtime_evidence_contract.py \
   tests/test_core_no_duplicate_string.py \
   tests/test_core_registry_consistency.py \
   tests/test_core_security_freshness_design_law.py \

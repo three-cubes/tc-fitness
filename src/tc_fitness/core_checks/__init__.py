@@ -189,6 +189,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:pattern_chokepoint",
     "core:posix_path_serialisation",
     "core:readme_resolver_coverage",
+    "core:runtime_evidence_contract",
     "core:schema_conformance",
     "core:script_help_smoke",
     "core:shellcheck_disable_with_reason",
