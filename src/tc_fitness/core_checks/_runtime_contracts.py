@@ -23,6 +23,7 @@ EVIDENCE_SCHEMA = "tc-fitness/runtime-evidence/v1"
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _PATH_IDENTITY_SEGMENT_RE = re.compile(r"\{[A-Za-z][A-Za-z0-9_-]*\}\Z")
 _MAX_DOCUMENT_DEPTH = 100
+_MAX_ARRAY_INDEX_TEXT = str(sys.maxsize)
 
 _INTEGER_FIELDS = frozenset(
     {
@@ -109,18 +110,24 @@ def is_path_identity_segment(component: str) -> bool:
 
 
 def is_component_pattern_prefix(parent: tuple[str, ...], child: tuple[str, ...]) -> bool:
-    """Return whether a literal/wildcard component pattern can contain another."""
+    """Return whether every path matched by ``child`` is contained by ``parent``."""
     if len(parent) > len(child):
         return False
     return all(
-        left == right or is_path_identity_segment(left) or is_path_identity_segment(right)
+        left == right or is_path_identity_segment(left)
         for left, right in zip(parent, child[: len(parent)], strict=True)
     )
 
 
 def component_pattern_paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
     """Return whether two component patterns can identify nested physical paths."""
-    return is_component_pattern_prefix(left, right) or is_component_pattern_prefix(right, left)
+    common_length = min(len(left), len(right))
+    return all(
+        left_component == right_component
+        or is_path_identity_segment(left_component)
+        or is_path_identity_segment(right_component)
+        for left_component, right_component in zip(left[:common_length], right[:common_length], strict=True)
+    )
 
 
 def is_integer_identity(value: object) -> bool:
@@ -637,6 +644,20 @@ def _select_external_value(
             value = value[component]
             continue
         if isinstance(value, list) and component.isascii() and component.isdecimal():
+            if (
+                (len(component) > 1 and component.startswith("0"))
+                or len(component) > len(_MAX_ARRAY_INDEX_TEXT)
+                or (len(component) == len(_MAX_ARRAY_INDEX_TEXT) and component > _MAX_ARRAY_INDEX_TEXT)
+            ):
+                return None, (
+                    _finding(
+                        source,
+                        pointer,
+                        "invalid-external-pointer",
+                        "external reference pointer contains a non-canonical or unbounded array index",
+                        "use a canonical decimal array index without leading zeroes",
+                    ),
+                )
             index = int(component)
             if index < len(value):
                 value = value[index]

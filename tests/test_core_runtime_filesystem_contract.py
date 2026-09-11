@@ -30,6 +30,7 @@ def _filesystem() -> dict[str, object]:
             "profile": {
                 "kind": "profile",
                 "root": "/hermes-home/profiles/{profile}",
+                "physical_namespace": "container",
             },
         },
         "roots": {
@@ -122,6 +123,30 @@ def _contract() -> dict[str, object]:
         "environment": "prod",
         "target": "service",
         "filesystem": _filesystem(),
+    }
+
+
+def _minimal_contract(
+    *,
+    namespaces: dict[str, object],
+    roots: dict[str, object],
+    mounts: list[object] | None = None,
+    symlinks: list[object] | None = None,
+    required_executables: list[object] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema": CONTRACT_SCHEMA,
+        "environment": "prod",
+        "target": "service",
+        "filesystem": {
+            "namespaces": namespaces,
+            "roots": roots,
+            "mounts": mounts or [],
+            "aliases": [],
+            "symlinks": symlinks or [],
+            "allowed_nested_roots": [],
+            "required_executables": required_executables or [],
+        },
     }
 
 
@@ -321,6 +346,7 @@ def test_cross_namespace_component_prefix_requires_reasoned_allowance(
                 "profile": {
                     "kind": "profile",
                     "root": "/hermes-home/profiles/{profile}",
+                    "physical_namespace": "container",
                 },
             },
             "roots": {
@@ -351,6 +377,274 @@ def test_cross_namespace_component_prefix_requires_reasoned_allowance(
     assert "nested-root-overlap" in error
     assert "/hermes-home/profiles/" in error
     assert "/hermes-home/profiles/consultant-delivery-consultant/USER.md" in error
+
+
+def test_literal_namespace_root_does_not_contain_child_identity_wildcard(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/safe"}},
+        roots={
+            "tenant-data": {
+                "namespace": "container",
+                "path": "/{tenant}/data",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "namespace-escape" in capsys.readouterr().err
+
+
+def test_independent_container_namespaces_may_reuse_absolute_paths(tmp_path: Path) -> None:
+    contract = _minimal_contract(
+        namespaces={
+            "cluster-a": {"kind": "container", "root": "/"},
+            "cluster-b": {"kind": "container", "root": "/"},
+        },
+        roots={
+            "a-data": {
+                "namespace": "cluster-a",
+                "path": "/safe/data",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+            "b-data": {
+                "namespace": "cluster-b",
+                "path": "/safe/data",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+        },
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 0
+
+
+@pytest.mark.parametrize(
+    ("namespaces", "expected_code"),
+    [
+        (
+            {"container": {"kind": "container", "root": "/", "physical_namespace": []}},
+            "invalid-physical-namespace",
+        ),
+        (
+            {
+                "container": {
+                    "kind": "container",
+                    "root": "/",
+                    "physical_namespace": "missing",
+                }
+            },
+            "undefined-physical-namespace",
+        ),
+        (
+            {
+                "cluster-a": {
+                    "kind": "container",
+                    "root": "/",
+                    "physical_namespace": "cluster-b",
+                },
+                "cluster-b": {
+                    "kind": "container",
+                    "root": "/",
+                    "physical_namespace": "cluster-a",
+                },
+            },
+            "physical-namespace-cycle",
+        ),
+    ],
+)
+def test_invalid_physical_namespace_relationships_produce_structured_findings(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    namespaces: dict[str, object],
+    expected_code: str,
+) -> None:
+    contract = _minimal_contract(namespaces=namespaces, roots={})
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert expected_code in capsys.readouterr().err
+
+
+def test_explicitly_shared_physical_namespaces_detect_duplicate_root_paths(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={
+            "container": {"kind": "container", "root": "/"},
+            "profile": {
+                "kind": "profile",
+                "root": "/safe/{profile}",
+                "physical_namespace": "container",
+            },
+        },
+        roots={
+            "container-data": {
+                "namespace": "container",
+                "path": "/safe/alice",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+            "profile-data": {
+                "namespace": "profile",
+                "path": "/safe/{profile}",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+        },
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "duplicate-root-path" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("surface", "expected_code"),
+    [
+        ("mount", "duplicate-mount-destination"),
+        ("symlink", "duplicate-symlink-source"),
+        ("executable", "duplicate-executable"),
+    ],
+)
+def test_identity_pattern_and_literal_paths_collide_within_one_namespace(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    surface: str,
+    expected_code: str,
+) -> None:
+    roots: dict[str, object] = {
+        "source-a": {
+            "namespace": "container",
+            "path": "/sources/a",
+            "kind": "directory",
+            "lifecycle": "persistent",
+        },
+        "source-b": {
+            "namespace": "container",
+            "path": "/sources/b",
+            "kind": "directory",
+            "lifecycle": "persistent",
+        },
+        "target-a": {
+            "namespace": "container",
+            "path": "/targets/a",
+            "kind": "directory",
+            "lifecycle": "persistent",
+        },
+        "target-b": {
+            "namespace": "container",
+            "path": "/targets/b",
+            "kind": "directory",
+            "lifecycle": "persistent",
+        },
+    }
+    mounts: list[object] = []
+    symlinks: list[object] = []
+    executables: list[object] = []
+    if surface == "mount":
+        mounts = [
+            {
+                "id": "pattern",
+                "source_root": "source-a",
+                "target_namespace": "container",
+                "target_path": "/safe/{profile}",
+                "mode": "rw",
+            },
+            {
+                "id": "literal",
+                "source_root": "source-b",
+                "target_namespace": "container",
+                "target_path": "/safe/alice",
+                "mode": "ro",
+            },
+        ]
+    elif surface == "symlink":
+        symlinks = [
+            {
+                "id": "pattern",
+                "namespace": "container",
+                "path": "/safe/{profile}",
+                "target": "/targets/a",
+            },
+            {
+                "id": "literal",
+                "namespace": "container",
+                "path": "/safe/alice",
+                "target": "/targets/b",
+            },
+        ]
+    else:
+        executables = [
+            {"id": "pattern", "namespace": "container", "path": "/safe/{profile}"},
+            {"id": "literal", "namespace": "container", "path": "/safe/alice"},
+        ]
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots=roots,
+        mounts=mounts,
+        symlinks=symlinks,
+        required_executables=executables,
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert expected_code in capsys.readouterr().err
+
+
+def test_mount_collisions_follow_explicit_physical_namespace_relationships(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={
+            "container": {"kind": "container", "root": "/"},
+            "profile": {
+                "kind": "profile",
+                "root": "/safe/{profile}",
+                "physical_namespace": "container",
+            },
+        },
+        roots={
+            "source-a": {
+                "namespace": "container",
+                "path": "/sources/a",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+            "source-b": {
+                "namespace": "container",
+                "path": "/sources/b",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+        },
+        mounts=[
+            {
+                "id": "container-target",
+                "source_root": "source-a",
+                "target_namespace": "container",
+                "target_path": "/safe/alice",
+                "mode": "rw",
+            },
+            {
+                "id": "profile-target",
+                "source_root": "source-b",
+                "target_namespace": "profile",
+                "target_path": "/safe/{profile}",
+                "mode": "ro",
+            },
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "duplicate-mount-destination" in capsys.readouterr().err
 
 
 def test_catalogue_dispatches_configured_filesystem_check(
@@ -435,6 +729,79 @@ def test_symlink_cycle_is_rejected(tmp_path: Path, capsys: pytest.CaptureFixture
     assert "symlink-cycle" in capsys.readouterr().err
 
 
+def test_symlink_chain_that_enters_a_cycle_reports_its_entry_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={},
+        symlinks=[
+            {
+                "id": "entry",
+                "namespace": "container",
+                "path": "/links/entry",
+                "target": "/links/first",
+            },
+            {
+                "id": "first",
+                "namespace": "container",
+                "path": "/links/first",
+                "target": "/links/second",
+            },
+            {
+                "id": "second",
+                "namespace": "container",
+                "path": "/links/second",
+                "target": "/links/first",
+            },
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    error = capsys.readouterr().err
+    assert "symlink-cycle" in error
+    assert "/links/entry" in error
+
+
+@pytest.mark.parametrize(
+    ("source_path", "target_path"),
+    [
+        ("/safe/data", "/safe/data/child"),
+        ("/safe/{profile}", "/safe/alice/child"),
+    ],
+)
+def test_symlink_source_ancestor_of_its_target_is_a_cycle(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    source_path: str,
+    target_path: str,
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "target": {
+                "namespace": "container",
+                "path": target_path,
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+        symlinks=[
+            {
+                "id": "expanding-link",
+                "namespace": "container",
+                "path": source_path,
+                "target": target_path,
+            }
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "symlink-cycle" in capsys.readouterr().err
+
+
 def test_symlink_missing_declared_target_is_rejected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -466,6 +833,45 @@ def test_duplicate_mount_destination_is_rejected(tmp_path: Path, capsys: pytest.
 
     assert _module().build(_config(), repo_root=tmp_path).run() == 1
     assert "duplicate-mount-destination" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "bad_value", "expected_code"),
+    [
+        ("namespace", "kind", [], "invalid-namespace-kind"),
+        ("root", "kind", {}, "invalid-root-kind"),
+        ("mount", "mode", [], "invalid-mount-mode"),
+    ],
+)
+def test_enum_container_shapes_produce_structured_findings(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    section: str,
+    field: str,
+    bad_value: object,
+    expected_code: str,
+) -> None:
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    if section == "namespace":
+        namespaces = filesystem["namespaces"]
+        assert isinstance(namespaces, dict)
+        declaration = namespaces["container"]
+    elif section == "root":
+        roots = filesystem["roots"]
+        assert isinstance(roots, dict)
+        declaration = roots["vault"]
+    else:
+        mounts = filesystem["mounts"]
+        assert isinstance(mounts, list)
+        declaration = mounts[0]
+    assert isinstance(declaration, dict)
+    declaration[field] = bad_value
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert expected_code in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -539,6 +945,38 @@ def test_partial_or_conflicting_live_observation_is_rejected(
 
     assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
     assert code in capsys.readouterr().err
+
+
+def test_observation_boolean_does_not_accept_integer_truthiness(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    evidence = _evidence()
+    filesystem = evidence["filesystem"]
+    assert isinstance(filesystem, dict)
+    roots = filesystem["roots"]
+    assert isinstance(roots, list)
+    root = roots[0]
+    assert isinstance(root, dict)
+    root["exists"] = 1
+    _seed(tmp_path, _contract(), evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
+    assert "root-observation-mismatch" in capsys.readouterr().err
+
+
+def test_observation_unknown_fields_are_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    evidence = _evidence()
+    filesystem = evidence["filesystem"]
+    assert isinstance(filesystem, dict)
+    roots = filesystem["roots"]
+    assert isinstance(roots, list)
+    root = roots[0]
+    assert isinstance(root, dict)
+    root["stale"] = False
+    _seed(tmp_path, _contract(), evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
+    assert "root-observation-unknown-field" in capsys.readouterr().err
 
 
 def test_external_registry_reference_is_resolved_by_public_cli(tmp_path: Path) -> None:
@@ -742,6 +1180,49 @@ def test_direct_resolution_supports_json_pointer_escapes_and_list_indices(tmp_pa
     assert findings == ()
     assert resolved is not None
     assert resolved["selection"] == {"id": "selected"}
+
+
+def test_external_pointer_rejects_unbounded_array_index_without_raising(tmp_path: Path) -> None:
+    (tmp_path / "external.json").write_bytes(canonical_json_bytes({"items": []}))
+    registry = {
+        "schema": CONTRACT_SCHEMA,
+        "external_references": {
+            "selected": {
+                "file": "external.json",
+                "pointer": f"/items/{'9' * 5000}",
+            }
+        },
+        "environments": {"prod": {"targets": {"service": {"selection": {"$external_ref": "selected"}}}}},
+    }
+
+    resolved, findings = resolve_contract(
+        registry,
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+
+    assert resolved is None
+    assert "invalid-external-pointer" in {finding.code for finding in findings}
+
+
+def test_external_pointer_rejects_noncanonical_array_index(tmp_path: Path) -> None:
+    (tmp_path / "external.json").write_bytes(canonical_json_bytes({"items": ["first"]}))
+    registry = {
+        "schema": CONTRACT_SCHEMA,
+        "external_references": {"selected": {"file": "external.json", "pointer": "/items/00"}},
+        "environments": {"prod": {"targets": {"service": {"selection": {"$external_ref": "selected"}}}}},
+    }
+
+    resolved, findings = resolve_contract(
+        registry,
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+
+    assert resolved is None
+    assert "invalid-external-pointer" in {finding.code for finding in findings}
 
 
 @pytest.mark.parametrize(

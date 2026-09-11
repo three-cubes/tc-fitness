@@ -43,6 +43,7 @@ class NamespaceDeclaration:
     kind: str
     root: str
     components: tuple[str, ...]
+    physical_namespace: str
 
 
 @dataclass(frozen=True)
@@ -270,10 +271,17 @@ def _parse_namespaces(
                 )
             )
             continue
-        _unknown_fields(raw, frozenset({"kind", "root"}), source=source, pointer=pointer, findings=findings)
+        _unknown_fields(
+            raw,
+            frozenset({"kind", "root", "physical_namespace"}),
+            source=source,
+            pointer=pointer,
+            findings=findings,
+        )
         kind = raw.get("kind")
         root = _path(raw.get("root"), source=source, pointer=f"{pointer}/root", findings=findings)
-        if kind not in _NAMESPACE_KINDS:
+        physical_namespace = raw.get("physical_namespace", identifier)
+        if not isinstance(kind, str) or kind not in _NAMESPACE_KINDS:
             findings.append(
                 _finding(
                     source,
@@ -283,9 +291,72 @@ def _parse_namespaces(
                     "set kind to the runtime boundary represented by this namespace",
                 )
             )
-        if root is not None and kind in _NAMESPACE_KINDS:
-            parsed.append(NamespaceDeclaration(identifier, cast(str, kind), root[0], root[1]))
-    return tuple(parsed)
+        if not _valid_id(physical_namespace):
+            findings.append(
+                _finding(
+                    source,
+                    f"{pointer}/physical_namespace",
+                    "invalid-physical-namespace",
+                    "physical_namespace must name one declared namespace",
+                    "reference the namespace that owns this physical filesystem",
+                )
+            )
+        if (
+            root is not None
+            and isinstance(kind, str)
+            and kind in _NAMESPACE_KINDS
+            and _valid_id(physical_namespace)
+        ):
+            parsed.append(
+                NamespaceDeclaration(
+                    identifier,
+                    kind,
+                    root[0],
+                    root[1],
+                    cast(str, physical_namespace),
+                )
+            )
+
+    by_id = {item.id: item for item in parsed}
+    normalised: list[NamespaceDeclaration] = []
+    for item in parsed:
+        current = item.id
+        visited: set[str] = set()
+        representative = item.id
+        while True:
+            if current in visited:
+                findings.append(
+                    _finding(
+                        source,
+                        f"/filesystem/namespaces/{_pointer_part(item.id)}/physical_namespace",
+                        "physical-namespace-cycle",
+                        f"physical namespace chain for {item.id!r} is cyclic",
+                        "point each shared namespace at one acyclic physical namespace owner",
+                    )
+                )
+                break
+            visited.add(current)
+            declaration = by_id.get(current)
+            if declaration is None:
+                findings.append(
+                    _finding(
+                        source,
+                        f"/filesystem/namespaces/{_pointer_part(item.id)}/physical_namespace",
+                        "undefined-physical-namespace",
+                        f"namespace {item.id!r} references undefined physical namespace {current!r}",
+                        "reference one declared namespace as the physical filesystem owner",
+                    )
+                )
+                break
+            target = declaration.physical_namespace
+            if target == current:
+                representative = current
+                break
+            current = target
+        normalised.append(
+            NamespaceDeclaration(item.id, item.kind, item.root, item.components, representative)
+        )
+    return tuple(normalised)
 
 
 def _parse_roots(
@@ -332,7 +403,7 @@ def _parse_roots(
                     "reference one declared filesystem namespace",
                 )
             )
-        if kind not in _ROOT_KINDS:
+        if not isinstance(kind, str) or kind not in _ROOT_KINDS:
             findings.append(
                 _finding(
                     source,
@@ -368,6 +439,7 @@ def _parse_roots(
             path is not None
             and isinstance(namespace, str)
             and namespace in namespaces
+            and isinstance(kind, str)
             and kind in _ROOT_KINDS
             and _valid_id(lifecycle)
         ):
@@ -377,7 +449,7 @@ def _parse_roots(
                     namespace,
                     path[0],
                     path[1],
-                    cast(str, kind),
+                    kind,
                     cast(str, lifecycle),
                 )
             )
@@ -396,7 +468,7 @@ def _parse_mounts(
     )
     parsed: list[MountDeclaration] = []
     seen: set[str] = set()
-    destinations: set[tuple[str, tuple[str, ...]]] = set()
+    destinations: list[tuple[str, tuple[str, ...]]] = []
     for index, raw in enumerate(records):
         pointer = f"/filesystem/mounts/{index}"
         identified = _record_id(raw, source=source, pointer=pointer, seen=seen, findings=findings)
@@ -439,7 +511,7 @@ def _parse_mounts(
                     "reference one declared filesystem namespace",
                 )
             )
-        if mode not in _MOUNT_MODES:
+        if not isinstance(mode, str) or mode not in _MOUNT_MODES:
             valid = False
             findings.append(
                 _finding(
@@ -463,8 +535,14 @@ def _parse_mounts(
                         "move the mount target beneath its declared namespace root",
                     )
                 )
-            destination = (namespace, target[1])
-            if destination in destinations:
+            physical_namespace = boundary.physical_namespace
+            destination = (physical_namespace, target[1])
+            if any(
+                existing_namespace == physical_namespace
+                and len(existing_components) == len(target[1])
+                and component_pattern_paths_overlap(existing_components, target[1])
+                for existing_namespace, existing_components in destinations
+            ):
                 valid = False
                 findings.append(
                     _finding(
@@ -475,7 +553,7 @@ def _parse_mounts(
                         "keep exactly one mount for each namespace destination",
                     )
                 )
-            destinations.add(destination)
+            destinations.append(destination)
         if valid and target is not None:
             parsed.append(
                 MountDeclaration(
@@ -590,7 +668,7 @@ def _parse_symlinks(
     )
     parsed: list[SymlinkDeclaration] = []
     seen: set[str] = set()
-    sources: set[tuple[str, tuple[str, ...]]] = set()
+    sources: list[tuple[str, tuple[str, ...]]] = []
     for index, raw in enumerate(records):
         pointer = f"/filesystem/symlinks/{index}"
         identified = _record_id(raw, source=source, pointer=pointer, seen=seen, findings=findings)
@@ -636,9 +714,15 @@ def _parse_symlinks(
                         "keep both symlink path and target inside their declared namespace",
                     )
                 )
-        if path is not None and isinstance(namespace, str):
-            source_key = (namespace, path[1])
-            if source_key in sources:
+        if path is not None and boundary is not None:
+            physical_namespace = boundary.physical_namespace
+            source_key = (physical_namespace, path[1])
+            if any(
+                existing_namespace == physical_namespace
+                and len(existing_components) == len(path[1])
+                and component_pattern_paths_overlap(existing_components, path[1])
+                for existing_namespace, existing_components in sources
+            ):
                 valid = False
                 findings.append(
                     _finding(
@@ -649,7 +733,7 @@ def _parse_symlinks(
                         "keep one symlink declaration for each source path",
                     )
                 )
-            sources.add(source_key)
+            sources.append(source_key)
         if valid and path is not None and target is not None:
             parsed.append(
                 SymlinkDeclaration(
@@ -776,7 +860,7 @@ def _parse_executables(
     )
     parsed: list[ExecutableDeclaration] = []
     seen: set[str] = set()
-    destinations: set[tuple[str, tuple[str, ...]]] = set()
+    destinations: list[tuple[str, tuple[str, ...]]] = []
     for index, raw in enumerate(records):
         pointer = f"/filesystem/required_executables/{index}"
         identified = _record_id(raw, source=source, pointer=pointer, seen=seen, findings=findings)
@@ -820,9 +904,15 @@ def _parse_executables(
                     "move the executable beneath its declared namespace root",
                 )
             )
-        if path is not None and isinstance(namespace, str):
-            destination = (namespace, path[1])
-            if destination in destinations:
+        if path is not None and boundary is not None:
+            physical_namespace = boundary.physical_namespace
+            destination = (physical_namespace, path[1])
+            if any(
+                existing_namespace == physical_namespace
+                and len(existing_components) == len(path[1])
+                and component_pattern_paths_overlap(existing_components, path[1])
+                for existing_namespace, existing_components in destinations
+            ):
                 valid = False
                 findings.append(
                     _finding(
@@ -833,7 +923,7 @@ def _parse_executables(
                         "keep one declaration for each required executable path",
                     )
                 )
-            destinations.add(destination)
+            destinations.append(destination)
         if valid and path is not None:
             parsed.append(ExecutableDeclaration(identifier, cast(str, namespace), path[0], path[1]))
     return tuple(parsed)
@@ -842,7 +932,10 @@ def _parse_executables(
 def _root_overlap_findings(contract: _FilesystemDeclarations, *, source: Path) -> list[ContractFinding]:
     findings: list[ContractFinding] = []
     allowed = {(item.parent, item.child) for item in contract.allowed_nested_roots}
+    physical_namespaces = {item.id: item.physical_namespace for item in contract.namespaces}
     for left, right in combinations(contract.roots, 2):
+        if physical_namespaces[left.namespace] != physical_namespaces[right.namespace]:
+            continue
         if not component_pattern_paths_overlap(left.components, right.components):
             continue
         if len(left.components) == len(right.components):
@@ -881,29 +974,52 @@ def _root_overlap_findings(contract: _FilesystemDeclarations, *, source: Path) -
 
 
 def _symlink_cycle_findings(contract: _FilesystemDeclarations, *, source: Path) -> list[ContractFinding]:
-    by_source = {(item.namespace, item.components): item for item in contract.symlinks}
+    def source_can_rewrite_target(
+        source_components: tuple[str, ...], target_components: tuple[str, ...]
+    ) -> bool:
+        return len(source_components) <= len(target_components) and component_pattern_paths_overlap(
+            source_components, target_components
+        )
+
+    edges = {
+        item.id: {
+            candidate.id
+            for candidate in contract.symlinks
+            if candidate.namespace == item.namespace
+            and source_can_rewrite_target(candidate.components, item.target_components)
+        }
+        for item in contract.symlinks
+    }
     findings: list[ContractFinding] = []
-    reported: set[str] = set()
     for start in contract.symlinks:
-        active: set[tuple[str, tuple[str, ...]]] = set()
-        current: SymlinkDeclaration | None = start
-        while current is not None:
-            key = (current.namespace, current.components)
-            if key in active:
-                if start.id not in reported:
-                    findings.append(
-                        _finding(
-                            source,
-                            "/filesystem/symlinks",
-                            "symlink-cycle",
-                            f"symlink chain beginning at {start.path!r} repeats a source node",
-                            "point the symlink chain at a non-symlink target inside the namespace",
-                        )
-                    )
-                    reported.add(start.id)
-                break
-            active.add(key)
-            current = by_source.get((current.namespace, current.target_components))
+        active = {start.id}
+        complete: set[str] = set()
+        stack = [(start.id, iter(edges[start.id]))]
+        cyclic = False
+        while stack and not cyclic:
+            current, targets = stack[-1]
+            try:
+                target = next(targets)
+            except StopIteration:
+                stack.pop()
+                active.remove(current)
+                complete.add(current)
+                continue
+            if target in active:
+                cyclic = True
+            elif target not in complete:
+                active.add(target)
+                stack.append((target, iter(edges[target])))
+        if cyclic:
+            findings.append(
+                _finding(
+                    source,
+                    "/filesystem/symlinks",
+                    "symlink-cycle",
+                    f"symlink chain beginning at {start.path!r} can rewrite back to its source",
+                    "point the symlink chain at a non-symlink target inside the namespace",
+                )
+            )
     return findings
 
 
@@ -1059,7 +1175,24 @@ def _compare_observations(
                 )
             )
             continue
-        mismatched = [field for field, value in expected.items() if actual.get(field) != value]
+        unknown_fields = sorted(set(actual) - set(expected))
+        if unknown_fields:
+            findings.append(
+                _finding(
+                    source,
+                    f"/filesystem/{collection}/{_pointer_part(identifier)}",
+                    f"{kind}-observation-unknown-field",
+                    f"live {kind} observation contains unknown fields: {', '.join(unknown_fields)}",
+                    "remove fields outside the versioned filesystem observation contract",
+                )
+            )
+        mismatched = [
+            field
+            for field, value in expected.items()
+            if field not in actual
+            or actual[field] != value
+            or (type(value) is bool and type(actual[field]) is not bool)
+        ]
         if mismatched:
             findings.append(
                 _finding(
