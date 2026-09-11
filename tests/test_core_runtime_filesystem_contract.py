@@ -764,6 +764,175 @@ def test_symlink_chain_that_enters_a_cycle_reports_its_entry_path(
     assert "/links/entry" in error
 
 
+def test_shared_physical_namespaces_form_one_symlink_cycle(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={
+            "a": {"kind": "container", "root": "/"},
+            "b": {
+                "kind": "profile",
+                "root": "/",
+                "physical_namespace": "a",
+            },
+        },
+        roots={
+            "a-target": {
+                "namespace": "a",
+                "path": "/b",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+            "b-target": {
+                "namespace": "b",
+                "path": "/a",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+        },
+        symlinks=[
+            {"id": "a-link", "namespace": "a", "path": "/a", "target": "/b"},
+            {"id": "b-link", "namespace": "b", "path": "/b", "target": "/a"},
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "symlink-cycle" in capsys.readouterr().err
+
+
+def test_shared_physical_namespace_accepts_cross_logical_symlink_target(tmp_path: Path) -> None:
+    contract = _minimal_contract(
+        namespaces={
+            "container": {"kind": "container", "root": "/"},
+            "profile": {
+                "kind": "profile",
+                "root": "/",
+                "physical_namespace": "container",
+            },
+        },
+        roots={
+            "target": {
+                "namespace": "container",
+                "path": "/target",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+        symlinks=[
+            {
+                "id": "profile-alias",
+                "namespace": "profile",
+                "path": "/alias",
+                "target": "/target",
+            }
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 0
+
+
+def test_symlink_resolution_preserves_suffixes_when_detecting_cycles(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "y": {
+                "namespace": "container",
+                "path": "/y",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+            "x-z": {
+                "namespace": "container",
+                "path": "/x/z",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+        },
+        symlinks=[
+            {"id": "x", "namespace": "container", "path": "/x", "target": "/y"},
+            {
+                "id": "y-z",
+                "namespace": "container",
+                "path": "/y/z",
+                "target": "/x/z",
+            },
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "symlink-cycle" in capsys.readouterr().err
+
+
+def test_symlink_declaration_budget_bounds_resolution_work(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    count = 257
+    roots = {
+        f"target-{index}": {
+            "namespace": "container",
+            "path": f"/targets/{index}",
+            "kind": "directory",
+            "lifecycle": "persistent",
+        }
+        for index in range(count)
+    }
+    symlinks = [
+        {
+            "id": f"link-{index}",
+            "namespace": "container",
+            "path": f"/links/{index}",
+            "target": f"/targets/{index}",
+        }
+        for index in range(count)
+    ]
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots=roots,
+        symlinks=symlinks,
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "filesystem-work-limit" in capsys.readouterr().err
+
+
+def test_ambiguous_symlink_patterns_have_a_bounded_resolution_state_space(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layers = 13
+    symlinks = [
+        {
+            "id": f"layer-{layer}-{identity}",
+            "namespace": "container",
+            "path": f"/layer-{layer}/{identity}",
+            "target": f"/layer-{layer + 1}/{{identity}}" if layer + 1 < layers else "/end",
+        }
+        for layer in range(layers)
+        for identity in ("a", "b")
+    ]
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "end": {
+                "namespace": "container",
+                "path": "/end",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+        symlinks=symlinks,
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "filesystem-work-limit" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("source_path", "target_path"),
     [
@@ -977,6 +1146,19 @@ def test_observation_unknown_fields_are_rejected(tmp_path: Path, capsys: pytest.
 
     assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
     assert "root-observation-unknown-field" in capsys.readouterr().err
+
+
+def test_unknown_observation_collection_is_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    evidence = _evidence()
+    filesystem = evidence["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["old_executables"] = []
+    _seed(tmp_path, _contract(), evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
+    assert "unknown-filesystem-observation-collection" in capsys.readouterr().err
 
 
 def test_external_registry_reference_is_resolved_by_public_cli(tmp_path: Path) -> None:

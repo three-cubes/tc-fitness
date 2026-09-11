@@ -24,6 +24,8 @@ from tc_fitness.lib import remediation as _remediation
 _NAMESPACE_KINDS = frozenset({"host", "container", "profile"})
 _ROOT_KINDS = frozenset({"directory", "file"})
 _MOUNT_MODES = frozenset({"ro", "rw"})
+_MAX_SYMLINK_DECLARATIONS = 64
+_MAX_SYMLINK_RESOLUTION_STATES = 4_096
 
 REMEDIATION = _remediation(
     fix=(
@@ -666,6 +668,17 @@ def _parse_symlinks(
     records = _sequence_section(
         filesystem.get("symlinks"), source=source, pointer="/filesystem/symlinks", findings=findings
     )
+    if len(records) > _MAX_SYMLINK_DECLARATIONS:
+        findings.append(
+            _finding(
+                source,
+                "/filesystem/symlinks",
+                "filesystem-work-limit",
+                f"symlink declarations exceed the {_MAX_SYMLINK_DECLARATIONS}-record validation limit",
+                "split the runtime boundary or reduce its declared symlink surface",
+            )
+        )
+        return ()
     parsed: list[SymlinkDeclaration] = []
     seen: set[str] = set()
     sources: list[tuple[str, tuple[str, ...]]] = []
@@ -974,42 +987,62 @@ def _root_overlap_findings(contract: _FilesystemDeclarations, *, source: Path) -
 
 
 def _symlink_cycle_findings(contract: _FilesystemDeclarations, *, source: Path) -> list[ContractFinding]:
-    def source_can_rewrite_target(
-        source_components: tuple[str, ...], target_components: tuple[str, ...]
-    ) -> bool:
-        return len(source_components) <= len(target_components) and component_pattern_paths_overlap(
-            source_components, target_components
-        )
+    physical_namespaces = {item.id: item.physical_namespace for item in contract.namespaces}
+    links_by_namespace: dict[str, list[SymlinkDeclaration]] = {}
+    for item in contract.symlinks:
+        physical_namespace = physical_namespaces[item.namespace]
+        links_by_namespace.setdefault(physical_namespace, []).append(item)
 
-    edges = {
-        item.id: {
-            candidate.id
-            for candidate in contract.symlinks
-            if candidate.namespace == item.namespace
-            and source_can_rewrite_target(candidate.components, item.target_components)
-        }
-        for item in contract.symlinks
-    }
     findings: list[ContractFinding] = []
+    explored_states = 0
     for start in contract.symlinks:
-        active = {start.id}
-        complete: set[str] = set()
-        stack = [(start.id, iter(edges[start.id]))]
+        physical_namespace = physical_namespaces[start.namespace]
+        candidates = links_by_namespace[physical_namespace]
+        pending: list[tuple[tuple[str, ...], frozenset[str]]] = [(start.target_components, frozenset())]
+        seen: set[tuple[tuple[str, ...], frozenset[str]]] = set()
         cyclic = False
-        while stack and not cyclic:
-            current, targets = stack[-1]
-            try:
-                target = next(targets)
-            except StopIteration:
-                stack.pop()
-                active.remove(current)
-                complete.add(current)
+        while pending and not cyclic:
+            current_path, applied = pending.pop()
+            state = (current_path, applied)
+            if state in seen:
                 continue
-            if target in active:
-                cyclic = True
-            elif target not in complete:
-                active.add(target)
-                stack.append((target, iter(edges[target])))
+            seen.add(state)
+            explored_states += 1
+            if explored_states > _MAX_SYMLINK_RESOLUTION_STATES:
+                return [
+                    _finding(
+                        source,
+                        "/filesystem/symlinks",
+                        "filesystem-work-limit",
+                        "symlink resolution exceeded its bounded state budget",
+                        "reduce ambiguous wildcard or chained symlink declarations",
+                    )
+                ]
+            matches = [
+                candidate
+                for candidate in candidates
+                if len(candidate.components) <= len(current_path)
+                and component_pattern_paths_overlap(
+                    candidate.components,
+                    current_path[: len(candidate.components)],
+                )
+            ]
+            if not matches:
+                continue
+            earliest_component = min(len(candidate.components) for candidate in matches)
+            for candidate in matches:
+                if len(candidate.components) != earliest_component:
+                    continue
+                if candidate.id in applied:
+                    cyclic = True
+                    break
+                suffix = current_path[len(candidate.components) :]
+                pending.append(
+                    (
+                        (*candidate.target_components, *suffix),
+                        applied | {candidate.id},
+                    )
+                )
         if cyclic:
             findings.append(
                 _finding(
@@ -1024,11 +1057,12 @@ def _symlink_cycle_findings(contract: _FilesystemDeclarations, *, source: Path) 
 
 
 def _symlink_target_findings(contract: _FilesystemDeclarations, *, source: Path) -> list[ContractFinding]:
-    declared_targets = {
-        *((item.namespace, item.components) for item in contract.roots),
-        *((item.namespace, item.components) for item in contract.aliases),
-        *((item.namespace, item.components) for item in contract.symlinks),
-    }
+    physical_namespaces = {item.id: item.physical_namespace for item in contract.namespaces}
+    declared_targets = [
+        *((physical_namespaces[item.namespace], item.components) for item in contract.roots),
+        *((physical_namespaces[item.namespace], item.components) for item in contract.aliases),
+        *((physical_namespaces[item.namespace], item.components) for item in contract.symlinks),
+    ]
     return [
         _finding(
             source,
@@ -1038,7 +1072,12 @@ def _symlink_target_findings(contract: _FilesystemDeclarations, *, source: Path)
             "declare the target path in this namespace or correct the symlink target",
         )
         for item in contract.symlinks
-        if (item.namespace, item.target_components) not in declared_targets
+        if not any(
+            target_namespace == physical_namespaces[item.namespace]
+            and len(target_components) == len(item.target_components)
+            and component_pattern_paths_overlap(target_components, item.target_components)
+            for target_namespace, target_components in declared_targets
+        )
     ]
 
 
@@ -1235,6 +1274,7 @@ def _observation_findings(
             )
         ]
     observations = cast(Mapping[str, object], observed)
+    allowed_collections = frozenset({"roots", "mounts", "aliases", "symlinks", "executables"})
     roots = {
         item.id: {
             "id": item.id,
@@ -1288,7 +1328,16 @@ def _observation_findings(
         }
         for item in contract.required_executables
     }
-    findings: list[ContractFinding] = []
+    findings = [
+        _finding(
+            source,
+            f"/filesystem/{_pointer_part(collection)}",
+            "unknown-filesystem-observation-collection",
+            f"filesystem evidence contains unknown observation collection {collection!r}",
+            "remove collections outside the versioned filesystem evidence contract",
+        )
+        for collection in sorted(set(observations) - allowed_collections)
+    ]
     for kind, declarations in (
         ("root", roots),
         ("mount", mounts),
