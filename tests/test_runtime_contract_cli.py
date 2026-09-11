@@ -140,6 +140,14 @@ def test_verify_evidence_accepts_independent_identity_values(tmp_path: Path) -> 
         "vm-1",
         "--expected-runtime-user",
         "openclaw",
+        "--expected-deployment-id",
+        "deploy-20260911-001",
+        "--expected-configuration-identity",
+        "sha256:" + "c" * 64,
+        "--expected-run-id",
+        "1",
+        "--expected-attempt-id",
+        "1",
         "--required-check",
         "runtime-probe",
         "--max-age-seconds",
@@ -304,6 +312,14 @@ def test_verify_cli_rejects_missing_receipt_execution_identity(tmp_path: Path) -
         "vm-1",
         "--expected-runtime-user",
         "openclaw",
+        "--expected-deployment-id",
+        "deploy-20260911-001",
+        "--expected-configuration-identity",
+        "sha256:" + "c" * 64,
+        "--expected-run-id",
+        "1",
+        "--expected-attempt-id",
+        "1",
         "--max-age-seconds",
         "300",
         "--output",
@@ -314,3 +330,78 @@ def test_verify_cli_rejects_missing_receipt_execution_identity(tmp_path: Path) -
         finding["code"] == "missing-receipt-identity"
         for finding in json.loads(output.read_bytes())["findings"]
     )
+
+
+def test_verify_cli_rejects_receipt_from_an_earlier_attempt(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_bytes(canonical_json_bytes(_registry()))
+    resolved = tmp_path / "resolved.json"
+    assert (
+        _run(
+            "resolve",
+            "--contract",
+            str(registry),
+            "--environment",
+            "prod",
+            "--target",
+            "hermes",
+            "--output",
+            str(resolved),
+        ).returncode
+        == 0
+    )
+    evidence = {
+        "schema": EVIDENCE_SCHEMA,
+        "contract_digest": "sha256:" + hashlib.sha256(resolved.read_bytes()).hexdigest(),
+        "source_sha": "a" * 40,
+        "image_digest": "sha256:" + "b" * 64,
+        "host_id": "vm-1",
+        "runtime_user": "openclaw",
+        "deployment_id": "deploy-current",
+        "configuration_identity": "sha256:" + "c" * 64,
+        "run_id": 10,
+        "attempt_id": 1,
+        "captured_at": datetime.now(UTC).isoformat(),
+        "checks": [],
+        "artifacts": [],
+    }
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_bytes(canonical_json_bytes(evidence))
+    output = tmp_path / "verification.json"
+
+    result = _run(
+        "verify-evidence",
+        "--contract",
+        str(registry),
+        "--environment",
+        "prod",
+        "--target",
+        "hermes",
+        "--evidence",
+        str(evidence_path),
+        "--expected-source-sha",
+        "a" * 40,
+        "--expected-image-digest",
+        "sha256:" + "b" * 64,
+        "--expected-host-id",
+        "vm-1",
+        "--expected-runtime-user",
+        "openclaw",
+        "--expected-deployment-id",
+        "deploy-current",
+        "--expected-configuration-identity",
+        "sha256:" + "c" * 64,
+        "--expected-run-id",
+        "10",
+        "--expected-attempt-id",
+        "2",
+        "--max-age-seconds",
+        "300",
+        "--output",
+        str(output),
+    )
+
+    assert result.returncode == 1
+    assert {finding["code"] for finding in json.loads(output.read_bytes())["findings"]} == {
+        "attempt-id-mismatch"
+    }

@@ -23,9 +23,10 @@ from tc_fitness.lib import remediation as _remediation
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
-_IDENTITY_FIELDS = ("source_sha", "image_digest", "host_id", "runtime_user")
+_BASE_IDENTITY_FIELDS = ("source_sha", "image_digest", "host_id", "runtime_user")
 _STRING_RECEIPT_IDENTITIES = ("deployment_id", "configuration_identity")
 _INTEGER_RECEIPT_IDENTITIES = ("run_id", "attempt_id")
+_IDENTITY_FIELDS = (*_BASE_IDENTITY_FIELDS, *_STRING_RECEIPT_IDENTITIES, *_INTEGER_RECEIPT_IDENTITIES)
 _CHECK_STATUSES = frozenset({"passed", "failed", "skipped", "expected-denial"})
 _FAILURE_OBSERVATIONS = frozenset({"denied", "error", "failed", "failure", "false", "rejected", "unhealthy"})
 
@@ -51,9 +52,9 @@ def _expected_identity_findings(
     source: Path,
 ) -> list[ContractFinding]:
     findings: list[ContractFinding] = []
-    for field in _IDENTITY_FIELDS:
+    for field in (*_BASE_IDENTITY_FIELDS, *_STRING_RECEIPT_IDENTITIES):
         value = expected_identity.get(field)
-        if not isinstance(value, str) or not value:
+        if not isinstance(value, str) or not value.strip():
             findings.append(
                 _finding(
                     source,
@@ -61,6 +62,18 @@ def _expected_identity_findings(
                     "missing-expected-identity",
                     f"independent expected {field} is required",
                     f"supply expected {field} outside the evidence document",
+                )
+            )
+    for field in _INTEGER_RECEIPT_IDENTITIES:
+        value = expected_identity.get(field)
+        if not is_integer_identity(value):
+            findings.append(
+                _finding(
+                    source,
+                    f"/expected_identity/{field}",
+                    "invalid-expected-identity",
+                    f"independent expected {field} must be a non-negative integer, not a boolean",
+                    f"supply expected {field} outside the evidence document as an integer",
                 )
             )
     source_sha = expected_identity.get("source_sha")
@@ -98,7 +111,12 @@ def _identity_findings(
     for field in _IDENTITY_FIELDS:
         expected = expected_identity.get(field)
         actual = evidence.get(field)
-        if isinstance(expected, str) and expected and actual != expected:
+        expected_is_valid = (
+            isinstance(expected, str) and bool(expected.strip())
+            if field not in _INTEGER_RECEIPT_IDENTITIES
+            else is_integer_identity(expected)
+        )
+        if expected_is_valid and actual != expected:
             findings.append(
                 _finding(
                     source,
@@ -163,7 +181,7 @@ def _receipt_identity_findings(
     source: Path,
 ) -> list[ContractFinding]:
     findings: list[ContractFinding] = []
-    for field in (*_IDENTITY_FIELDS, *_STRING_RECEIPT_IDENTITIES, *_INTEGER_RECEIPT_IDENTITIES):
+    for field in _IDENTITY_FIELDS:
         if field not in evidence:
             findings.append(
                 _finding(
@@ -174,7 +192,7 @@ def _receipt_identity_findings(
                     f"record the observed {field} for this deployment attempt",
                 )
             )
-    for field in (*_IDENTITY_FIELDS, *_STRING_RECEIPT_IDENTITIES):
+    for field in (*_BASE_IDENTITY_FIELDS, *_STRING_RECEIPT_IDENTITIES):
         value = evidence.get(field)
         if field in evidence and (not isinstance(value, str) or not value.strip()):
             findings.append(
@@ -594,7 +612,11 @@ def _artifact_findings(evidence: Mapping[str, object], *, source: Path) -> list[
             )
             continue
         try:
-            actual = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+            hasher = hashlib.sha256()
+            with path.open("rb") as artifact_file:
+                for chunk in iter(lambda: artifact_file.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            actual = "sha256:" + hasher.hexdigest()
         except OSError:
             findings.append(
                 _finding(

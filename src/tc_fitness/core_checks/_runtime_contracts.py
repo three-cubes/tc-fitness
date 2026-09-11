@@ -168,6 +168,7 @@ def _shape_findings(
     pointer: str = "",
     depth: int = 0,
     active: set[int] | None = None,
+    seen: set[int] | None = None,
 ) -> list[ContractFinding]:
     if depth > _MAX_DOCUMENT_DEPTH:
         return [
@@ -182,6 +183,7 @@ def _shape_findings(
     findings: list[ContractFinding] = []
     if isinstance(value, (Mapping, list)):
         active_nodes = active if active is not None else set()
+        seen_nodes = seen if seen is not None else set()
         identity = id(value)
         if identity in active_nodes:
             return [
@@ -193,6 +195,17 @@ def _shape_findings(
                     "remove the cyclic YAML alias and declare an acyclic value",
                 )
             ]
+        if identity in seen_nodes:
+            return [
+                _finding(
+                    source,
+                    pointer or "/",
+                    "repeated-container-alias",
+                    "document aliases reuse a mapping or list and can expand without a safe bound",
+                    "replace repeated YAML container aliases with explicit values",
+                )
+            ]
+        seen_nodes.add(identity)
         active_nodes.add(identity)
         try:
             if isinstance(value, Mapping):
@@ -227,6 +240,7 @@ def _shape_findings(
                             pointer=child_pointer,
                             depth=depth + 1,
                             active=active_nodes,
+                            seen=seen_nodes,
                         )
                     )
             else:
@@ -238,6 +252,7 @@ def _shape_findings(
                             pointer=f"{pointer}/{index}",
                             depth=depth + 1,
                             active=active_nodes,
+                            seen=seen_nodes,
                         )
                     )
         finally:
@@ -413,7 +428,8 @@ def _load_strict_yaml(
         )
     shape = _shape_findings(value, source=source)
     structure_is_invalid = any(
-        finding.code in {"cyclic-document", "document-too-deep", "non-string-key"} for finding in shape
+        finding.code in {"cyclic-document", "document-too-deep", "non-string-key", "repeated-container-alias"}
+        for finding in shape
     )
     try:
         if not structure_is_invalid:
@@ -566,8 +582,7 @@ def resolve_contract(
     source: Path,
 ) -> tuple[Mapping[str, object] | None, tuple[ContractFinding, ...]]:
     """Resolve one environment and target, or accept an already-selected contract."""
-    environments = registry.get("environments")
-    if environments is None:
+    if "environments" not in registry:
         selected = dict(registry)
         for key, expected in (("environment", environment), ("target", target)):
             actual = selected.get(key)
@@ -585,6 +600,18 @@ def resolve_contract(
                 selected[key] = expected
         return selected, ()
 
+    environments = registry.get("environments")
+    if not isinstance(environments, Mapping):
+        return None, (
+            _finding(
+                source,
+                "/environments",
+                "invalid-environments",
+                "environments must be a mapping when the key is present",
+                "remove the key for a selected contract or declare an environment mapping",
+            ),
+        )
+
     if not isinstance(environment, str) or not environment or not isinstance(target, str) or not target:
         return None, (
             _finding(
@@ -595,7 +622,7 @@ def resolve_contract(
                 "supply non-empty environment and target values",
             ),
         )
-    if not isinstance(environments, Mapping) or not isinstance(environments.get(environment), Mapping):
+    if not isinstance(environments.get(environment), Mapping):
         return None, (
             _finding(
                 source,
@@ -760,6 +787,14 @@ class RuntimeContractRule(FitnessRule):
             return 0
         render_findings(findings)
         return 1
+
+    def establish_baseline(self) -> Path:
+        """Validate active runtime documents and reject grandfathering defects."""
+        findings = self.collect_findings()
+        if findings:
+            render_findings(findings)
+            raise RuntimeError("runtime contract findings cannot establish a baseline")
+        return super().establish_baseline()
 
 
 __all__ = [

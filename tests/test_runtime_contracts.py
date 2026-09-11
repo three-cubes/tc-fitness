@@ -170,6 +170,41 @@ def test_yaml_duplicate_keys_are_rejected(tmp_path: Path) -> None:
     assert {finding.code for finding in findings} == {"duplicate-key"}
 
 
+def test_yaml_repeated_container_aliases_are_rejected_before_expansion(tmp_path: Path) -> None:
+    pytest.importorskip("yaml")
+    aliases = ["seed: &level0 [value]"]
+    for level in range(1, 19):
+        aliases.append(f"level{level}: &level{level} [*level{level - 1}, *level{level - 1}]")
+    (tmp_path / "contract.yaml").write_text(
+        "schema: tc-fitness/runtime-contract/v1\n"
+        "environment: prod\n"
+        "target: hermes\n" + "\n".join(aliases) + "\n",
+        encoding="utf-8",
+    )
+
+    documents, findings = load_contract_documents(
+        {"contract_file": "contract.yaml"},
+        repo_root=tmp_path,
+    )
+
+    assert documents is None
+    assert {finding.code for finding in findings} == {"repeated-container-alias"}
+
+
+def test_explicit_null_environments_is_not_treated_as_a_selected_contract(tmp_path: Path) -> None:
+    registry = {"schema": CONTRACT_SCHEMA, "environments": None}
+
+    selected, findings = resolve_contract(
+        registry,
+        environment="prod",
+        target="hermes",
+        source=tmp_path / "contract.json",
+    )
+
+    assert selected is None
+    assert {finding.code for finding in findings} == {"invalid-environments"}
+
+
 def test_yaml_without_optional_dependency_is_actionable(tmp_path: Path) -> None:
     registry = tmp_path / "contract.yaml"
     registry.write_text(

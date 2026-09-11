@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from tc_fitness.catalogue import RuleEntry
+from tc_fitness.core_checks import run_core_check
 from tc_fitness.core_checks._runtime_contracts import CONTRACT_SCHEMA, EVIDENCE_SCHEMA, canonical_json_bytes
-from tc_fitness.core_checks.runtime_evidence_contract import build, validate_runtime_evidence
+from tc_fitness.core_checks.runtime_evidence_contract import (
+    RuntimeEvidenceContract,
+    build,
+    validate_runtime_evidence,
+)
+from tc_fitness.runner import run
 
 _NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 _SOURCE_SHA = "a" * 40
@@ -101,6 +109,10 @@ def _config() -> dict[str, object]:
         "expected_image_digest": _IMAGE_DIGEST,
         "expected_host_id": "vm-hermes-1",
         "expected_runtime_user": "openclaw",
+        "expected_deployment_id": "deploy-20260911-001",
+        "expected_configuration_identity": "sha256:" + "c" * 64,
+        "expected_run_id": 42,
+        "expected_attempt_id": 1,
         "required_checks": ["runtime-probe"],
         "max_age_seconds": 300,
     }
@@ -140,6 +152,60 @@ def test_baseline_cannot_suppress_bad_evidence(tmp_path: Path, capsys: object) -
     )
     assert build(_config(), repo_root=tmp_path).run() == 1
     assert "source-sha-mismatch" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+def test_establish_baseline_rejects_invalid_runtime_evidence(tmp_path: Path, capsys: object) -> None:
+    rule = build(
+        {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"},
+        repo_root=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="cannot establish a baseline"):
+        rule.establish_baseline()
+
+    assert "missing-file" in capsys.readouterr().err  # type: ignore[attr-defined]
+    assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
+
+
+def test_shared_core_helper_cannot_baseline_invalid_runtime_evidence(tmp_path: Path) -> None:
+    config = {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"}
+
+    with pytest.raises(RuntimeError, match="cannot establish a baseline"):
+        run_core_check(
+            RuntimeEvidenceContract,
+            ["--establish-baseline", "--repo-root", str(tmp_path)],
+            config=config,
+        )
+
+    assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
+
+
+def test_catalogue_runner_fails_invalid_runtime_evidence_baseline(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    rules = (
+        RuleEntry(
+            id="runtime-evidence-contract",
+            gate="runtime-evidence-contract",
+            check="core:runtime_evidence_contract",
+            summary="runtime evidence matches the deployment attempt",
+        ),
+    )
+    config = {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"}
+
+    verdict = run(
+        rules,
+        repo_root=tmp_path,
+        core_check_configs={"runtime_evidence_contract": config},
+        establish_baseline=True,
+    )
+
+    assert not verdict.ok
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "missing-file" in captured.err
+    assert "FAIL [runtime-evidence-contract]" in captured.out
+    assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
 
 
 def test_configured_duplicate_key_fails_actionably(tmp_path: Path, capsys: object) -> None:
@@ -317,6 +383,74 @@ def test_receipt_requires_complete_typed_identity_envelope(
     captured = capsys.readouterr().err  # type: ignore[attr-defined]
     assert "receipt-identity" in captured or "integer-id" in captured
     assert "fix:" in captured
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "code"),
+    [
+        ("deployment_id", "deploy-earlier", "deployment-id-mismatch"),
+        ("configuration_identity", "sha256:" + "d" * 64, "configuration-identity-mismatch"),
+        ("run_id", 41, "run-id-mismatch"),
+        ("attempt_id", 0, "attempt-id-mismatch"),
+    ],
+)
+def test_receipt_must_match_independently_expected_attempt_identity(
+    tmp_path: Path,
+    capsys: object,
+    field: str,
+    replacement: object,
+    code: str,
+) -> None:
+    _seed(tmp_path)
+    evidence = json.loads((tmp_path / "evidence.json").read_bytes())
+    evidence[field] = replacement
+    (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
+
+    assert build(_config(), repo_root=tmp_path).run() == 1
+    assert code in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("expected_deployment_id", None),
+        ("expected_configuration_identity", ""),
+        ("expected_run_id", "42"),
+        ("expected_attempt_id", True),
+    ],
+)
+def test_expected_attempt_identity_is_complete_and_typed(
+    tmp_path: Path,
+    capsys: object,
+    field: str,
+    bad_value: object,
+) -> None:
+    _seed(tmp_path)
+    config = _config()
+    config[field] = bad_value
+
+    assert build(config, repo_root=tmp_path).run() == 1
+    assert "expected-identity" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+def test_large_artifact_hashing_uses_bounded_memory(tmp_path: Path) -> None:
+    artifact = b"x" * (8 * 1024 * 1024)
+    contract = _contract()
+    evidence = _evidence(contract, artifact, captured_at=datetime.now(UTC))
+    (tmp_path / "contract.json").write_bytes(canonical_json_bytes(contract))
+    (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "artifacts" / "probe.txt").write_bytes(artifact)
+    del artifact
+
+    tracemalloc.start()
+    try:
+        assert build(_config(), repo_root=tmp_path).run() == 0
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 3 * 1024 * 1024
 
 
 @pytest.mark.parametrize("location", ["config", "artifact"])

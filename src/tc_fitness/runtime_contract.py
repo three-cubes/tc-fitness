@@ -119,6 +119,10 @@ def _run_verify(args: argparse.Namespace) -> int:
             "image_digest": args.expected_image_digest,
             "host_id": args.expected_host_id,
             "runtime_user": args.expected_runtime_user,
+            "deployment_id": args.expected_deployment_id,
+            "configuration_identity": args.expected_configuration_identity,
+            "run_id": args.expected_run_id,
+            "attempt_id": args.expected_attempt_id,
         },
         required_checks=tuple(args.required_check),
         now=datetime.now(UTC),
@@ -156,6 +160,10 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--expected-image-digest", required=True)
     verify.add_argument("--expected-host-id", required=True)
     verify.add_argument("--expected-runtime-user", required=True)
+    verify.add_argument("--expected-deployment-id", required=True)
+    verify.add_argument("--expected-configuration-identity", required=True)
+    verify.add_argument("--expected-run-id", type=int, required=True)
+    verify.add_argument("--expected-attempt-id", type=int, required=True)
     verify.add_argument("--required-check", action="append", default=[])
     verify.add_argument("--max-age-seconds", type=int, required=True)
     verify.set_defaults(handler=_run_verify)
