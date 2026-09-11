@@ -910,27 +910,159 @@ def test_ambiguous_symlink_patterns_have_a_bounded_resolution_state_space(
             "id": f"layer-{layer}-{identity}",
             "namespace": "container",
             "path": f"/layer-{layer}/{identity}",
-            "target": f"/layer-{layer + 1}/{{identity}}" if layer + 1 < layers else "/end",
+            "target": (f"/layer-{layer + 1}/{{choice_{layer + 1}}}" if layer + 1 < layers else "/end"),
         }
         for layer in range(layers)
         for identity in ("a", "b")
     ]
-    contract = _minimal_contract(
-        namespaces={"container": {"kind": "container", "root": "/"}},
-        roots={
-            "end": {
+    roots = {
+        "end": {
+            "namespace": "container",
+            "path": "/end",
+            "kind": "directory",
+            "lifecycle": "persistent",
+        },
+        **{
+            f"layer-{layer}-target": {
                 "namespace": "container",
-                "path": "/end",
+                "path": f"/layer-{layer}/{{choice_{layer}}}",
                 "kind": "directory",
                 "lifecycle": "persistent",
             }
+            for layer in range(1, layers)
         },
+    }
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots=roots,
         symlinks=symlinks,
     )
     _seed(tmp_path, contract)
 
     assert _module().build(_config(), repo_root=tmp_path).run() == 1
-    assert "filesystem-work-limit" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "filesystem-work-limit" in error
+    assert "4096" in error
+
+
+def test_shorter_wildcard_branch_does_not_suppress_longer_binding_specific_cycle(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "launch-target": {
+                "namespace": "container",
+                "path": "/data/{choice}/long",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+            "done": {
+                "namespace": "container",
+                "path": "/done/end",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+        },
+        symlinks=[
+            {
+                "id": "launch",
+                "namespace": "container",
+                "path": "/launch/entry",
+                "target": "/data/{choice}/long",
+            },
+            {
+                "id": "short-a",
+                "namespace": "container",
+                "path": "/data/a",
+                "target": "/done/end",
+            },
+            {
+                "id": "long-b",
+                "namespace": "container",
+                "path": "/data/b/long",
+                "target": "/launch/entry",
+            },
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "symlink-cycle" in capsys.readouterr().err
+
+
+def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(tmp_path: Path) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "safe": {
+                "namespace": "container",
+                "path": "/safe",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+            "nested-end": {
+                "namespace": "container",
+                "path": "/safe/a/a/end",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            },
+        },
+        symlinks=[
+            {
+                "id": "consume-a",
+                "namespace": "container",
+                "path": "/safe/a",
+                "target": "/safe",
+            },
+            {
+                "id": "entry",
+                "namespace": "container",
+                "path": "/link",
+                "target": "/safe/a/a/end",
+            },
+        ],
+    )
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["allowed_nested_roots"] = [
+        {
+            "parent": "safe",
+            "child": "nested-end",
+            "reason": "the finite resolution fixture terminates at a child of the safe root",
+        }
+    ]
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 0
+
+
+def test_wildcard_symlink_target_requires_complete_declared_pattern_coverage(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "known": {
+                "namespace": "container",
+                "path": "/data/known",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+        symlinks=[
+            {
+                "id": "entry",
+                "namespace": "container",
+                "path": "/entry",
+                "target": "/data/{choice}",
+            }
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "undefined-symlink-target" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
