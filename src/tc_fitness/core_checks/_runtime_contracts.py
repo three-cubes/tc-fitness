@@ -752,6 +752,7 @@ def _load_external_references(
     declarations: object,
     *,
     source: Path,
+    names: frozenset[str] | None = None,
 ) -> tuple[dict[str, object], tuple[ContractFinding, ...]]:
     if declarations is None:
         return {}, ()
@@ -769,6 +770,8 @@ def _load_external_references(
     loaded: dict[str, object] = {}
     findings: list[ContractFinding] = []
     for name, declaration in declarations.items():
+        if names is not None and name not in names:
+            continue
         location = f"/external_references/{_json_pointer_part(name)}"
         if not isinstance(name, str) or not name.strip() or not isinstance(declaration, Mapping):
             findings.append(
@@ -820,6 +823,27 @@ def _load_external_references(
         if not selection_findings:
             loaded[name] = selected
     return loaded, sort_findings(findings)
+
+
+def _external_reference_names(value: object) -> frozenset[str]:
+    """Return reference names reachable from one selected contract value."""
+    names: set[str] = set()
+
+    def visit(current: object) -> None:
+        if isinstance(current, Mapping):
+            if "$external_ref" in current:
+                name = current.get("$external_ref")
+                if isinstance(name, str) and name.strip():
+                    names.add(name)
+                return
+            for child in current.values():
+                visit(child)
+        elif isinstance(current, list):
+            for child in current:
+                visit(child)
+
+    visit(value)
+    return frozenset(names)
 
 
 def _replace_external_references(
@@ -1022,7 +1046,11 @@ def resolve_contract(
             selected[key] = expected
         declarations = registry.get("external_references")
 
-    references, reference_findings = _load_external_references(declarations, source=source)
+    references, reference_findings = _load_external_references(
+        declarations,
+        source=source,
+        names=_external_reference_names(selected),
+    )
     resolved, use_findings = _replace_external_references(
         selected,
         references=references,

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,22 @@ from tc_fitness.core_checks._runtime_contracts import (
     resolve_contract,
 )
 from tc_fitness.runner import run
+
+_SOURCE_SHA = "a" * 40
+_IMAGE_DIGEST = "sha256:" + "b" * 64
+_CONFIGURATION_IDENTITY = "sha256:" + "c" * 64
+_ROOT_ACCESS = {
+    "owner_uid": 1000,
+    "owner_gid": 1000,
+    "mode": 0o750,
+    "access": {
+        "uid": 1000,
+        "gids": [1000, 1001],
+        "read": True,
+        "write": True,
+        "traverse": True,
+    },
+}
 
 
 def _filesystem() -> dict[str, object]:
@@ -39,30 +57,35 @@ def _filesystem() -> dict[str, object]:
                 "path": "/data/hermes/service",
                 "kind": "directory",
                 "lifecycle": "persistent",
+                **copy.deepcopy(_ROOT_ACCESS),
             },
             "container-home": {
                 "namespace": "container",
                 "path": "/hermes-home",
                 "kind": "directory",
                 "lifecycle": "persistent",
+                **copy.deepcopy(_ROOT_ACCESS),
             },
             "profile-home": {
                 "namespace": "profile",
                 "path": "/hermes-home/profiles/{profile}",
                 "kind": "directory",
                 "lifecycle": "persistent",
+                **copy.deepcopy(_ROOT_ACCESS),
             },
             "profile-user": {
                 "namespace": "profile",
                 "path": "/hermes-home/profiles/{profile}/USER.md",
                 "kind": "file",
                 "lifecycle": "generated",
+                **copy.deepcopy(_ROOT_ACCESS),
             },
             "vault": {
                 "namespace": "container",
                 "path": "/data/obsidian-vault",
                 "kind": "directory",
                 "lifecycle": "shared",
+                **copy.deepcopy(_ROOT_ACCESS),
             },
         },
         "mounts": [
@@ -134,6 +157,10 @@ def _minimal_contract(
     symlinks: list[object] | None = None,
     required_executables: list[object] | None = None,
 ) -> dict[str, object]:
+    for declaration in roots.values():
+        if isinstance(declaration, dict):
+            for field, value in _ROOT_ACCESS.items():
+                declaration.setdefault(field, copy.deepcopy(value))
     return {
         "schema": CONTRACT_SCHEMA,
         "environment": "prod",
@@ -156,6 +183,24 @@ def _evidence() -> dict[str, object]:
     assert isinstance(roots, dict)
     return {
         "schema": EVIDENCE_SCHEMA,
+        "contract_digest": "sha256:" + hashlib.sha256(canonical_json_bytes(_contract())).hexdigest(),
+        "source_sha": _SOURCE_SHA,
+        "image_digest": _IMAGE_DIGEST,
+        "host_id": "vm-service-1",
+        "runtime_user": "service",
+        "deployment_id": "deploy-20260911-001",
+        "configuration_identity": _CONFIGURATION_IDENTITY,
+        "run_id": 42,
+        "attempt_id": 1,
+        "captured_at": datetime.now(UTC).isoformat(),
+        "checks": [
+            {
+                "id": "filesystem-probe",
+                "status": "passed",
+                "observation": {"kind": "filesystem", "state": "healthy"},
+            }
+        ],
+        "artifacts": [],
         "filesystem": {
             "roots": [
                 {"id": root_id, **declaration, "exists": True}
@@ -225,6 +270,20 @@ def _config(*, observations: bool = False) -> dict[str, object]:
     }
     if observations:
         config["evidence_file"] = "evidence.json"
+        config.update(
+            {
+                "expected_source_sha": _SOURCE_SHA,
+                "expected_image_digest": _IMAGE_DIGEST,
+                "expected_host_id": "vm-service-1",
+                "expected_runtime_user": "service",
+                "expected_deployment_id": "deploy-20260911-001",
+                "expected_configuration_identity": _CONFIGURATION_IDENTITY,
+                "expected_run_id": 42,
+                "expected_attempt_id": 1,
+                "required_checks": ["filesystem-probe"],
+                "max_age_seconds": 300,
+            }
+        )
     return config
 
 
@@ -236,12 +295,47 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
+def _run_filesystem_module_cli(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [sys.executable, "-m", "tc_fitness.core_checks.runtime_filesystem_contract", *args],
+        check=False,
+        capture_output=True,
+    )
+
+
 def test_valid_declaration_and_complete_live_observation_pass(tmp_path: Path) -> None:
     _seed(tmp_path, _contract(), _evidence())
     module = _module()
 
     assert module.build(_config(), repo_root=tmp_path).run() == 0
     assert module.build(_config(observations=True), repo_root=tmp_path).run() == 0
+
+
+def test_module_cli_runs_a_selected_configured_contract(tmp_path: Path) -> None:
+    """The module entry point must not silently skip a supplied contract."""
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    roots = filesystem["roots"]
+    assert isinstance(roots, dict)
+    root = roots["vault"]
+    assert isinstance(root, dict)
+    root["namespace"] = "missing"
+    _seed(tmp_path, contract)
+
+    result = _run_filesystem_module_cli(
+        "--repo-root",
+        str(tmp_path),
+        "--contract-file",
+        "contract.json",
+        "--environment",
+        "prod",
+        "--target",
+        "service",
+    )
+
+    assert result.returncode == 1
+    assert b"undefined-namespace" in result.stderr
 
 
 def test_empty_configuration_is_a_vacuous_pass(tmp_path: Path) -> None:
@@ -318,6 +412,7 @@ def test_sibling_prefix_is_not_a_physical_overlap(tmp_path: Path) -> None:
         "path": "/hermes-home/profiles-archive",
         "kind": "directory",
         "lifecycle": "archive",
+        **copy.deepcopy(_ROOT_ACCESS),
     }
     allowances = filesystem["allowed_nested_roots"]
     assert isinstance(allowances, list)
@@ -355,12 +450,14 @@ def test_cross_namespace_component_prefix_requires_reasoned_allowance(
                     "path": "/hermes-home/profiles/",
                     "kind": "directory",
                     "lifecycle": "persistent",
+                    **copy.deepcopy(_ROOT_ACCESS),
                 },
                 "profile": {
                     "namespace": "profile",
                     "path": "/hermes-home/profiles/consultant-delivery-consultant/USER.md",
                     "kind": "file",
                     "lifecycle": "generated",
+                    **copy.deepcopy(_ROOT_ACCESS),
                 },
             },
             "mounts": [],
@@ -815,14 +912,47 @@ def test_file_root_cannot_be_parent_of_a_nested_root(
         "path": "/opt/runtime",
         "kind": "file",
         "lifecycle": "immutable",
+        **copy.deepcopy(_ROOT_ACCESS),
     }
     roots["nested"] = {
         "namespace": "container",
         "path": "/opt/runtime/bin",
         "kind": "directory",
         "lifecycle": "immutable",
+        **copy.deepcopy(_ROOT_ACCESS),
     }
     allowances.append({"parent": "file-parent", "child": "nested", "reason": "invalid on purpose"})
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    assert "file-root-contains-path" in capsys.readouterr().err
+
+
+def test_file_root_cannot_contain_a_mount_target(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A regular file cannot provide a directory that can be mounted into."""
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    roots = filesystem["roots"]
+    mounts = filesystem["mounts"]
+    assert isinstance(roots, dict)
+    assert isinstance(mounts, list)
+    roots["file-parent"] = {
+        "namespace": "container",
+        "path": "/opt/runtime",
+        "kind": "file",
+        "lifecycle": "immutable",
+        **copy.deepcopy(_ROOT_ACCESS),
+    }
+    mounts.append(
+        {
+            "id": "impossible-mount",
+            "source_root": "host-home",
+            "target_namespace": "container",
+            "target_path": "/opt/runtime/data",
+            "mode": "rw",
+        }
+    )
     _seed(tmp_path, contract)
 
     assert _module().build(_config(), repo_root=tmp_path).run() == 1
@@ -1788,6 +1918,71 @@ def test_unknown_observation_collection_is_rejected(
     assert "unknown-filesystem-observation-collection" in capsys.readouterr().err
 
 
+def test_filesystem_observation_rejects_evidence_for_another_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Filesystem observations must be cryptographically bound to this contract."""
+    evidence = _evidence()
+    evidence["contract_digest"] = "sha256:" + "0" * 64
+    _seed(tmp_path, _contract(), evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
+    assert "contract-digest-mismatch" in capsys.readouterr().err
+
+
+def test_filesystem_observation_rejects_other_deployment_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A matching filesystem shape cannot satisfy a different deployment receipt."""
+    evidence = _evidence()
+    evidence["deployment_id"] = "deploy-20260911-other"
+    _seed(tmp_path, _contract(), evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
+    assert "deployment-id-mismatch" in capsys.readouterr().err
+
+
+def test_root_permissions_and_effective_access_observation_pass_when_exact(tmp_path: Path) -> None:
+    """Observed ownership, mode, identity and access must match the declaration."""
+    contract = _contract()
+    evidence = _evidence()
+    _seed(tmp_path, contract, evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 0
+
+
+def test_root_effective_group_membership_mismatch_is_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A collector cannot report access for a different supplementary-group set."""
+    evidence = _evidence()
+    filesystem = evidence["filesystem"]
+    assert isinstance(filesystem, dict)
+    roots = filesystem["roots"]
+    assert isinstance(roots, list)
+    root = next(item for item in roots if item["id"] == "vault")
+    assert isinstance(root, dict)
+    access = root["access"]
+    assert isinstance(access, dict)
+    access["gids"] = [1000]
+    _seed(tmp_path, _contract(), evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
+    assert "root-observation-mismatch" in capsys.readouterr().err
+
+
+def test_filesystem_observation_rejects_stale_evidence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A receipt outside the configured freshness window cannot prove live state."""
+    evidence = _evidence()
+    evidence["captured_at"] = (datetime.now(UTC) - timedelta(seconds=301)).isoformat()
+    _seed(tmp_path, _contract(), evidence)
+
+    assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 1
+    assert "stale-evidence" in capsys.readouterr().err
+
+
 def test_external_registry_reference_is_resolved_by_public_cli(tmp_path: Path) -> None:
     clusters = tmp_path / "platform" / "clusters.yaml"
     clusters.parent.mkdir()
@@ -1841,6 +2036,37 @@ def test_external_registry_reference_is_resolved_by_public_cli(tmp_path: Path) -
         {"cluster_id": "beta", "home": "/data/beta"},
     ]
     assert "external_references" not in resolved
+
+
+def test_selected_registry_ignores_unreferenced_missing_external_file(tmp_path: Path) -> None:
+    """A selected target is not coupled to another target's external input."""
+    (tmp_path / "selected.yaml").write_text("clusters: []\n", encoding="utf-8")
+    registry = {
+        "schema": CONTRACT_SCHEMA,
+        "external_references": {
+            "selected": {"file": "selected.yaml", "pointer": "/clusters"},
+            "other-target": {"file": "missing.yaml", "pointer": "/clusters"},
+        },
+        "environments": {
+            "prod": {
+                "targets": {"service": {"clusters": {"$external_ref": "selected"}}},
+            },
+            "staging": {
+                "targets": {"service": {"clusters": {"$external_ref": "other-target"}}},
+            },
+        },
+    }
+
+    resolved, findings = resolve_contract(
+        registry,
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+
+    assert findings == ()
+    assert resolved is not None
+    assert resolved["clusters"] == []
 
 
 @pytest.mark.parametrize(

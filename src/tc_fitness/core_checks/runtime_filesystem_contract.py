@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from itertools import combinations
 from pathlib import Path
 from typing import Any, cast
 
-from tc_fitness.core_checks import run_core_check
 from tc_fitness.core_checks._runtime_contracts import (
     ContractDocuments,
     ContractFinding,
@@ -17,8 +18,13 @@ from tc_fitness.core_checks._runtime_contracts import (
     absolute_posix_components,
     component_pattern_paths_overlap,
     is_component_pattern_prefix,
+    is_integer_identity,
     is_path_identity_segment,
     sort_findings,
+)
+from tc_fitness.core_checks.runtime_evidence_contract import (
+    RuntimeEvidenceContract,
+    validate_runtime_evidence,
 )
 from tc_fitness.lib import remediation as _remediation
 
@@ -60,6 +66,21 @@ class RootDeclaration:
     components: tuple[str, ...]
     kind: str
     lifecycle: str
+    owner_uid: int
+    owner_gid: int
+    mode: int
+    access: AccessRequirement
+
+
+@dataclass(frozen=True)
+class AccessRequirement:
+    """Effective POSIX access observed for the runtime identity."""
+
+    uid: int
+    gids: tuple[int, ...]
+    read: bool
+    write: bool
+    traverse: bool
 
 
 @dataclass(frozen=True)
@@ -365,6 +386,54 @@ def _parse_namespaces(
     return tuple(normalised)
 
 
+def _access_requirement(
+    value: object,
+    *,
+    source: Path,
+    pointer: str,
+    findings: list[ContractFinding],
+) -> AccessRequirement | None:
+    if not isinstance(value, Mapping) or set(value) != {"uid", "gids", "read", "write", "traverse"}:
+        findings.append(
+            _finding(
+                source,
+                pointer,
+                "invalid-root-access",
+                "root access must contain exactly uid, gids, read, write and traverse",
+                "record the runtime identity and each required effective access result",
+            )
+        )
+        return None
+    uid = value.get("uid")
+    gids = value.get("gids")
+    access_flags = tuple(value.get(field) for field in ("read", "write", "traverse"))
+    if (
+        not is_integer_identity(uid)
+        or not isinstance(gids, Sequence)
+        or isinstance(gids, (str, bytes))
+        or any(not is_integer_identity(gid) for gid in gids)
+        or list(gids) != sorted(set(cast(Sequence[int], gids)))
+        or any(type(flag) is not bool for flag in access_flags)
+    ):
+        findings.append(
+            _finding(
+                source,
+                pointer,
+                "invalid-root-access",
+                "root access requires a numeric uid, sorted unique numeric gids, and boolean read/write/traverse fields",
+                "record the exact runtime identity and effective access as canonical JSON values",
+            )
+        )
+        return None
+    return AccessRequirement(
+        cast(int, uid),
+        tuple(cast(Sequence[int], gids)),
+        cast(bool, access_flags[0]),
+        cast(bool, access_flags[1]),
+        cast(bool, access_flags[2]),
+    )
+
+
 def _parse_roots(
     filesystem: Mapping[str, object],
     namespaces: Mapping[str, NamespaceDeclaration],
@@ -390,7 +459,7 @@ def _parse_roots(
             continue
         _unknown_fields(
             raw,
-            frozenset({"namespace", "path", "kind", "lifecycle"}),
+            frozenset({"namespace", "path", "kind", "lifecycle", "owner_uid", "owner_gid", "mode", "access"}),
             source=source,
             pointer=pointer,
             findings=findings,
@@ -399,6 +468,12 @@ def _parse_roots(
         path = _path(raw.get("path"), source=source, pointer=f"{pointer}/path", findings=findings)
         kind = raw.get("kind")
         lifecycle = raw.get("lifecycle")
+        owner_uid = raw.get("owner_uid")
+        owner_gid = raw.get("owner_gid")
+        mode = raw.get("mode")
+        access = _access_requirement(
+            raw.get("access"), source=source, pointer=f"{pointer}/access", findings=findings
+        )
         if not isinstance(namespace, str) or namespace not in namespaces:
             findings.append(
                 _finding(
@@ -429,6 +504,36 @@ def _parse_roots(
                     "name the root's lifecycle classification",
                 )
             )
+        if not is_integer_identity(owner_uid):
+            findings.append(
+                _finding(
+                    source,
+                    f"{pointer}/owner_uid",
+                    "invalid-root-owner-uid",
+                    "root owner_uid must be a non-negative integer, not a boolean",
+                    "record the expected numeric owner UID",
+                )
+            )
+        if not is_integer_identity(owner_gid):
+            findings.append(
+                _finding(
+                    source,
+                    f"{pointer}/owner_gid",
+                    "invalid-root-owner-gid",
+                    "root owner_gid must be a non-negative integer, not a boolean",
+                    "record the expected numeric owner GID",
+                )
+            )
+        if type(mode) is not int or not 0 <= mode <= 0o7777:
+            findings.append(
+                _finding(
+                    source,
+                    f"{pointer}/mode",
+                    "invalid-root-mode",
+                    "root mode must be an integer between 0 and 0o7777, not a boolean",
+                    "record the expected POSIX mode as a bounded integer",
+                )
+            )
         if path is not None and isinstance(namespace, str) and namespace in namespaces:
             boundary = namespaces[namespace]
             if not is_component_pattern_prefix(boundary.components, path[1]):
@@ -448,6 +553,11 @@ def _parse_roots(
             and isinstance(kind, str)
             and kind in _ROOT_KINDS
             and _valid_id(lifecycle)
+            and is_integer_identity(owner_uid)
+            and is_integer_identity(owner_gid)
+            and type(mode) is int
+            and 0 <= mode <= 0o7777
+            and access is not None
         ):
             parsed.append(
                 RootDeclaration(
@@ -457,6 +567,10 @@ def _parse_roots(
                     path[1],
                     kind,
                     cast(str, lifecycle),
+                    cast(int, owner_uid),
+                    cast(int, owner_gid),
+                    mode,
+                    access,
                 )
             )
     return tuple(parsed)
@@ -990,6 +1104,32 @@ def _root_overlap_findings(contract: _FilesystemDeclarations, *, source: Path) -
     return findings
 
 
+def _mount_target_findings(contract: _FilesystemDeclarations, *, source: Path) -> list[ContractFinding]:
+    """Reject mount targets below regular-file roots in one physical namespace."""
+    physical_namespaces = {item.id: item.physical_namespace for item in contract.namespaces}
+    findings: list[ContractFinding] = []
+    for mount in contract.mounts:
+        target_physical_namespace = physical_namespaces[mount.target_namespace]
+        for root in contract.roots:
+            if (
+                root.kind != "file"
+                or physical_namespaces[root.namespace] != target_physical_namespace
+                or len(root.components) >= len(mount.target_components)
+                or not is_component_pattern_prefix(root.components, mount.target_components)
+            ):
+                continue
+            findings.append(
+                _finding(
+                    source,
+                    f"/filesystem/mounts/{_pointer_part(mount.id)}/target_path",
+                    "file-root-contains-path",
+                    f"file root {root.path!r} cannot contain mount target {mount.target_path!r}",
+                    "move the mount target outside the file root or declare a directory root",
+                )
+            )
+    return findings
+
+
 @dataclass(frozen=True)
 class _SymlinkResolutionState:
     path: int
@@ -1251,6 +1391,7 @@ def _parse_contract(
         executables,
     )
     findings.extend(_root_overlap_findings(contract, source=source))
+    findings.extend(_mount_target_findings(contract, source=source))
     findings.extend(_symlink_target_findings(contract, source=source))
     findings.extend(_symlink_cycle_findings(contract, source=source))
     return contract, sort_findings(findings)
@@ -1399,6 +1540,16 @@ def _observation_findings(
             "path": item.path,
             "kind": item.kind,
             "lifecycle": item.lifecycle,
+            "owner_uid": item.owner_uid,
+            "owner_gid": item.owner_gid,
+            "mode": item.mode,
+            "access": {
+                "uid": item.access.uid,
+                "gids": list(item.access.gids),
+                "read": item.access.read,
+                "write": item.access.write,
+                "traverse": item.access.traverse,
+            },
             "exists": True,
         }
         for item in contract.roots
@@ -1495,8 +1646,27 @@ class RuntimeFilesystemContract(RuntimeContractRule):
     name = "runtime-filesystem-contract"
     remediation = REMEDIATION
 
+    def __init__(self, config: Mapping[str, object], *, repo_root: Path | None = None) -> None:
+        super().__init__(config, repo_root=repo_root)
+        self._evidence_contract = RuntimeEvidenceContract(config, repo_root=repo_root)
+
+    def validate_configuration(self) -> tuple[ContractFinding, ...]:
+        if "evidence_file" not in self.config:
+            return ()
+        return self._evidence_contract.validate_configuration()
+
     def validate_documents(self, documents: ContractDocuments) -> tuple[ContractFinding, ...]:
-        return validate_filesystem_contract(documents)
+        filesystem_findings = validate_filesystem_contract(documents)
+        if documents.evidence is None:
+            return filesystem_findings
+        evidence_findings = validate_runtime_evidence(
+            documents,
+            expected_identity=self._evidence_contract.expected_identity,
+            required_checks=self._evidence_contract.required_checks,
+            now=datetime.now(UTC),
+            max_age_seconds=self._evidence_contract.max_age_seconds,
+        )
+        return sort_findings((*filesystem_findings, *evidence_findings))
 
 
 def build(
@@ -1509,8 +1679,73 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the filesystem contract check through the shared CORE boundary."""
-    return run_core_check(RuntimeFilesystemContract, argv)
+    """Run one configured filesystem contract directly from the command line."""
+    parser = argparse.ArgumentParser(prog=RuntimeFilesystemContract.name)
+    parser.add_argument(
+        "--establish-baseline",
+        action="store_true",
+        help="validate the configured contract and reject baseline establishment on any finding",
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=None,
+        help="repository root containing the configured contract (default: current working directory)",
+    )
+    parser.add_argument(
+        "--contract-file", help="repo-relative runtime contract registry or selected contract"
+    )
+    parser.add_argument("--environment", help="selected environment key")
+    parser.add_argument("--target", help="selected target key")
+    parser.add_argument("--evidence-file", help="repo-relative runtime evidence receipt")
+    parser.add_argument("--expected-source-sha")
+    parser.add_argument("--expected-image-digest")
+    parser.add_argument("--expected-host-id")
+    parser.add_argument("--expected-runtime-user")
+    parser.add_argument("--expected-deployment-id")
+    parser.add_argument("--expected-configuration-identity")
+    parser.add_argument("--expected-run-id", type=int)
+    parser.add_argument("--expected-attempt-id", type=int)
+    parser.add_argument("--required-check", action="append", default=[])
+    parser.add_argument("--max-age-seconds", type=int, default=300)
+    args = parser.parse_args(argv)
+
+    config: dict[str, object] = {}
+    supplied_selection = (args.environment, args.target)
+    if args.contract_file is None:
+        if any(supplied_selection) or args.evidence_file is not None:
+            parser.error("--environment, --target and --evidence-file require --contract-file")
+    else:
+        if not all(supplied_selection):
+            parser.error("--contract-file requires both --environment and --target")
+        config = {
+            "contract_file": args.contract_file,
+            "environment": args.environment,
+            "target": args.target,
+        }
+        if args.evidence_file is not None:
+            config.update(
+                {
+                    "evidence_file": args.evidence_file,
+                    "expected_source_sha": args.expected_source_sha,
+                    "expected_image_digest": args.expected_image_digest,
+                    "expected_host_id": args.expected_host_id,
+                    "expected_runtime_user": args.expected_runtime_user,
+                    "expected_deployment_id": args.expected_deployment_id,
+                    "expected_configuration_identity": args.expected_configuration_identity,
+                    "expected_run_id": args.expected_run_id,
+                    "expected_attempt_id": args.expected_attempt_id,
+                    "required_checks": args.required_check,
+                    "max_age_seconds": args.max_age_seconds,
+                }
+            )
+
+    rule = RuntimeFilesystemContract.from_config(config, repo_root=args.repo_root)
+    if args.establish_baseline:
+        path = rule.establish_baseline()
+        print(f"established baseline: {path}")
+        return 0
+    return rule.run()
 
 
 if __name__ == "__main__":
