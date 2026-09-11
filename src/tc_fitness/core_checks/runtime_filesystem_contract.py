@@ -12,6 +12,7 @@ from tc_fitness.core_checks import run_core_check
 from tc_fitness.core_checks._runtime_contracts import (
     ContractDocuments,
     ContractFinding,
+    PathPatternBindings,
     RuntimeContractRule,
     absolute_posix_components,
     component_pattern_paths_overlap,
@@ -986,101 +987,34 @@ def _root_overlap_findings(contract: _FilesystemDeclarations, *, source: Path) -
     return findings
 
 
-def _component_pattern_covers(covering: tuple[str, ...], covered: tuple[str, ...]) -> bool:
-    """Return whether ``covering`` matches every binding admitted by ``covered``."""
-    if len(covering) > len(covered):
-        return False
-    constrained_positions: dict[str, list[int]] = {}
-    for index, component in enumerate(covering):
-        if is_path_identity_segment(component):
-            constrained_positions.setdefault(component, []).append(index)
-        elif is_path_identity_segment(covered[index]) or component != covered[index]:
-            return False
-    return all(
-        len({covered[index] for index in positions}) == 1 for positions in constrained_positions.values()
-    )
+@dataclass(frozen=True)
+class _SymlinkResolutionState:
+    path: tuple[str, ...]
+    bindings: PathPatternBindings
 
 
-def _match_symlink_source(
-    source_components: tuple[str, ...],
-    current_path: tuple[str, ...],
-    target_components: tuple[str, ...],
-) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
-    """Refine a symbolic path against one source and bind its target variables."""
-    if len(source_components) > len(current_path):
-        return None
-
-    variables = {
-        component
-        for component in (*source_components, *current_path, *target_components)
-        if is_path_identity_segment(component)
-    }
-    parent = {variable: variable for variable in variables}
-    literals: dict[str, str] = {}
-
-    def find(variable: str) -> str:
-        root = variable
-        while parent[root] != root:
-            root = parent[root]
-        while parent[variable] != variable:
-            next_variable = parent[variable]
-            parent[variable] = root
-            variable = next_variable
-        return root
-
-    def bind(variable: str, literal: str) -> bool:
-        root = find(variable)
-        existing = literals.get(root)
-        if existing is not None and existing != literal:
-            return False
-        literals[root] = literal
-        return True
-
-    def union(left: str, right: str) -> bool:
-        left_root = find(left)
-        right_root = find(right)
-        if left_root == right_root:
-            return True
-        keep, merge = sorted((left_root, right_root))
-        left_literal = literals.get(left_root)
-        right_literal = literals.get(right_root)
-        if left_literal is not None and right_literal is not None and left_literal != right_literal:
-            return False
-        parent[merge] = keep
-        literals.pop(left_root, None)
-        literals.pop(right_root, None)
-        if left_literal is not None or right_literal is not None:
-            literals[keep] = left_literal or cast(str, right_literal)
-        return True
-
-    for source_component, current_component in zip(
-        source_components,
-        current_path[: len(source_components)],
-        strict=True,
-    ):
-        source_variable = is_path_identity_segment(source_component)
-        current_variable = is_path_identity_segment(current_component)
-        if source_variable and current_variable:
-            if not union(source_component, current_component):
-                return None
-        elif source_variable:
-            if not bind(source_component, current_component):
-                return None
-        elif current_variable:
-            if not bind(current_component, source_component):
-                return None
-        elif source_component != current_component:
-            return None
-
-    def resolve(component: str) -> str:
-        if not is_path_identity_segment(component):
-            return component
-        root = find(component)
-        return literals.get(root, root)
-
-    return tuple(resolve(component) for component in current_path), tuple(
-        resolve(component) for component in target_components
-    )
+def _symlink_successors(
+    state: _SymlinkResolutionState, candidates: Sequence[SymlinkDeclaration]
+) -> list[_SymlinkResolutionState]:
+    successors: list[_SymlinkResolutionState] = []
+    for candidate in candidates:
+        matched = state.bindings.match_prefix(candidate.components, state.path)
+        if matched is None:
+            continue
+        # A shorter source wins only if it matches this entire binding branch.
+        # Partial matches leave other identities free to use the longer source.
+        if any(
+            len(shorter.components) < len(candidate.components)
+            and matched.match_prefix(shorter.components, state.path) == matched
+            for shorter in candidates
+        ):
+            continue
+        target = matched.resolve_path(candidate.target_components)
+        suffix = state.path[len(candidate.components) :]
+        if matched != state.bindings:
+            suffix = matched.resolve_path(suffix)
+        successors.append(_SymlinkResolutionState((*target, *suffix), matched))
+    return successors
 
 
 def _symlink_cycle_findings(contract: _FilesystemDeclarations, *, source: Path) -> list[ContractFinding]:
@@ -1095,70 +1029,32 @@ def _symlink_cycle_findings(contract: _FilesystemDeclarations, *, source: Path) 
     for start in contract.symlinks:
         physical_namespace = physical_namespaces[start.namespace]
         candidates = links_by_namespace[physical_namespace]
-        pending: list[
-            tuple[
-                tuple[str, ...],
-                frozenset[tuple[str, ...]],
-                tuple[tuple[str, int], ...],
-            ]
-        ] = [(start.target_components, frozenset(), ())]
+        pending = [(_SymlinkResolutionState(start.target_components, PathPatternBindings()), True)]
+        active: set[_SymlinkResolutionState] = set()
         cyclic = False
         while pending and not cyclic:
-            current_path, path_history, suffix_history_items = pending.pop()
-            if current_path in path_history:
+            state, entering = pending.pop()
+            if not entering:
+                active.remove(state)
+                continue
+            if state in active:
                 cyclic = True
                 break
-            next_path_history = path_history | {current_path}
             explored_states += 1
             if explored_states > _MAX_SYMLINK_RESOLUTION_STATES:
                 return [
+                    *findings,
                     _finding(
                         source,
                         "/filesystem/symlinks",
                         "filesystem-work-limit",
                         f"symlink resolution exceeded its {_MAX_SYMLINK_RESOLUTION_STATES}-state budget",
                         "reduce ambiguous wildcard or chained symlink declarations",
-                    )
+                    ),
                 ]
-            matches = [
-                (candidate, matched)
-                for candidate in candidates
-                if (
-                    matched := _match_symlink_source(
-                        candidate.components,
-                        current_path,
-                        candidate.target_components,
-                    )
-                )
-                is not None
-            ]
-            if not matches:
-                continue
-            suffix_history = dict(suffix_history_items)
-            for candidate, (refined_path, resolved_target) in matches:
-                if any(
-                    len(shorter.components) < len(candidate.components)
-                    and _component_pattern_covers(
-                        shorter.components,
-                        refined_path[: len(shorter.components)],
-                    )
-                    for shorter, _ in matches
-                ):
-                    continue
-                suffix = refined_path[len(candidate.components) :]
-                previous_suffix_length = suffix_history.get(candidate.id)
-                if previous_suffix_length is not None and len(suffix) > previous_suffix_length:
-                    cyclic = True
-                    break
-                next_suffix_history = dict(suffix_history)
-                next_suffix_history[candidate.id] = len(suffix)
-                pending.append(
-                    (
-                        (*resolved_target, *suffix),
-                        next_path_history,
-                        tuple(sorted(next_suffix_history.items())),
-                    )
-                )
+            active.add(state)
+            pending.append((state, False))
+            pending.extend((successor, True) for successor in _symlink_successors(state, candidates))
         if cyclic:
             findings.append(
                 _finding(
@@ -1191,7 +1087,7 @@ def _symlink_target_findings(contract: _FilesystemDeclarations, *, source: Path)
         if not any(
             target_namespace == physical_namespaces[item.namespace]
             and len(target_components) == len(item.target_components)
-            and _component_pattern_covers(target_components, item.target_components)
+            and is_component_pattern_prefix(target_components, item.target_components)
             for target_namespace, target_components in declared_targets
         )
     ]

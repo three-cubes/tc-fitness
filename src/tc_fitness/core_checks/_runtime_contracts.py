@@ -109,24 +109,98 @@ def is_path_identity_segment(component: str) -> bool:
     return _PATH_IDENTITY_SEGMENT_RE.fullmatch(component) is not None
 
 
+@dataclass(frozen=True, order=True)
+class _PathIdentity:
+    name: str
+    scope: int = 0
+    rigid: bool = False
+
+
+type _PathTerm = str | _PathIdentity
+
+
+def _path_terms(components: tuple[str, ...], *, scope: int = 0, rigid: bool = False) -> tuple[_PathTerm, ...]:
+    return tuple(
+        _PathIdentity(component, scope, rigid) if is_path_identity_segment(component) else component
+        for component in components
+    )
+
+
+@dataclass(frozen=True)
+class PathPatternBindings:
+    """Canonical equalities for named path identities, shared by all pattern operations.
+
+    Bindings only become more specific. Every value is either a literal, a rigid
+    universally quantified identity, or the smallest free identity in its class.
+    Keeping this immutable state across rewrites prevents an identity from being
+    rebound when it temporarily disappears from the path.
+    """
+
+    values: tuple[tuple[_PathIdentity, _PathTerm], ...] = ()
+
+    def _equate(self, left: _PathTerm, right: _PathTerm) -> PathPatternBindings | None:
+        bindings = dict(self.values)
+        left = bindings.get(left, left) if isinstance(left, _PathIdentity) else left
+        right = bindings.get(right, right) if isinstance(right, _PathIdentity) else right
+        if left == right:
+            return self
+        left_free = isinstance(left, _PathIdentity) and not left.rigid
+        right_free = isinstance(right, _PathIdentity) and not right.rigid
+        if not left_free and not right_free:
+            return None
+        if not left_free or (right_free and cast(_PathIdentity, left) < cast(_PathIdentity, right)):
+            left, right = right, left
+        variable = cast(_PathIdentity, left)
+        bindings = {key: right if value == variable else value for key, value in bindings.items()}
+        bindings[variable] = right
+        return PathPatternBindings(tuple(sorted(bindings.items())))
+
+    def _match(
+        self, source: tuple[_PathTerm, ...], path: tuple[_PathTerm, ...]
+    ) -> PathPatternBindings | None:
+        if len(source) > len(path):
+            return None
+        matched = self
+        for left, right in zip(source, path[: len(source)], strict=True):
+            refined = matched._equate(left, right)
+            if refined is None:
+                return None
+            matched = refined
+        return matched
+
+    def match_prefix(self, source: tuple[str, ...], path: tuple[str, ...]) -> PathPatternBindings | None:
+        """Refine one resolution branch under its existing named identities."""
+        return self._match(_path_terms(source), _path_terms(path[: len(source)]))
+
+    def resolve_path(self, path: tuple[str, ...]) -> tuple[str, ...]:
+        """Apply canonical bindings to a source, target, or preserved suffix."""
+        bindings = dict(self.values)
+        result: list[str] = []
+        for term in _path_terms(path):
+            resolved = bindings.get(term, term) if isinstance(term, _PathIdentity) else term
+            result.append(resolved.name if isinstance(resolved, _PathIdentity) else resolved)
+        return tuple(result)
+
+
 def is_component_pattern_prefix(parent: tuple[str, ...], child: tuple[str, ...]) -> bool:
     """Return whether every path matched by ``child`` is contained by ``parent``."""
-    if len(parent) > len(child):
-        return False
-    return all(
-        left == right or is_path_identity_segment(left)
-        for left, right in zip(parent, child[: len(parent)], strict=True)
+    # Rigid child identities cannot be assigned a literal or equated with a
+    # different identity: success therefore proves coverage for every binding.
+    return (
+        PathPatternBindings()._match(_path_terms(parent), _path_terms(child, scope=1, rigid=True)) is not None
     )
 
 
 def component_pattern_paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
     """Return whether two component patterns can identify nested physical paths."""
     common_length = min(len(left), len(right))
-    return all(
-        left_component == right_component
-        or is_path_identity_segment(left_component)
-        or is_path_identity_segment(right_component)
-        for left_component, right_component in zip(left[:common_length], right[:common_length], strict=True)
+    # Declarations denote sets of physical paths. Their bindings are independent
+    # of one another; each repeated identity within a declaration stays equal.
+    return (
+        PathPatternBindings()._match(
+            _path_terms(left[:common_length]), _path_terms(right[:common_length], scope=1)
+        )
+        is not None
     )
 
 

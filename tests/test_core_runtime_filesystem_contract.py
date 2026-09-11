@@ -399,6 +399,130 @@ def test_literal_namespace_root_does_not_contain_child_identity_wildcard(
     assert "namespace-escape" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("path", "exit_code"),
+    [
+        ("/data/a/b", 1),
+        ("/data/a/a", 0),
+        ("/data/{left}/{right}", 1),
+        ("/data/{other}/{other}", 0),
+    ],
+)
+def test_namespace_boundary_requires_consistent_repeated_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str, exit_code: int
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/data/{id}/{id}"}},
+        roots={
+            "data": {
+                "namespace": "container",
+                "path": path,
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    assert ("namespace-escape" in error) == bool(exit_code)
+
+
+@pytest.mark.parametrize(
+    ("surface", "code"),
+    [
+        ("root", "duplicate-root-path"),
+        ("mount", "duplicate-mount-destination"),
+        ("symlink", "duplicate-symlink-source"),
+        ("executable", "duplicate-executable"),
+    ],
+)
+@pytest.mark.parametrize(("literal_path", "exit_code"), [("/data/x/y", 0), ("/data/x/x", 1)])
+def test_repeated_identity_collisions_require_one_consistent_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    surface: str,
+    code: str,
+    literal_path: str,
+    exit_code: int,
+) -> None:
+    roots: dict[str, object] = {
+        "target": {
+            "namespace": "container",
+            "path": "/target",
+            "kind": "directory",
+            "lifecycle": "persistent",
+        }
+    }
+    mounts: list[object] = []
+    symlinks: list[object] = []
+    executables: list[object] = []
+    for identifier, path in (("pattern", "/data/{id}/{id}"), ("literal", literal_path)):
+        if surface == "root":
+            roots[identifier] = {
+                "namespace": "container",
+                "path": path,
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        elif surface == "mount":
+            mounts.append(
+                {
+                    "id": identifier,
+                    "source_root": "target",
+                    "target_namespace": "container",
+                    "target_path": path,
+                    "mode": "rw",
+                }
+            )
+        elif surface == "symlink":
+            symlinks.append({"id": identifier, "namespace": "container", "path": path, "target": "/target"})
+        else:
+            executables.append({"id": identifier, "namespace": "container", "path": path})
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots=roots,
+            mounts=mounts,
+            symlinks=symlinks,
+            required_executables=executables,
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    assert (code in error) == bool(exit_code)
+
+
+@pytest.mark.parametrize(("identity", "exit_code"), [("x", 0), ("a", 1)])
+def test_pattern_intersection_propagates_repeated_identity_equalities(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], identity: str, exit_code: int
+) -> None:
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                identifier: {
+                    "namespace": "container",
+                    "path": path,
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+                for identifier, path in (
+                    ("left", "/data/{id}/{id}/a"),
+                    ("right", f"/data/{identity}/{{other}}/{{other}}"),
+                )
+            },
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    assert ("duplicate-root-path" in capsys.readouterr().err) == bool(exit_code)
+
+
 def test_independent_container_namespaces_may_reuse_absolute_paths(tmp_path: Path) -> None:
     contract = _minimal_contract(
         namespaces={
@@ -868,10 +992,10 @@ def test_symlink_resolution_preserves_suffixes_when_detecting_cycles(
     assert "symlink-cycle" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(("count", "exit_code"), [(64, 0), (65, 1)])
 def test_symlink_declaration_budget_bounds_resolution_work(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], count: int, exit_code: int
 ) -> None:
-    count = 257
     roots = {
         f"target-{index}": {
             "namespace": "container",
@@ -897,8 +1021,13 @@ def test_symlink_declaration_budget_bounds_resolution_work(
     )
     _seed(tmp_path, contract)
 
-    assert _module().build(_config(), repo_root=tmp_path).run() == 1
-    assert "filesystem-work-limit" in capsys.readouterr().err
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    if exit_code:
+        assert "filesystem-work-limit" in error
+        assert "64" in error
+    else:
+        assert error == ""
 
 
 def test_ambiguous_symlink_patterns_have_a_bounded_resolution_state_space(
@@ -991,7 +1120,49 @@ def test_shorter_wildcard_branch_does_not_suppress_longer_binding_specific_cycle
     assert "symlink-cycle" in capsys.readouterr().err
 
 
-def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("shorter_path", "longer_path", "exit_code"),
+    [
+        ("/data", "/data/x", 0),
+        ("/data/{id}", "/data/{id}/x", 0),
+        ("/data/{other}", "/data/{id}/x", 1),
+    ],
+)
+def test_shorter_symlink_takes_precedence_only_for_the_same_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    shorter_path: str,
+    longer_path: str,
+    exit_code: int,
+) -> None:
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                "done": {
+                    "namespace": "container",
+                    "path": "/done",
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+            },
+            symlinks=[
+                {"id": "shorter", "namespace": "container", "path": shorter_path, "target": "/done"},
+                {"id": "longer", "namespace": "container", "path": longer_path, "target": longer_path},
+            ],
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    assert ("symlink-cycle" in capsys.readouterr().err) == bool(exit_code)
+
+
+@pytest.mark.parametrize(("depth", "exit_code"), [(2, 0), (4094, 0), (4095, 1)])
+def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], depth: int, exit_code: int
+) -> None:
+    nested_path = "/safe/" + "a/" * depth + "end"
     contract = _minimal_contract(
         namespaces={"container": {"kind": "container", "root": "/"}},
         roots={
@@ -1003,7 +1174,7 @@ def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(tmp_path:
             },
             "nested-end": {
                 "namespace": "container",
-                "path": "/safe/a/a/end",
+                "path": nested_path,
                 "kind": "directory",
                 "lifecycle": "persistent",
             },
@@ -1019,7 +1190,7 @@ def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(tmp_path:
                 "id": "entry",
                 "namespace": "container",
                 "path": "/link",
-                "target": "/safe/a/a/end",
+                "target": nested_path,
             },
         ],
     )
@@ -1034,7 +1205,122 @@ def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(tmp_path:
     ]
     _seed(tmp_path, contract)
 
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    assert "symlink-cycle" not in error
+    if exit_code:
+        assert "filesystem-work-limit" in error
+        assert "4096" in error
+    else:
+        assert error == ""
+
+
+@pytest.mark.parametrize(
+    ("middle_target", "exit_code"),
+    [("/a/y/z", 0), ("/a/x", 1)],
+)
+def test_symlink_suffix_growth_requires_full_state_repetition_for_a_cycle(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], middle_target: str, exit_code: int
+) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            identifier: {
+                "namespace": "container",
+                "path": path,
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+            for identifier, path in (("b-c", "/b/c"), ("a-y-z", "/a/y/z"), ("a-x", "/a/x"))
+        },
+        symlinks=[
+            {"id": "a", "namespace": "container", "path": "/a", "target": "/b/c"},
+            {"id": "b-c-x", "namespace": "container", "path": "/b/c/x", "target": middle_target},
+            {"id": "entry", "namespace": "container", "path": "/entry", "target": "/a/x"},
+        ],
+    )
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    assert ("symlink-cycle" in error) == bool(exit_code)
+    assert "filesystem-work-limit" not in error
+
+
+def test_symlink_resolution_keeps_identity_binding_when_a_path_omits_it(tmp_path: Path) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "two": {
+                "namespace": "container",
+                "path": "/two/{id}",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+        symlinks=[
+            {"id": "one", "namespace": "container", "path": "/one/{id}", "target": "/bridge"},
+            {"id": "bridge", "namespace": "container", "path": "/bridge", "target": "/two/{id}"},
+            {"id": "two-b", "namespace": "container", "path": "/two/b", "target": "/one/a"},
+        ],
+    )
+    _seed(tmp_path, contract)
+
     assert _module().build(_config(), repo_root=tmp_path).run() == 0
+
+
+@pytest.mark.parametrize(("target_path", "exit_code"), [("/data/x/y", 0), ("/data/x/x", 1)])
+def test_symlink_source_matching_requires_consistent_repeated_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], target_path: str, exit_code: int
+) -> None:
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                "target": {
+                    "namespace": "container",
+                    "path": target_path,
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+            },
+            symlinks=[
+                {"id": "repeated", "namespace": "container", "path": "/data/{id}/{id}", "target": "/entry"},
+                {"id": "entry", "namespace": "container", "path": "/entry", "target": target_path},
+            ],
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    assert ("symlink-cycle" in capsys.readouterr().err) == bool(exit_code)
+
+
+@pytest.mark.parametrize(
+    ("target_path", "exit_code"),
+    [("/data/x/y", 1), ("/data/{left}/{right}", 1), ("/data/{other}/{other}", 0)],
+)
+def test_symlink_target_coverage_requires_consistent_repeated_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], target_path: str, exit_code: int
+) -> None:
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                "target": {
+                    "namespace": "container",
+                    "path": "/data/{id}/{id}",
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+            },
+            symlinks=[{"id": "entry", "namespace": "container", "path": "/entry", "target": target_path}],
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    assert ("undefined-symlink-target" in capsys.readouterr().err) == bool(exit_code)
 
 
 def test_wildcard_symlink_target_requires_complete_declared_pattern_coverage(
@@ -1072,7 +1358,7 @@ def test_wildcard_symlink_target_requires_complete_declared_pattern_coverage(
         ("/safe/{profile}", "/safe/alice/child"),
     ],
 )
-def test_symlink_source_ancestor_of_its_target_is_a_cycle(
+def test_nonrepeating_symlink_expansion_exhausts_work_budget_without_claiming_a_cycle(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     source_path: str,
@@ -1100,7 +1386,10 @@ def test_symlink_source_ancestor_of_its_target_is_a_cycle(
     _seed(tmp_path, contract)
 
     assert _module().build(_config(), repo_root=tmp_path).run() == 1
-    assert "symlink-cycle" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "filesystem-work-limit" in error
+    assert "4096" in error
+    assert "symlink-cycle" not in error
 
 
 def test_symlink_missing_declared_target_is_rejected(
