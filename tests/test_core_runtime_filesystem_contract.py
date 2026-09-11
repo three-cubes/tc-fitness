@@ -1030,6 +1030,212 @@ def test_symlink_declaration_budget_bounds_resolution_work(
         assert error == ""
 
 
+@pytest.mark.parametrize(("length", "exit_code"), [(4096, 0), (4097, 1)])
+def test_symlink_path_component_budget_is_checked_before_resolution(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], length: int, exit_code: int
+) -> None:
+    target = "/target" + "/x" * (length - 1)
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                "target": {
+                    "namespace": "container",
+                    "path": target,
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+            },
+            symlinks=[{"id": "entry", "namespace": "container", "path": "/entry", "target": target}],
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    if exit_code:
+        assert "filesystem-work-limit" in error
+        assert "4096-component path" in error
+    else:
+        assert error == ""
+
+
+@pytest.mark.parametrize(("extra_component", "exit_code"), [(0, 0), (1, 1)])
+def test_symlink_retained_path_node_budget_counts_distinct_suffixes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extra_component: int, exit_code: int
+) -> None:
+    # 64 disjoint paths of 1024 components consume exactly 65536 nodes.
+    targets = [
+        "/"
+        + "/".join(
+            f"node-{index}-{position}" for position in range(1024 + (extra_component if index == 63 else 0))
+        )
+        for index in range(64)
+    ]
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                f"target-{index}": {
+                    "namespace": "container",
+                    "path": target,
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+                for index, target in enumerate(targets)
+            },
+            symlinks=[
+                {
+                    "id": f"entry-{index}",
+                    "namespace": "container",
+                    "path": f"/entry-{index}",
+                    "target": target,
+                }
+                for index, target in enumerate(targets)
+            ],
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    if exit_code:
+        assert "filesystem-work-limit" in error
+        assert "65536-node" in error
+    else:
+        assert error == ""
+
+
+@pytest.mark.parametrize(("extra_component", "exit_code"), [(0, 0), (1, 1)])
+def test_symlink_total_component_work_budget_has_an_exact_boundary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extra_component: int, exit_code: int
+) -> None:
+    # Each start costs 4095 target components plus 12289 source-prefix components:
+    # 64 * (4095 + 193 + 63 * 192) = 1048576. One longer final target adds one unit.
+    target = "/target" + "/x" * 4094
+    final_target = target + "/x" * extra_component
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "target": {
+                "namespace": "container",
+                "path": target,
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+        symlinks=[
+            {
+                "id": f"entry-{index}",
+                "namespace": "container",
+                "path": f"/entry-{index}" + "/x" * (192 if index == 0 else 191),
+                "target": final_target if index == 63 else target,
+            }
+            for index in range(64)
+        ],
+    )
+    if extra_component:
+        filesystem = contract["filesystem"]
+        assert isinstance(filesystem, dict)
+        roots = filesystem["roots"]
+        assert isinstance(roots, dict)
+        roots["final-target"] = {
+            "namespace": "container",
+            "path": final_target,
+            "kind": "directory",
+            "lifecycle": "persistent",
+        }
+        filesystem["allowed_nested_roots"] = [
+            {
+                "parent": "target",
+                "child": "final-target",
+                "reason": "the work-boundary fixture adds one component",
+            }
+        ]
+    _seed(tmp_path, contract)
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    if exit_code:
+        assert "filesystem-work-limit" in error
+        assert "1048576-component work" in error
+    else:
+        assert error == ""
+
+
+def test_compact_expanding_symlink_hits_path_budget_without_retaining_growing_paths(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = "/a" + "/x" * 128
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                "target": {
+                    "namespace": "container",
+                    "path": target,
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+            },
+            symlinks=[{"id": "expanding", "namespace": "container", "path": "/a", "target": target}],
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == 1
+    error = capsys.readouterr().err
+    assert "filesystem-work-limit" in error
+    assert "4096-component path" in error
+    assert "symlink-cycle" not in error
+
+
+@pytest.mark.parametrize(("final_components", "exit_code"), [(4096, 0), (4097, 1)])
+def test_finite_symlink_growth_respects_the_resolved_path_boundary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], final_components: int, exit_code: int
+) -> None:
+    first_target = "/b" + "/x" * 128
+    middle_target = "/a" + "/y" * (final_components - 129)
+    _seed(
+        tmp_path,
+        _minimal_contract(
+            namespaces={"container": {"kind": "container", "root": "/"}},
+            roots={
+                identifier: {
+                    "namespace": "container",
+                    "path": path,
+                    "kind": "directory",
+                    "lifecycle": "persistent",
+                }
+                for identifier, path in (
+                    ("first", first_target),
+                    ("middle", middle_target),
+                    ("entry", "/a/start"),
+                )
+            },
+            symlinks=[
+                {"id": "first", "namespace": "container", "path": "/a", "target": first_target},
+                {
+                    "id": "middle",
+                    "namespace": "container",
+                    "path": first_target + "/start",
+                    "target": middle_target,
+                },
+                {"id": "entry", "namespace": "container", "path": "/entry", "target": "/a/start"},
+            ],
+        ),
+    )
+
+    assert _module().build(_config(), repo_root=tmp_path).run() == exit_code
+    error = capsys.readouterr().err
+    assert "symlink-cycle" not in error
+    if exit_code:
+        assert "filesystem-work-limit" in error
+        assert "4096-component path" in error
+    else:
+        assert error == ""
+
+
 def test_ambiguous_symlink_patterns_have_a_bounded_resolution_state_space(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

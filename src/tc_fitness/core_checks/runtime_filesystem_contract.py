@@ -27,6 +27,9 @@ _ROOT_KINDS = frozenset({"directory", "file"})
 _MOUNT_MODES = frozenset({"ro", "rw"})
 _MAX_SYMLINK_DECLARATIONS = 64
 _MAX_SYMLINK_RESOLUTION_STATES = 4_096
+_MAX_SYMLINK_PATH_COMPONENTS = 4_096
+_MAX_SYMLINK_PATH_NODES = 65_536
+_MAX_SYMLINK_COMPONENT_WORK = 1_048_576
 
 REMEDIATION = _remediation(
     fix=(
@@ -989,32 +992,147 @@ def _root_overlap_findings(contract: _FilesystemDeclarations, *, source: Path) -
 
 @dataclass(frozen=True)
 class _SymlinkResolutionState:
-    path: tuple[str, ...]
+    path: int
     bindings: PathPatternBindings
 
 
+class _SymlinkWorkLimit(Exception):
+    """A deterministic resolver resource limit was reached before allocation."""
+
+
+class _SymlinkPaths:
+    """Intern exact component/tail pairs so DFS states share their path suffixes.
+
+    Node zero is the empty absolute path. A node's integer identity represents
+    its complete path exactly, without relying on a lossy hash for cycle checks.
+    Component work counts prefix materialisation, binding and interning passes;
+    counters and the node table are shared by every start in one validation.
+    """
+
+    def __init__(self) -> None:
+        self._nodes: list[tuple[str, int, int]] = [("", 0, 0)]
+        self._index: dict[tuple[str, int], int] = {}
+        self._states = 0
+        self._component_work = 0
+
+    def length(self, path: int) -> int:
+        return self._nodes[path][2]
+
+    def check_length(self, length: int) -> None:
+        if length > _MAX_SYMLINK_PATH_COMPONENTS:
+            raise _SymlinkWorkLimit(
+                f"symlink resolution exceeded its {_MAX_SYMLINK_PATH_COMPONENTS}-component path limit"
+            )
+
+    def charge_work(self, components: int) -> None:
+        if components > _MAX_SYMLINK_COMPONENT_WORK - self._component_work:
+            raise _SymlinkWorkLimit(
+                f"symlink resolution exceeded its {_MAX_SYMLINK_COMPONENT_WORK}-component work budget"
+            )
+        self._component_work += components
+
+    def prepend(self, components: tuple[str, ...], suffix: int = 0) -> int:
+        self.check_length(len(components) + self.length(suffix))
+        self.charge_work(len(components))
+        for component in reversed(components):
+            key = (component, suffix)
+            node = self._index.get(key)
+            if node is None:
+                if len(self._nodes) - 1 >= _MAX_SYMLINK_PATH_NODES:
+                    raise _SymlinkWorkLimit(
+                        f"symlink resolution exceeded its {_MAX_SYMLINK_PATH_NODES}-node retained-path budget"
+                    )
+                node = len(self._nodes)
+                self._nodes.append((component, suffix, self.length(suffix) + 1))
+                self._index[key] = node
+            suffix = node
+        return suffix
+
+    def split(self, path: int, length: int) -> tuple[tuple[str, ...], int] | None:
+        if length > self.length(path):
+            return None
+        self.charge_work(length)
+        components: list[str] = []
+        for _ in range(length):
+            component, path, _ = self._nodes[path]
+            components.append(component)
+        return tuple(components), path
+
+    def bind(self, path: int, bindings: PathPatternBindings) -> int:
+        split = self.split(path, self.length(path))
+        if split is None:
+            raise ValueError("a path must contain its own length")
+        self.charge_work(len(split[0]))
+        return self.prepend(bindings.resolve_path(split[0]))
+
+    def state(
+        self, components: tuple[str, ...], suffix: int, bindings: PathPatternBindings
+    ) -> _SymlinkResolutionState:
+        self.check_length(len(components) + self.length(suffix))
+        if self._states >= _MAX_SYMLINK_RESOLUTION_STATES:
+            raise _SymlinkWorkLimit(
+                f"symlink resolution exceeded its {_MAX_SYMLINK_RESOLUTION_STATES}-state budget"
+            )
+        self._states += 1
+        return _SymlinkResolutionState(self.prepend(components, suffix), bindings)
+
+
+def _shorter_symlink_covers_branch(
+    prefix: tuple[str, ...],
+    bindings: PathPatternBindings,
+    candidates: Sequence[SymlinkDeclaration],
+    paths: _SymlinkPaths,
+) -> bool:
+    for shorter in candidates:
+        if len(shorter.components) >= len(prefix):
+            continue
+        paths.charge_work(len(shorter.components))
+        if bindings.match_prefix(shorter.components, prefix) == bindings:
+            return True
+    return False
+
+
 def _symlink_successors(
-    state: _SymlinkResolutionState, candidates: Sequence[SymlinkDeclaration]
+    state: _SymlinkResolutionState, candidates: Sequence[SymlinkDeclaration], paths: _SymlinkPaths
 ) -> list[_SymlinkResolutionState]:
     successors: list[_SymlinkResolutionState] = []
     for candidate in candidates:
-        matched = state.bindings.match_prefix(candidate.components, state.path)
+        split = paths.split(state.path, len(candidate.components))
+        if split is None:
+            continue
+        prefix, suffix = split
+        matched = state.bindings.match_prefix(candidate.components, prefix)
         if matched is None:
             continue
         # A shorter source wins only if it matches this entire binding branch.
         # Partial matches leave other identities free to use the longer source.
-        if any(
-            len(shorter.components) < len(candidate.components)
-            and matched.match_prefix(shorter.components, state.path) == matched
-            for shorter in candidates
-        ):
+        if _shorter_symlink_covers_branch(prefix, matched, candidates, paths):
             continue
+        paths.check_length(len(candidate.target_components) + paths.length(suffix))
+        paths.charge_work(len(candidate.target_components))
         target = matched.resolve_path(candidate.target_components)
-        suffix = state.path[len(candidate.components) :]
         if matched != state.bindings:
-            suffix = matched.resolve_path(suffix)
-        successors.append(_SymlinkResolutionState((*target, *suffix), matched))
+            suffix = paths.bind(suffix, matched)
+        successors.append(paths.state(target, suffix, matched))
     return successors
+
+
+def _symlink_is_cyclic(
+    start: SymlinkDeclaration, candidates: Sequence[SymlinkDeclaration], paths: _SymlinkPaths
+) -> bool:
+    pending = [(paths.state(start.target_components, 0, PathPatternBindings()), True)]
+    active: set[_SymlinkResolutionState] = set()
+    while pending:
+        state, entering = pending.pop()
+        if not entering:
+            active.remove(state)
+            continue
+        if state in active:
+            return True
+        active.add(state)
+        pending.append((state, False))
+        pending.extend((successor, True) for successor in _symlink_successors(state, candidates, paths))
+    return False
 
 
 def _symlink_cycle_findings(contract: _FilesystemDeclarations, *, source: Path) -> list[ContractFinding]:
@@ -1025,36 +1143,23 @@ def _symlink_cycle_findings(contract: _FilesystemDeclarations, *, source: Path) 
         links_by_namespace.setdefault(physical_namespace, []).append(item)
 
     findings: list[ContractFinding] = []
-    explored_states = 0
+    paths = _SymlinkPaths()
     for start in contract.symlinks:
         physical_namespace = physical_namespaces[start.namespace]
         candidates = links_by_namespace[physical_namespace]
-        pending = [(_SymlinkResolutionState(start.target_components, PathPatternBindings()), True)]
-        active: set[_SymlinkResolutionState] = set()
-        cyclic = False
-        while pending and not cyclic:
-            state, entering = pending.pop()
-            if not entering:
-                active.remove(state)
-                continue
-            if state in active:
-                cyclic = True
-                break
-            explored_states += 1
-            if explored_states > _MAX_SYMLINK_RESOLUTION_STATES:
-                return [
-                    *findings,
-                    _finding(
-                        source,
-                        "/filesystem/symlinks",
-                        "filesystem-work-limit",
-                        f"symlink resolution exceeded its {_MAX_SYMLINK_RESOLUTION_STATES}-state budget",
-                        "reduce ambiguous wildcard or chained symlink declarations",
-                    ),
-                ]
-            active.add(state)
-            pending.append((state, False))
-            pending.extend((successor, True) for successor in _symlink_successors(state, candidates))
+        try:
+            cyclic = _symlink_is_cyclic(start, candidates, paths)
+        except _SymlinkWorkLimit as error:
+            findings.append(
+                _finding(
+                    source,
+                    "/filesystem/symlinks",
+                    "filesystem-work-limit",
+                    str(error),
+                    "reduce path size, ambiguous wildcard matches or chained symlink declarations",
+                )
+            )
+            break
         if cyclic:
             findings.append(
                 _finding(
