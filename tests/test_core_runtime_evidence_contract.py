@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from tc_fitness.core_checks._runtime_contracts import CONTRACT_SCHEMA, EVIDENCE_SCHEMA, canonical_json_bytes
 from tc_fitness.core_checks.runtime_evidence_contract import build, validate_runtime_evidence
@@ -39,6 +42,8 @@ def _evidence(
         "image_digest": _IMAGE_DIGEST,
         "host_id": "vm-hermes-1",
         "runtime_user": "openclaw",
+        "deployment_id": "deploy-20260911-001",
+        "configuration_identity": "sha256:" + "c" * 64,
         "run_id": 42,
         "attempt_id": 1,
         "captured_at": captured_at.isoformat(),
@@ -196,3 +201,133 @@ def test_stale_skipped_and_exit_code_only_evidence_fail(tmp_path: Path, capsys: 
         _seed(case, mutate=mutation)
         assert build(_config(), repo_root=case).run() == 1
         assert code in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("required_checks", ["runtime-probe", [""], [1], ["runtime-probe", "runtime-probe"]])
+def test_malformed_required_checks_fail_actionably(
+    tmp_path: Path,
+    capsys: object,
+    required_checks: object,
+) -> None:
+    _seed(tmp_path)
+    config = _config()
+    config["required_checks"] = required_checks
+    assert build(config, repo_root=tmp_path).run() == 1
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "invalid-required-checks" in captured.err
+    assert "fix:" in captured.err
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        [
+            {
+                "id": "runtime-probe",
+                "status": "passed",
+                "exit_code": 1,
+                "observation": {"kind": "process", "state": "failed"},
+            }
+        ],
+        [
+            {
+                "id": "runtime-probe",
+                "status": "passed",
+                "observation": {"kind": "process", "state": "healthy"},
+            },
+            {
+                "id": "cleanup",
+                "status": "failed",
+                "observation": {"kind": "cleanup", "state": "failed"},
+            },
+        ],
+        [
+            {
+                "id": "runtime-probe",
+                "status": "unknown",
+                "observation": {"kind": "process", "state": "healthy"},
+            }
+        ],
+        [
+            {
+                "id": "runtime-probe",
+                "status": "passed",
+                "observation": {"kind": "process", "state": "unhealthy"},
+            }
+        ],
+    ],
+)
+def test_failed_or_contradictory_emitted_check_cannot_pass(
+    tmp_path: Path,
+    capsys: object,
+    checks: list[dict[str, object]],
+) -> None:
+    _seed(tmp_path)
+    evidence = json.loads((tmp_path / "evidence.json").read_bytes())
+    evidence["checks"] = checks
+    (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
+    assert build(_config(), repo_root=tmp_path).run() == 1
+    assert "check-verdict" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+def test_expected_denial_is_an_explicit_success_outcome(tmp_path: Path) -> None:
+    _seed(tmp_path)
+    evidence = json.loads((tmp_path / "evidence.json").read_bytes())
+    evidence["checks"] = [
+        {
+            "id": "secret-denial",
+            "status": "expected-denial",
+            "exit_code": 1,
+            "observation": {"kind": "access", "outcome": "denied"},
+        }
+    ]
+    (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
+    config = _config()
+    config["required_checks"] = ["secret-denial"]
+    assert build(config, repo_root=tmp_path).run() == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("run_id", None),
+        ("attempt_id", None),
+        ("deployment_id", None),
+        ("configuration_identity", None),
+        ("run_id", "1"),
+        ("attempt_id", True),
+        ("deployment_id", ""),
+        ("configuration_identity", 1),
+    ],
+)
+def test_receipt_requires_complete_typed_identity_envelope(
+    tmp_path: Path,
+    capsys: object,
+    field: str,
+    bad_value: object,
+) -> None:
+    _seed(tmp_path)
+    evidence = json.loads((tmp_path / "evidence.json").read_bytes())
+    if bad_value is None:
+        del evidence[field]
+    else:
+        evidence[field] = bad_value
+    (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
+    assert build(_config(), repo_root=tmp_path).run() == 1
+    captured = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert "receipt-identity" in captured or "integer-id" in captured
+    assert "fix:" in captured
+
+
+@pytest.mark.parametrize("location", ["config", "artifact"])
+def test_nul_path_is_an_actionable_finding(tmp_path: Path, capsys: object, location: str) -> None:
+    _seed(tmp_path)
+    config = _config()
+    if location == "config":
+        config["contract_file"] = "bad\x00.json"
+    else:
+        evidence = json.loads((tmp_path / "evidence.json").read_bytes())
+        evidence["artifacts"] = [{"path": "bad\x00.txt", "sha256": "sha256:" + "0" * 64}]
+        (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
+    assert build(config, repo_root=tmp_path).run() == 1
+    assert "fix:" in capsys.readouterr().err  # type: ignore[attr-defined]

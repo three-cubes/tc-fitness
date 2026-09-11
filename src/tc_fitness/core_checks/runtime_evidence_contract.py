@@ -15,6 +15,8 @@ from tc_fitness.core_checks._runtime_contracts import (
     ContractFinding,
     RuntimeContractRule,
     canonical_json_bytes,
+    is_integer_identity,
+    is_sha256_digest,
     sort_findings,
 )
 from tc_fitness.lib import remediation as _remediation
@@ -22,6 +24,10 @@ from tc_fitness.lib import remediation as _remediation
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 _IDENTITY_FIELDS = ("source_sha", "image_digest", "host_id", "runtime_user")
+_STRING_RECEIPT_IDENTITIES = ("deployment_id", "configuration_identity")
+_INTEGER_RECEIPT_IDENTITIES = ("run_id", "attempt_id")
+_CHECK_STATUSES = frozenset({"passed", "failed", "skipped", "expected-denial"})
+_FAILURE_OBSERVATIONS = frozenset({"denied", "error", "failed", "failure", "false", "rejected", "unhealthy"})
 
 REMEDIATION = _remediation(
     fix=(
@@ -102,6 +108,118 @@ def _identity_findings(
                     f"collect evidence from the expected {field}",
                 )
             )
+    return findings
+
+
+def _normalise_required_checks(
+    value: object,
+    *,
+    source: Path,
+) -> tuple[tuple[str, ...], tuple[ContractFinding, ...]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return (), (
+            _finding(
+                source,
+                "/required_checks",
+                "invalid-required-checks",
+                "required_checks must be a list of unique non-empty strings",
+                "configure required_checks as an array of check ids",
+            ),
+        )
+    valid: list[str] = []
+    findings: list[ContractFinding] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            findings.append(
+                _finding(
+                    source,
+                    f"/required_checks/{index}",
+                    "invalid-required-checks",
+                    "each required check id must be a non-empty string",
+                    "replace the member with one declared non-empty check id",
+                )
+            )
+            continue
+        if item in seen:
+            findings.append(
+                _finding(
+                    source,
+                    f"/required_checks/{index}",
+                    "invalid-required-checks",
+                    f"required check {item!r} is listed more than once",
+                    "keep each required check id exactly once",
+                )
+            )
+            continue
+        seen.add(item)
+        valid.append(item)
+    return tuple(valid), sort_findings(findings)
+
+
+def _receipt_identity_findings(
+    evidence: Mapping[str, object],
+    *,
+    source: Path,
+) -> list[ContractFinding]:
+    findings: list[ContractFinding] = []
+    for field in (*_IDENTITY_FIELDS, *_STRING_RECEIPT_IDENTITIES, *_INTEGER_RECEIPT_IDENTITIES):
+        if field not in evidence:
+            findings.append(
+                _finding(
+                    source,
+                    f"/{field}",
+                    "missing-receipt-identity",
+                    f"receipt identity {field} is required",
+                    f"record the observed {field} for this deployment attempt",
+                )
+            )
+    for field in (*_IDENTITY_FIELDS, *_STRING_RECEIPT_IDENTITIES):
+        value = evidence.get(field)
+        if field in evidence and (not isinstance(value, str) or not value.strip()):
+            findings.append(
+                _finding(
+                    source,
+                    f"/{field}",
+                    "invalid-receipt-identity",
+                    f"receipt identity {field} must be a non-empty string",
+                    f"record a non-empty observed {field}",
+                )
+            )
+    for field in _INTEGER_RECEIPT_IDENTITIES:
+        value = evidence.get(field)
+        if field in evidence and not is_integer_identity(value):
+            findings.append(
+                _finding(
+                    source,
+                    f"/{field}",
+                    "invalid-receipt-identity",
+                    f"receipt identity {field} must be a non-negative integer, not a boolean",
+                    f"record {field} as a JSON integer",
+                )
+            )
+    source_sha = evidence.get("source_sha")
+    if isinstance(source_sha, str) and source_sha and _SOURCE_SHA_RE.fullmatch(source_sha) is None:
+        findings.append(
+            _finding(
+                source,
+                "/source_sha",
+                "invalid-receipt-identity",
+                "receipt source_sha must be 40 or 64 lowercase hexadecimal characters",
+                "record the full lowercase source commit SHA",
+            )
+        )
+    image_digest = evidence.get("image_digest")
+    if isinstance(image_digest, str) and image_digest and not is_sha256_digest(image_digest):
+        findings.append(
+            _finding(
+                source,
+                "/image_digest",
+                "invalid-receipt-identity",
+                "receipt image_digest must use canonical sha256 notation",
+                "record sha256 followed by 64 lowercase hexadecimal characters",
+            )
+        )
     return findings
 
 
@@ -227,7 +345,28 @@ def _check_findings(
             )
         else:
             by_id[check_id] = (index, check)
-        if check.get("status") == "skipped":
+        status = check.get("status")
+        if not isinstance(status, str) or status not in _CHECK_STATUSES:
+            findings.append(
+                _finding(
+                    source,
+                    f"/checks/{index}/status",
+                    "invalid-check-verdict",
+                    f"check {check_id!r} has an unsupported status",
+                    "record passed, failed, skipped or expected-denial",
+                )
+            )
+        elif status == "failed":
+            findings.append(
+                _finding(
+                    source,
+                    f"/checks/{index}/status",
+                    "failed-check-verdict",
+                    f"emitted check {check_id!r} records a failure",
+                    "correct the runtime defect and collect new passing evidence",
+                )
+            )
+        elif status == "skipped":
             findings.append(
                 _finding(
                     source,
@@ -248,6 +387,100 @@ def _check_findings(
                     "record the observed runtime state that proves the check outcome",
                 )
             )
+            continue
+        observation = cast(Mapping[str, object], observation)
+        top_exit_code = check.get("exit_code")
+        observed_exit_code = observation.get("exit_code")
+        if top_exit_code is not None and not is_integer_identity(top_exit_code):
+            findings.append(
+                _finding(
+                    source,
+                    f"/checks/{index}/exit_code",
+                    "contradictory-check-verdict",
+                    f"check {check_id!r} exit_code must be a non-negative integer, not a boolean",
+                    "record the actual integer process exit code",
+                )
+            )
+        if observed_exit_code is not None and not is_integer_identity(observed_exit_code):
+            findings.append(
+                _finding(
+                    source,
+                    f"/checks/{index}/observation/exit_code",
+                    "contradictory-check-verdict",
+                    f"check {check_id!r} observation exit_code is not a valid integer",
+                    "record the actual integer process exit code",
+                )
+            )
+        if (
+            top_exit_code is not None
+            and observed_exit_code is not None
+            and top_exit_code != observed_exit_code
+        ):
+            findings.append(
+                _finding(
+                    source,
+                    f"/checks/{index}/observation/exit_code",
+                    "contradictory-check-verdict",
+                    f"check {check_id!r} records conflicting exit codes",
+                    "record one consistent process exit code",
+                )
+            )
+        effective_exit_code = top_exit_code if top_exit_code is not None else observed_exit_code
+        if status == "passed":
+            if is_integer_identity(effective_exit_code) and effective_exit_code != 0:
+                findings.append(
+                    _finding(
+                        source,
+                        f"/checks/{index}/exit_code",
+                        "contradictory-check-verdict",
+                        f"check {check_id!r} is marked passed but has a non-zero exit code",
+                        "mark the check failed or collect a zero-exit passing observation",
+                    )
+                )
+            for field in ("state", "status", "result", "outcome", "verdict"):
+                value = observation.get(field)
+                if isinstance(value, str) and value.casefold() in _FAILURE_OBSERVATIONS:
+                    findings.append(
+                        _finding(
+                            source,
+                            f"/checks/{index}/observation/{field}",
+                            "contradictory-check-verdict",
+                            f"check {check_id!r} is marked passed but its {field} records {value!r}",
+                            "mark the check failed or record the actual successful observation",
+                        )
+                    )
+            for field in ("success", "passed", "healthy", "allowed"):
+                if observation.get(field) is False:
+                    findings.append(
+                        _finding(
+                            source,
+                            f"/checks/{index}/observation/{field}",
+                            "contradictory-check-verdict",
+                            f"check {check_id!r} is marked passed but {field} is false",
+                            "mark the check failed or record the actual successful observation",
+                        )
+                    )
+        elif status == "expected-denial":
+            if observation.get("outcome") != "denied":
+                findings.append(
+                    _finding(
+                        source,
+                        f"/checks/{index}/observation/outcome",
+                        "contradictory-check-verdict",
+                        f"check {check_id!r} uses expected-denial without observing a denied outcome",
+                        "record outcome as denied or use the status matching the observed result",
+                    )
+                )
+            if is_integer_identity(effective_exit_code) and effective_exit_code == 0:
+                findings.append(
+                    _finding(
+                        source,
+                        f"/checks/{index}/exit_code",
+                        "contradictory-check-verdict",
+                        f"check {check_id!r} expected denial but its process exited successfully",
+                        "record the non-zero denial exit code or correct the observation status",
+                    )
+                )
 
     for check_id in required_checks:
         located = by_id.get(check_id)
@@ -264,7 +497,7 @@ def _check_findings(
             continue
         index, check = located
         status = check.get("status")
-        if status != "passed" and status != "skipped":
+        if not isinstance(status, str) or status not in {"passed", "expected-denial", "skipped"}:
             findings.append(
                 _finding(
                     source,
@@ -278,7 +511,7 @@ def _check_findings(
 
 
 def _safe_artifact_path(base: Path, value: object) -> Path | None:
-    if not isinstance(value, str) or not value or "\\" in value:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         return None
     relative = PurePosixPath(value)
     if relative.is_absolute() or ".." in relative.parts:
@@ -286,7 +519,7 @@ def _safe_artifact_path(base: Path, value: object) -> Path | None:
     root = base.resolve()
     try:
         path = (root / Path(*relative.parts)).resolve()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return None
     try:
         path.relative_to(root)
@@ -407,7 +640,13 @@ def validate_runtime_evidence(
                 "configure and retain a runtime evidence receipt",
             ),
         )
-    findings = _expected_identity_findings(expected_identity, source=source)
+    validated_required_checks, required_check_findings = _normalise_required_checks(
+        required_checks,
+        source=source,
+    )
+    findings = list(required_check_findings)
+    findings.extend(_expected_identity_findings(expected_identity, source=source))
+    findings.extend(_receipt_identity_findings(evidence, source=source))
     if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int) or max_age_seconds < 0:
         findings.append(
             _finding(
@@ -449,7 +688,7 @@ def validate_runtime_evidence(
         )
 
     findings.extend(_identity_findings(evidence, expected_identity=expected_identity, source=source))
-    findings.extend(_check_findings(evidence, required_checks=required_checks, source=source))
+    findings.extend(_check_findings(evidence, required_checks=validated_required_checks, source=source))
     findings.extend(_artifact_findings(evidence, source=source))
     return sort_findings(findings)
 
@@ -468,13 +707,15 @@ class RuntimeEvidenceContract(RuntimeContractRule):
             self.expected_identity = dict(cast(Mapping[str, object], nested_identity))
         else:
             self.expected_identity = {field: config.get(f"expected_{field}") for field in _IDENTITY_FIELDS}
-        raw_checks = config.get("required_checks", ())
-        if isinstance(raw_checks, Sequence) and not isinstance(raw_checks, (str, bytes)):
-            self.required_checks = tuple(str(value) for value in raw_checks)
-        else:
-            self.required_checks = ()
+        self.required_checks, self._required_check_findings = _normalise_required_checks(
+            config.get("required_checks", ()),
+            source=self._repo_root / "pyproject.toml",
+        )
         raw_max_age = config.get("max_age_seconds", 300)
         self.max_age_seconds = cast(int, raw_max_age)
+
+    def validate_configuration(self) -> tuple[ContractFinding, ...]:
+        return self._required_check_findings
 
     def validate_documents(self, documents: ContractDocuments) -> tuple[ContractFinding, ...]:
         return validate_runtime_evidence(

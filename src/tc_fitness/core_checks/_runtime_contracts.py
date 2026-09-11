@@ -21,6 +21,7 @@ from tc_fitness.fitness_rule import FitnessRule
 CONTRACT_SCHEMA = "tc-fitness/runtime-contract/v1"
 EVIDENCE_SCHEMA = "tc-fitness/runtime-evidence/v1"
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_MAX_DOCUMENT_DEPTH = 100
 
 _INTEGER_FIELDS = frozenset(
     {
@@ -83,7 +84,7 @@ def canonical_json_bytes(value: object) -> bytes:
 
 def absolute_posix_components(value: object) -> tuple[str, ...] | None:
     """Return components for a safe absolute POSIX path, excluding the root."""
-    if not isinstance(value, str) or not value or "\\" in value:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         return None
     path = PurePosixPath(value)
     if not path.is_absolute() or ".." in path.parts:
@@ -160,25 +161,87 @@ def _json_pointer_part(value: object) -> str:
     return str(value).replace("~", "~0").replace("/", "~1")
 
 
-def _shape_findings(value: object, *, source: Path, pointer: str = "") -> list[ContractFinding]:
+def _shape_findings(
+    value: object,
+    *,
+    source: Path,
+    pointer: str = "",
+    depth: int = 0,
+    active: set[int] | None = None,
+) -> list[ContractFinding]:
+    if depth > _MAX_DOCUMENT_DEPTH:
+        return [
+            _finding(
+                source,
+                pointer or "/",
+                "document-too-deep",
+                f"document nesting exceeds the {_MAX_DOCUMENT_DEPTH}-level safety limit",
+                "flatten the document structure below the supported depth",
+            )
+        ]
     findings: list[ContractFinding] = []
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            child_pointer = f"{pointer}/{_json_pointer_part(key)}"
-            if key in _INTEGER_FIELDS and not is_integer_identity(child):
-                findings.append(
-                    _finding(
-                        source,
-                        child_pointer,
-                        "integer-id",
-                        f"{key} must be an integer and booleans are not integer identities",
-                        f"set {key} to a JSON integer",
-                    )
+    if isinstance(value, (Mapping, list)):
+        active_nodes = active if active is not None else set()
+        identity = id(value)
+        if identity in active_nodes:
+            return [
+                _finding(
+                    source,
+                    pointer or "/",
+                    "cyclic-document",
+                    "document aliases form a recursive cycle that canonical JSON cannot represent",
+                    "remove the cyclic YAML alias and declare an acyclic value",
                 )
-            findings.extend(_shape_findings(child, source=source, pointer=child_pointer))
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            findings.extend(_shape_findings(child, source=source, pointer=f"{pointer}/{index}"))
+            ]
+        active_nodes.add(identity)
+        try:
+            if isinstance(value, Mapping):
+                for index, (key, child) in enumerate(value.items()):
+                    if not isinstance(key, str):
+                        child_pointer = f"{pointer}/<non-string-key-{index}>"
+                        findings.append(
+                            _finding(
+                                source,
+                                child_pointer,
+                                "non-string-key",
+                                f"mapping key has type {type(key).__name__}; canonical mappings require strings",
+                                "quote the mapping key so it is a string",
+                            )
+                        )
+                    else:
+                        child_pointer = f"{pointer}/{_json_pointer_part(key)}"
+                        if key in _INTEGER_FIELDS and not is_integer_identity(child):
+                            findings.append(
+                                _finding(
+                                    source,
+                                    child_pointer,
+                                    "integer-id",
+                                    f"{key} must be an integer and booleans are not integer identities",
+                                    f"set {key} to a JSON integer",
+                                )
+                            )
+                    findings.extend(
+                        _shape_findings(
+                            child,
+                            source=source,
+                            pointer=child_pointer,
+                            depth=depth + 1,
+                            active=active_nodes,
+                        )
+                    )
+            else:
+                for index, child in enumerate(value):
+                    findings.extend(
+                        _shape_findings(
+                            child,
+                            source=source,
+                            pointer=f"{pointer}/{index}",
+                            depth=depth + 1,
+                            active=active_nodes,
+                        )
+                    )
+        finally:
+            active_nodes.remove(identity)
     elif isinstance(value, float) and not math.isfinite(value):
         findings.append(
             _finding(
@@ -227,6 +290,16 @@ def _load_strict_json(
                 "invalid-json-constant",
                 f"JSON constant {exc.value!r} is not permitted",
                 "replace NaN or infinity with a finite JSON value",
+            ),
+        )
+    except RecursionError:
+        return None, (
+            _finding(
+                source,
+                "/",
+                "document-too-deep",
+                "JSON nesting exceeds the parser safety limit",
+                "flatten the document structure below the supported depth",
             ),
         )
     except json.JSONDecodeError as exc:
@@ -312,6 +385,16 @@ def _load_strict_yaml(
                 "remove the duplicate key and keep one authoritative value",
             ),
         )
+    except RecursionError:
+        return None, (
+            _finding(
+                source,
+                "/",
+                "document-too-deep",
+                "YAML nesting exceeds the parser safety limit",
+                "flatten the document structure below the supported depth",
+            ),
+        )
     except (TypeError, yaml.YAMLError) as exc:
         mark = getattr(exc, "problem_mark", None)
         where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
@@ -329,9 +412,13 @@ def _load_strict_yaml(
             ),
         )
     shape = _shape_findings(value, source=source)
+    structure_is_invalid = any(
+        finding.code in {"cyclic-document", "document-too-deep", "non-string-key"} for finding in shape
+    )
     try:
-        canonical_json_bytes(value)
-    except (TypeError, ValueError):
+        if not structure_is_invalid:
+            canonical_json_bytes(value)
+    except (RecursionError, TypeError, ValueError):
         shape.append(
             _finding(
                 source,
@@ -366,7 +453,8 @@ def load_runtime_document(
             ),
             None,
         )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
+        reason = (exc.strerror or exc.__class__.__name__) if isinstance(exc, OSError) else "illegal path"
         return (
             None,
             (
@@ -374,8 +462,8 @@ def load_runtime_document(
                     path,
                     "/",
                     "unreadable-file",
-                    f"configured document cannot be read: {exc.strerror or exc.__class__.__name__}",
-                    "make the configured document readable",
+                    f"configured document cannot be read: {reason}",
+                    "use a legal path and make the configured document readable",
                 ),
             ),
             None,
@@ -432,7 +520,7 @@ def _safe_config_path(
             ),
         )
     relative = PurePosixPath(configured)
-    if relative.is_absolute() or ".." in relative.parts or "\\" in configured:
+    if relative.is_absolute() or ".." in relative.parts or "\\" in configured or "\x00" in configured:
         return None, (
             _finding(
                 source,
@@ -445,7 +533,7 @@ def _safe_config_path(
     root = repo_root.resolve()
     try:
         candidate = (root / Path(*relative.parts)).resolve()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return None, (
             _finding(
                 source,
@@ -647,18 +735,23 @@ class RuntimeContractRule(FitnessRule):
         """Subclasses implement their protocol-specific invariants."""
         return ()
 
+    def validate_configuration(self) -> tuple[ContractFinding, ...]:
+        """Subclasses may reject malformed values from their active config block."""
+        return ()
+
     def collect_findings(self) -> tuple[ContractFinding, ...]:
         """Load and validate the configured documents once."""
         if not self.active:
             return ()
+        config_findings = self.validate_configuration()
         documents, findings = load_contract_documents(
             self.config,
             repo_root=self._repo_root,
             require_evidence=self.requires_evidence,
         )
         if findings or documents is None:
-            return findings
-        return self.validate_documents(documents)
+            return sort_findings((*config_findings, *findings))
+        return sort_findings((*config_findings, *self.validate_documents(documents)))
 
     def run(self) -> int:
         """Fail on every finding; intentionally bypass per-file baselines."""
