@@ -21,6 +21,7 @@ from tc_fitness.fitness_rule import FitnessRule
 CONTRACT_SCHEMA = "tc-fitness/runtime-contract/v1"
 EVIDENCE_SCHEMA = "tc-fitness/runtime-evidence/v1"
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_PATH_IDENTITY_SEGMENT_RE = re.compile(r"\{[A-Za-z][A-Za-z0-9_-]*\}\Z")
 _MAX_DOCUMENT_DEPTH = 100
 
 _INTEGER_FIELDS = frozenset(
@@ -100,6 +101,26 @@ def is_component_prefix(parent: tuple[str, ...], child: tuple[str, ...]) -> bool
 def component_paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
     """Return whether either absolute path contains the other."""
     return is_component_prefix(left, right) or is_component_prefix(right, left)
+
+
+def is_path_identity_segment(component: str) -> bool:
+    """Return whether one complete path component is an identity wildcard."""
+    return _PATH_IDENTITY_SEGMENT_RE.fullmatch(component) is not None
+
+
+def is_component_pattern_prefix(parent: tuple[str, ...], child: tuple[str, ...]) -> bool:
+    """Return whether a literal/wildcard component pattern can contain another."""
+    if len(parent) > len(child):
+        return False
+    return all(
+        left == right or is_path_identity_segment(left) or is_path_identity_segment(right)
+        for left, right in zip(parent, child[: len(parent)], strict=True)
+    )
+
+
+def component_pattern_paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    """Return whether two component patterns can identify nested physical paths."""
+    return is_component_pattern_prefix(left, right) or is_component_pattern_prefix(right, left)
 
 
 def is_integer_identity(value: object) -> bool:
@@ -450,7 +471,7 @@ def _load_strict_yaml(
 def load_runtime_document(
     path: Path,
     *,
-    expected_schema: str,
+    expected_schema: str | None,
 ) -> tuple[Mapping[str, object] | None, tuple[ContractFinding, ...], bytes | None]:
     """Read exact bytes and strictly decode one JSON or YAML protocol document."""
     try:
@@ -506,7 +527,7 @@ def load_runtime_document(
         )
 
     found = list(findings)
-    if value is not None and value.get("schema") != expected_schema:
+    if expected_schema is not None and value is not None and value.get("schema") != expected_schema:
         found.append(
             _finding(
                 path,
@@ -519,6 +540,251 @@ def load_runtime_document(
     if found:
         return None, sort_findings(found), raw
     return value, (), raw
+
+
+def _safe_external_path(
+    source: Path,
+    configured: object,
+    *,
+    pointer: str,
+) -> tuple[Path | None, tuple[ContractFinding, ...]]:
+    if not isinstance(configured, str) or not configured.strip():
+        return None, (
+            _finding(
+                source,
+                pointer,
+                "invalid-external-reference",
+                "external reference file must be a non-empty repository-relative path",
+                "set file to a repository-relative JSON or YAML path",
+            ),
+        )
+    relative = PurePosixPath(configured)
+    if relative.is_absolute() or ".." in relative.parts or "\\" in configured or "\x00" in configured:
+        return None, (
+            _finding(
+                source,
+                pointer,
+                "unsafe-external-reference",
+                "external reference file must stay beneath the contract directory",
+                "use a relative path without '..', backslashes or NUL bytes",
+            ),
+        )
+    root = source.resolve().parent
+    try:
+        candidate = (root / Path(*relative.parts)).resolve()
+        candidate.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None, (
+            _finding(
+                source,
+                pointer,
+                "unsafe-external-reference",
+                "external reference resolves outside the contract directory or through an invalid symlink",
+                "reference a readable file physically beneath the contract directory",
+            ),
+        )
+    return candidate, ()
+
+
+def _decode_json_pointer(
+    pointer: object, *, source: Path, location: str
+) -> tuple[tuple[str, ...] | None, tuple[ContractFinding, ...]]:
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        return None, (
+            _finding(
+                source,
+                location,
+                "invalid-external-pointer",
+                "external reference pointer must be an absolute JSON pointer",
+                "set pointer to a slash-prefixed path such as /clusters",
+            ),
+        )
+    decoded: list[str] = []
+    for raw_part in pointer[1:].split("/"):
+        index = 0
+        part = ""
+        while index < len(raw_part):
+            if raw_part[index] != "~":
+                part += raw_part[index]
+                index += 1
+                continue
+            if index + 1 >= len(raw_part) or raw_part[index + 1] not in {"0", "1"}:
+                return None, (
+                    _finding(
+                        source,
+                        location,
+                        "invalid-external-pointer",
+                        "external reference pointer contains an invalid JSON pointer escape",
+                        "escape '~' as '~0' and '/' as '~1' in pointer components",
+                    ),
+                )
+            part += "~" if raw_part[index + 1] == "0" else "/"
+            index += 2
+        decoded.append(part)
+    return tuple(decoded), ()
+
+
+def _select_external_value(
+    document: object,
+    components: tuple[str, ...],
+    *,
+    source: Path,
+    pointer: str,
+) -> tuple[object | None, tuple[ContractFinding, ...]]:
+    value = document
+    for component in components:
+        if isinstance(value, Mapping) and component in value:
+            value = value[component]
+            continue
+        if isinstance(value, list) and component.isascii() and component.isdecimal():
+            index = int(component)
+            if index < len(value):
+                value = value[index]
+                continue
+        return None, (
+            _finding(
+                source,
+                pointer,
+                "external-pointer-missing",
+                "external reference pointer does not select a value",
+                "correct the pointer or add the selected value to the external registry",
+            ),
+        )
+    return value, ()
+
+
+def _load_external_references(
+    declarations: object,
+    *,
+    source: Path,
+) -> tuple[dict[str, object], tuple[ContractFinding, ...]]:
+    if declarations is None:
+        return {}, ()
+    if not isinstance(declarations, Mapping):
+        return {}, (
+            _finding(
+                source,
+                "/external_references",
+                "invalid-external-references",
+                "external_references must be a mapping of names to file and pointer declarations",
+                "declare each external reference beneath a unique mapping key",
+            ),
+        )
+
+    loaded: dict[str, object] = {}
+    findings: list[ContractFinding] = []
+    for name, declaration in declarations.items():
+        location = f"/external_references/{_json_pointer_part(name)}"
+        if not isinstance(name, str) or not name.strip() or not isinstance(declaration, Mapping):
+            findings.append(
+                _finding(
+                    source,
+                    location,
+                    "invalid-external-reference",
+                    "external reference requires a non-empty name and a mapping declaration",
+                    "declare a named mapping with file and pointer fields",
+                )
+            )
+            continue
+        unknown = set(declaration) - {"file", "pointer"}
+        if unknown or set(declaration) != {"file", "pointer"}:
+            findings.append(
+                _finding(
+                    source,
+                    location,
+                    "invalid-external-reference",
+                    "external reference declaration must contain exactly file and pointer",
+                    "remove unknown fields and set both file and pointer",
+                )
+            )
+            continue
+        path, path_findings = _safe_external_path(
+            source,
+            declaration.get("file"),
+            pointer=f"{location}/file",
+        )
+        components, pointer_findings = _decode_json_pointer(
+            declaration.get("pointer"),
+            source=source,
+            location=f"{location}/pointer",
+        )
+        findings.extend((*path_findings, *pointer_findings))
+        if path is None or components is None:
+            continue
+        document, document_findings, _ = load_runtime_document(path, expected_schema=None)
+        findings.extend(document_findings)
+        if document is None or document_findings:
+            continue
+        selected, selection_findings = _select_external_value(
+            document,
+            components,
+            source=path,
+            pointer=cast(str, declaration["pointer"]),
+        )
+        findings.extend(selection_findings)
+        if not selection_findings:
+            loaded[name] = selected
+    return loaded, sort_findings(findings)
+
+
+def _replace_external_references(
+    value: object,
+    *,
+    references: Mapping[str, object],
+    source: Path,
+    pointer: str = "",
+) -> tuple[object, tuple[ContractFinding, ...]]:
+    if isinstance(value, Mapping):
+        if "$external_ref" in value:
+            if set(value) != {"$external_ref"}:
+                return value, (
+                    _finding(
+                        source,
+                        pointer or "/",
+                        "invalid-external-reference-use",
+                        "$external_ref must be the only field in its placeholder mapping",
+                        "move sibling fields outside the external reference placeholder",
+                    ),
+                )
+            name = value.get("$external_ref")
+            if not isinstance(name, str) or not name.strip() or name not in references:
+                return value, (
+                    _finding(
+                        source,
+                        f"{pointer}/$external_ref",
+                        "undefined-external-reference",
+                        f"external reference {name!r} is not declared or could not be loaded",
+                        "declare the named external reference and correct all loading findings",
+                    ),
+                )
+            return references[name], ()
+        result: dict[str, object] = {}
+        findings: list[ContractFinding] = []
+        for key, child in value.items():
+            child_pointer = f"{pointer}/{_json_pointer_part(key)}"
+            replacement, child_findings = _replace_external_references(
+                child,
+                references=references,
+                source=source,
+                pointer=child_pointer,
+            )
+            result[str(key)] = replacement
+            findings.extend(child_findings)
+        return result, sort_findings(findings)
+    if isinstance(value, list):
+        result_list: list[object] = []
+        findings = []
+        for index, child in enumerate(value):
+            replacement, child_findings = _replace_external_references(
+                child,
+                references=references,
+                source=source,
+                pointer=f"{pointer}/{index}",
+            )
+            result_list.append(replacement)
+            findings.extend(child_findings)
+        return result_list, sort_findings(findings)
+    return value, ()
 
 
 def _safe_config_path(
@@ -598,68 +864,79 @@ def resolve_contract(
                 )
             if expected is not None:
                 selected[key] = expected
-        return selected, ()
-
-    environments = registry.get("environments")
-    if not isinstance(environments, Mapping):
-        return None, (
-            _finding(
-                source,
-                "/environments",
-                "invalid-environments",
-                "environments must be a mapping when the key is present",
-                "remove the key for a selected contract or declare an environment mapping",
-            ),
-        )
-
-    if not isinstance(environment, str) or not environment or not isinstance(target, str) or not target:
-        return None, (
-            _finding(
-                source,
-                "/environments",
-                "missing-selection",
-                "a registry requires both environment and target selectors",
-                "supply non-empty environment and target values",
-            ),
-        )
-    if not isinstance(environments.get(environment), Mapping):
-        return None, (
-            _finding(
-                source,
-                f"/environments/{_json_pointer_part(environment)}",
-                "unknown-environment",
-                f"environment {environment!r} is not declared",
-                "select a declared environment or add it to the registry",
-            ),
-        )
-    environment_doc = cast(Mapping[str, object], environments[environment])
-    targets = environment_doc.get("targets")
-    if not isinstance(targets, Mapping) or not isinstance(targets.get(target), Mapping):
-        return None, (
-            _finding(
-                source,
-                f"/environments/{_json_pointer_part(environment)}/targets/{_json_pointer_part(target)}",
-                "unknown-target",
-                f"target {target!r} is not declared",
-                "select a declared target or add it to the registry",
-            ),
-        )
-    selected_target = cast(Mapping[str, object], targets[target])
-    selected = dict(selected_target)
-    reserved = {"schema": CONTRACT_SCHEMA, "environment": environment, "target": target}
-    for key, expected in reserved.items():
-        if key in selected and selected[key] != expected:
+        declarations = selected.pop("external_references", None)
+    else:
+        environments = registry.get("environments")
+        if not isinstance(environments, Mapping):
             return None, (
                 _finding(
                     source,
-                    f"/environments/{_json_pointer_part(environment)}/targets/{_json_pointer_part(target)}/{key}",
-                    "selection-conflict",
-                    f"target-local {key} conflicts with its registry identity",
-                    f"remove the target-local {key} or set it to {expected!r}",
+                    "/environments",
+                    "invalid-environments",
+                    "environments must be a mapping when the key is present",
+                    "remove the key for a selected contract or declare an environment mapping",
                 ),
             )
-        selected[key] = expected
-    return selected, ()
+
+        if not isinstance(environment, str) or not environment or not isinstance(target, str) or not target:
+            return None, (
+                _finding(
+                    source,
+                    "/environments",
+                    "missing-selection",
+                    "a registry requires both environment and target selectors",
+                    "supply non-empty environment and target values",
+                ),
+            )
+        if not isinstance(environments.get(environment), Mapping):
+            return None, (
+                _finding(
+                    source,
+                    f"/environments/{_json_pointer_part(environment)}",
+                    "unknown-environment",
+                    f"environment {environment!r} is not declared",
+                    "select a declared environment or add it to the registry",
+                ),
+            )
+        environment_doc = cast(Mapping[str, object], environments[environment])
+        targets = environment_doc.get("targets")
+        if not isinstance(targets, Mapping) or not isinstance(targets.get(target), Mapping):
+            return None, (
+                _finding(
+                    source,
+                    f"/environments/{_json_pointer_part(environment)}/targets/{_json_pointer_part(target)}",
+                    "unknown-target",
+                    f"target {target!r} is not declared",
+                    "select a declared target or add it to the registry",
+                ),
+            )
+        selected_target = cast(Mapping[str, object], targets[target])
+        selected = dict(selected_target)
+        reserved = {"schema": CONTRACT_SCHEMA, "environment": environment, "target": target}
+        for key, expected in reserved.items():
+            if key in selected and selected[key] != expected:
+                return None, (
+                    _finding(
+                        source,
+                        f"/environments/{_json_pointer_part(environment)}/targets/{_json_pointer_part(target)}/{key}",
+                        "selection-conflict",
+                        f"target-local {key} conflicts with its registry identity",
+                        f"remove the target-local {key} or set it to {expected!r}",
+                    ),
+                )
+            selected[key] = expected
+        declarations = registry.get("external_references")
+
+    references, reference_findings = _load_external_references(declarations, source=source)
+    resolved, use_findings = _replace_external_references(
+        selected,
+        references=references,
+        source=source,
+    )
+    findings = sort_findings((*reference_findings, *use_findings))
+    if findings or not isinstance(resolved, Mapping):
+        return None, findings
+    return cast(Mapping[str, object], resolved), ()
 
 
 def load_contract_documents(
@@ -805,10 +1082,13 @@ __all__ = [
     "RuntimeContractRule",
     "absolute_posix_components",
     "canonical_json_bytes",
+    "component_pattern_paths_overlap",
     "component_paths_overlap",
     "finding_payload",
+    "is_component_pattern_prefix",
     "is_component_prefix",
     "is_integer_identity",
+    "is_path_identity_segment",
     "is_sha256_digest",
     "load_contract_documents",
     "load_runtime_document",
