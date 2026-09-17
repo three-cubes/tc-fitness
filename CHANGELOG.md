@@ -15,6 +15,15 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+### Fixed
+
+- **Changed-line coverage now self-heals stale remote base refs** — before
+  resolving the merge base, `new_code_coverage` refreshes the configured
+  remote-tracking branch with a fixed Git argv. Offline or authentication
+  failures remain visible and fall back to the cached ref, so local coverage
+  keeps measuring without narrowing scope, exclusions, baselines, or manual
+  intervention.
+
 ## [0.15.2] - 2026-09-07
 
 ### Fixed
