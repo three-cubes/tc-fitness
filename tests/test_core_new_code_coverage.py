@@ -55,8 +55,8 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-def _completed(args: list[str], rc: int, out: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(args=["git", *args], returncode=rc, stdout=out, stderr="")
+def _completed(args: list[str], rc: int, out: str, err: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=["git", *args], returncode=rc, stdout=out, stderr=err)
 
 
 def _fake_git(
@@ -310,6 +310,104 @@ def test_ignored_untracked_source_does_not_change_the_ci_equivalent_tree(tmp_pat
     rule = build(_cfg(), repo_root=repo)
 
     assert rule.run() == 0
+
+
+def test_stale_remote_base_is_refreshed_before_exact_merge_base(tmp_path: Path) -> None:
+    """A stale remote-tracking ref is refreshed before it defines new code."""
+    calls: list[list[str]] = []
+    refreshed = False
+
+    def runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        nonlocal refreshed
+        calls.append(args)
+        if args == ["remote"]:
+            return _completed(args, 0, "origin\nupstream\n")
+        if args[0] == "fetch":
+            assert args == [
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--",
+                "upstream",
+                "+refs/heads/release/next:refs/remotes/upstream/release/next",
+            ]
+            refreshed = True
+            return _completed(args, 0, "")
+        if args[0] == "merge-base":
+            assert refreshed
+            assert args == ["merge-base", "upstream/release/next", "HEAD"]
+            return _completed(args, 0, "fresh-base\n")
+        if args[0] == "diff":
+            assert args == ["diff", "-U0", "fresh-base", "--"]
+            return _completed(args, 0, _diff("src/a.py", 2, ["new = 1"]))
+        if args[0] == "ls-files":
+            return _completed(args, 0, "")
+        raise AssertionError(f"unexpected git argv: {args}")
+
+    rule = build(_cfg(base_ref="upstream/release/next"), repo_root=tmp_path, git_runner=runner)
+
+    assert rule._changed_lines() == {"src/a.py": {2}}
+    assert calls[:3] == [
+        ["remote"],
+        [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--",
+            "upstream",
+            "+refs/heads/release/next:refs/remotes/upstream/release/next",
+        ],
+        ["merge-base", "upstream/release/next", "HEAD"],
+    ]
+
+
+def test_real_stale_remote_tracking_ref_is_advanced(tmp_path: Path) -> None:
+    """The production runner repairs an actually stale remote-tracking ref."""
+    repo = _git_repo(tmp_path)
+    remote = tmp_path / "origin.git"
+    _git(tmp_path, "init", "--bare", "--quiet", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+    stale = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _seed(repo, "src/trunk.py", "trunk = 1\n")
+    _git(repo, "add", "src/trunk.py")
+    _git(repo, "commit", "--quiet", "-m", "advance trunk")
+    fresh = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+    _git(repo, "reset", "--hard", "--quiet", stale)
+    _git(repo, "update-ref", "refs/remotes/origin/main", stale)
+
+    build(_cfg(), repo_root=repo)._changed_lines()
+
+    assert _git(repo, "rev-parse", "origin/main").stdout.strip() == fresh
+
+
+def test_remote_refresh_failure_uses_cached_base_with_visible_diagnostic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Offline runs keep measuring against the cached ref and say so."""
+
+    def runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args == ["remote"]:
+            return _completed(args, 0, "origin\n")
+        if args[0] == "fetch":
+            return _completed(args, 128, "", "network unavailable\n")
+        if args[0] == "merge-base":
+            return _completed(args, 0, "cached-base\n")
+        if args[0] == "diff":
+            return _completed(args, 0, _diff("src/a.py", 2, ["new = 1"]))
+        if args[0] == "ls-files":
+            return _completed(args, 0, "")
+        raise AssertionError(f"unexpected git argv: {args}")
+
+    rule = build(_cfg(), repo_root=tmp_path, git_runner=runner)
+
+    assert rule._changed_lines() == {"src/a.py": {2}}
+    diagnostic = capsys.readouterr().err
+    assert "could not refresh origin/main" in diagnostic
+    assert "using cached ref" in diagnostic
+    assert "network unavailable" in diagnostic
 
 
 def test_below_floor_changed_lines_are_a_violation(tmp_path: Path) -> None:

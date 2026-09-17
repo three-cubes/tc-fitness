@@ -23,9 +23,11 @@ new code is inherently non-grandfatherable (see :meth:`NewCodeCoverage.establish
 
 The floor, the report path, the trunk ref, and the scan roots are CONFIG the
 consumer supplies; nothing here names a repo, a source package, or a threshold
-beyond the domain-intrinsic default. The git invocation is a DI seam (a callable
-defaulting to :func:`subprocess.run`) so the detector is testable without a real
-repository.
+beyond the domain-intrinsic default. A configured remote-tracking trunk ref is
+refreshed before the merge-base is resolved; an offline refresh failure remains
+visible while the cached ref supplies the best available local measurement. The
+git invocation is a DI seam (a callable defaulting to :func:`subprocess.run`) so
+the detector is testable without a real repository.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ import importlib
 import re
 import stat
 import subprocess
+import sys
 from collections.abc import Callable, Mapping
 from functools import cached_property
 from pathlib import Path
@@ -268,15 +271,48 @@ class NewCodeCoverage(FitnessRule):
         report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
+    def _refresh_remote_base(self) -> None:
+        """Refresh a configured remote-tracking base before resolving it.
+
+        Local refs and revisions are left untouched. A failed fetch is visible
+        but non-blocking: the cached remote-tracking ref still gives an offline
+        run the best available coverage measurement.
+        """
+        remotes = self.git_runner(["remote"], self._repo_root)
+        if remotes.returncode != 0:
+            return
+        names = sorted(_decode_git_output(remotes.stdout).splitlines(), key=len, reverse=True)
+        remote = next((name for name in names if self.base_ref.startswith(f"{name}/")), None)
+        if remote is None:
+            return
+        branch = self.base_ref[len(remote) + 1 :]
+        if not branch or not re.fullmatch(r"[A-Za-z0-9_./-]+", branch):
+            return
+        refspec = f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"
+        fetched = self.git_runner(
+            ["fetch", "--quiet", "--no-tags", "--", remote, refspec],
+            self._repo_root,
+        )
+        if fetched.returncode == 0:
+            return
+        detail = _decode_git_output(fetched.stderr).strip().splitlines()
+        reason = detail[-1] if detail else f"git fetch exited {fetched.returncode}"
+        print(
+            f"warning [arch:{self._name}] — could not refresh {self.base_ref}; using cached ref: {reason}",
+            file=sys.stderr,
+        )
+
     def _changed_lines(self) -> dict[str, set[int]]:
         """Added lines from the merge-base through the current checkout.
 
-        Returns ``{}`` (→ a soft PASS) when the base ref is unsafe/unresolvable,
-        the merge-base can't be computed, or the diff command fails — none of
-        which is a coverage defect, so the gate stays quiet.
+        A remote-tracking base is refreshed first. Refresh failure warns and
+        continues with the cached ref. Returns ``{}`` (→ a soft PASS) when the
+        base ref is unsafe/unresolvable, the merge-base can't be computed, or
+        the diff command fails — none of which is a coverage defect.
         """
         if not _SAFE_REF_RE.match(self.base_ref):
             return {}
+        self._refresh_remote_base()
         merge_base = self.git_runner(["merge-base", self.base_ref, "HEAD"], self._repo_root)
         if merge_base.returncode != 0:
             return {}
