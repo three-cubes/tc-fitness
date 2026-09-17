@@ -15,6 +15,17 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-17
+
+### Added
+
+- **Runtime evidence contracts** — a config-driven CORE check and CLI validate
+  that deployment evidence is bound to the declared release, environment,
+  attempt, probes, and artefacts before a consumer treats a runtime as proven.
+- **Runtime filesystem contracts** — a config-driven CORE check validates
+  ownership, groups, modes, symlink targets, mount boundaries, and writable
+  runtime paths against deployment evidence rather than test doubles.
+
 ### Fixed
 
 - **Changed-line coverage now self-heals stale remote base refs** — before
