@@ -45,10 +45,13 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
           token: ${{ steps.app.outputs.token }}
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
-          version-file: .uv-version
+          version: ${{ steps.uv-version.outputs.version }}
           enable-cache: false
       - name: Prepare the release ledger
         id: release

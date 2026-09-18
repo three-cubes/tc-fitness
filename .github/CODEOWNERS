@@ -26,6 +26,7 @@
 # ── The gate's definition (what "green" means) ───────────────────────────────
 /pyproject.toml              @quanyeomans   # [tool.tc_fitness] gate config + dependency pins
 /uv.lock                     @quanyeomans
+/.uv-version                 @quanyeomans
 /.python-version             @quanyeomans
 /src/tc_fitness/             @quanyeomans   # the gate engine itself — its rules ARE the control plane
 

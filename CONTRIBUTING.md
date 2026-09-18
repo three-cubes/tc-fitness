@@ -52,10 +52,10 @@ merge.
 
 Because tc-fitness is the gate engine, [`.github/CODEOWNERS`](.github/CODEOWNERS)
 owns the control-plane paths — the engine source (`src/tc_fitness/`), its config
-and pins (`pyproject.toml`, `uv.lock`, `.python-version`), CI (`.github/`), and
-the licence. A PR touching any owned path **holds for a maintainer review and
-does not auto-merge**; a docs-, test-, or CHANGELOG-only PR auto-merges on green
-like any product repo. Merges are a merge commit (squash and rebase are disabled
+and pins (`pyproject.toml`, `uv.lock`, `.python-version`, `.uv-version`), CI
+(`.github/`), and the licence. A PR touching any owned path **holds for a
+maintainer review and does not auto-merge**; a docs-, test-, or CHANGELOG-only
+PR auto-merges on green like any product repo. Merges are a merge commit (squash and rebase are disabled
 at the repo level). `gh pr merge --admin`
 is an owner-only logged exception an agent requests and never self-authorises; a
 ruleset with no bypass actors blocks even an admin.
@@ -93,10 +93,14 @@ GitHub Release at the reviewed merge commit.
    full gate against the new engine.
 
 Preparation failure stays on the feature branch for correction. Release
-failure records the merge SHA and receipt validation error. Correct the
-canonical release machinery, then replay the idempotent workflow against the
-same merge. An existing tag at another SHA is a hard conflict; recovery creates
-a new reviewed release coordinate and preserves the original tag.
+failure records the merge SHA and receipt validation error. Rerun the failed job
+only when its immutable workflow revision is still correct and the failure was
+transient. A correction to tc-pipelines or this repository's pinned caller
+cannot change an old run: open a new tc-fitness PR that pins the corrected
+tc-pipelines release commit, prepare the next version on that branch, run the
+gate, and merge it. That reviewed merge creates the replacement release
+coordinate while preserving the failed merge and any existing tag as evidence.
+An existing tag at another SHA remains a hard conflict.
 
 Keep releases additive: preserve existing public signatures and make new
 surface opt-in with a safe default. The canonical procedure and evidence
@@ -111,6 +115,7 @@ Gates live only in tc-fitness; pipelines live only in tc-pipelines. Improve a ga
 here and a pipeline there — never fork a parallel gate or pipeline into a consumer
 repo. To change the pipeline, edit the tc-pipelines reusable
 (`python-quality-gate.yml`) or its composite action, SHA-pin any third-party
-`uses:` (Sonar S7637), tag it, and move consumers to the tag. The canonical
+`uses:` (Sonar S7637), publish its release tag, and move consumers to that
+tag's full commit SHA with the tag retained as a comment. The canonical
 engineering-standards index is
 [tc-pipelines `governance/STANDARDS.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/STANDARDS.md).

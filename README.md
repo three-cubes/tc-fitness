@@ -94,8 +94,8 @@ this repo's contributor specifics live in [CONTRIBUTING.md](CONTRIBUTING.md).
   running the merge. Because it IS the gate engine,
   [`.github/CODEOWNERS`](.github/CODEOWNERS) owns the control-plane paths — the
   engine source (`src/tc_fitness/`), its config and pins (`pyproject.toml`,
-  `uv.lock`, `.python-version`), CI (`.github/`), and the licence — so a PR
-  touching any of those **holds for a maintainer review and does not auto-merge**;
+  `uv.lock`, `.python-version`, `.uv-version`), CI (`.github/`), and the licence
+  — so a PR touching any of those **holds for a maintainer review and does not auto-merge**;
   a docs-, test-, or CHANGELOG-only PR auto-merges on green like any other. An
   agent must never be able to weaken the gate that gates it.
 - **Red you fix.** A failing check is never bypassed. If it fails, you fix your
@@ -607,7 +607,10 @@ em-dash and hyphen; `NOSONAR` in the suppression set).
    `core_checks/` module follows.
 3. **Release additively.** Keep every existing public signature byte-identical and
    make the new surface opt-in with a safe default (a check with no config block
-   is a vacuous pass), then cut a new immutable tag `vX.Y.Z`. The rule and its
+   is a vacuous pass). Add the release note under `Unreleased`, dispatch
+   `Prepare release` on the feature branch, verify the generated receipt and
+   gate, then merge that same reviewed PR. `release-on-merge.yml` creates the
+   immutable tag and GitHub Release at the merge commit. The rule and its
    rationale are canon in [CHANGELOG.md](CHANGELOG.md); do not restate them.
 4. **Consumers bind it** by repinning `three-cubes-fitness` on their own schedule
    and adding a `[tool.tc_fitness.core_checks.<name>]` block plus the catalogue
@@ -617,5 +620,6 @@ Gates live only in tc-fitness — converge up, never fork a parallel gate in a
 consumer repo. To improve the **pipeline** rather than a gate, change the
 tc-pipelines reusable (`python-quality-gate.yml`) or its composite action,
 SHA-pin any third-party `uses:` (Sonar S7637), tag it, and move consumers to the
-tag. The full contributor procedure — including the release-tag steps — is in
+tag's full commit SHA with the tag retained as a comment. The full preparation,
+reviewed-merge, publication and recovery procedure is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
