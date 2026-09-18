@@ -56,7 +56,7 @@ def _reported_version(binary: str, *, timeout: int) -> ScanExecution | str:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return ScanExecution(ScanStatus.INCOMPLETE, detail=f"version probe failed: {exc}")
     output = f"{process.stdout}\n{process.stderr}".strip()
-    match = re.search(r"(?<!\d)(\d+\.\d+\.\d+)(?!\d)", output)
+    match = re.search(r"\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+|\+[0-9A-Za-z.-]+)?)\b", output)
     if process.returncode != 0 or match is None:
         return ScanExecution(
             ScanStatus.INCOMPLETE,
@@ -86,7 +86,24 @@ def execute_scan(
             detail=f"expected osv-scanner {scanner_version}, found {reported}",
         )
 
-    paths = tuple(repo_root / lockfile for lockfile in lockfiles)
+    root = repo_root.resolve()
+    paths: list[Path] = []
+    for lockfile in lockfiles:
+        declared = Path(lockfile)
+        if declared.is_absolute():
+            return ScanExecution(
+                ScanStatus.INCOMPLETE,
+                detail=f"declared lockfile must be repository-relative: {lockfile}",
+            )
+        try:
+            path = (root / declared).resolve()
+            path.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            return ScanExecution(
+                ScanStatus.INCOMPLETE,
+                detail=f"declared lockfile must resolve beneath repository root: {lockfile}",
+            )
+        paths.append(path)
     missing = [lockfile for lockfile, path in zip(lockfiles, paths, strict=True) if not path.is_file()]
     if missing:
         return ScanExecution(
@@ -120,6 +137,11 @@ def execute_scan(
     report_error = _report_error(report)
     if report_error is not None:
         return ScanExecution(ScanStatus.INCOMPLETE, detail=f"scan report is incomplete: {report_error}")
+    if process.returncode == 1 and not vulnerability_ids(report):
+        return ScanExecution(
+            ScanStatus.INCOMPLETE,
+            detail="scan returned exit 1 with no vulnerabilities in its report",
+        )
     return ScanExecution(ScanStatus.EXECUTED, report=report)
 
 
@@ -159,18 +181,19 @@ class OsvScannerSca:
         self,
         repo_root: Path | None = None,
         *,
-        scanner_version: str,
+        scanner_version: str | None,
         lockfiles: Sequence[str] = (),
         required: bool = True,
         timeout: int = DEFAULT_TIMEOUT,
         runner: Runner | None = None,
     ) -> None:
-        if not re.fullmatch(r"\d+\.\d+\.\d+", scanner_version):
+        self.active = scanner_version is not None
+        if scanner_version is not None and not re.fullmatch(r"\d+\.\d+\.\d+", scanner_version):
             raise ValueError("scanner_version must be an exact x.y.z pin")
-        if required and not lockfiles:
+        if self.active and required and not lockfiles:
             raise ValueError("required OSV scanning must declare at least one lockfile")
         self.repo_root = (repo_root or REPO_ROOT).resolve()
-        self.scanner_version = scanner_version
+        self.scanner_version = scanner_version or ""
         self.lockfiles = tuple(lockfiles)
         self.required = required
         self.timeout = timeout
@@ -183,6 +206,8 @@ class OsvScannerSca:
         *,
         repo_root: Path | None = None,
     ) -> OsvScannerSca:
+        if not config:
+            return cls(repo_root, scanner_version=None, required=False)
         return cls(
             repo_root,
             scanner_version=str(config.get("scanner_version", "")),
@@ -202,6 +227,8 @@ class OsvScannerSca:
         )
 
     def evaluate(self) -> tuple[bool, list[str], ScanExecution]:
+        if not self.active:
+            return True, [], ScanExecution(ScanStatus.EXECUTED, report={"results": []}, detail="unconfigured")
         execution = self._execute()
         if execution.status is not ScanStatus.EXECUTED or execution.report is None:
             return False, [], execution
@@ -216,6 +243,9 @@ class OsvScannerSca:
         return not findings, findings, execution
 
     def run(self) -> int:
+        if not self.active:
+            print("PASS osv_scanner_sca (unconfigured)")
+            return 0
         passed, findings, execution = self.evaluate()
         if execution.status is not ScanStatus.EXECUTED:
             print(
