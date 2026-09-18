@@ -141,15 +141,13 @@ from tc_fitness.staged import (
     staged_in_scope,
 )
 
-# Single-sourced from the installed-package metadata (``pyproject.toml`` is the
-# one source of truth). The fallback literal is used only for a bare ``sys.path``
-# checkout where the distribution isn't installed; it must be kept equal to the
-# ``pyproject.toml`` ``version`` so the two never drift (pinned by
-# ``tests/test_version.py``).
+# Installed-package metadata is the sole release-version authority. A bare
+# source checkout reports an explicit unknown version instead of duplicating a
+# release value that must be hand-maintained.
 try:
     __version__ = _metadata.version("three-cubes-fitness")
 except _metadata.PackageNotFoundError:  # pragma: no cover - only when not installed
-    __version__ = "0.16.1"
+    __version__ = "0+unknown"
 
 __all__ = [
     "__version__",
