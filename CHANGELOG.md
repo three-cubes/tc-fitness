@@ -15,6 +15,23 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+### Added
+
+- **Behavioural evidence integrity** — the opt-in, hard
+  `core:behavioural_evidence` check maps critical deployable surfaces to their
+  real executable and behavioural tests. A claim passes only when a configured
+  integration/E2E test invokes that executable and asserts its process result
+  and a produced output passed through the command. Source-text assertions, unrelated subprocess calls,
+  missing tests, unclaimed matched surfaces and unobserved executions fail and
+  cannot be grandfathered.
+
+### Fixed
+
+- **Changed-line coverage refresh is non-interactive** — the automatic remote
+  base refresh disables Git terminal prompts and Git Credential Manager UI, so
+  an unavailable App credential warns and uses the cached base instead of
+  wedging a local quality gate.
+
 ## [0.16.0] — 2026-09-17
 
 ### Added

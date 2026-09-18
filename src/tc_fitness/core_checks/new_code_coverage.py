@@ -33,6 +33,7 @@ the detector is testable without a real repository.
 from __future__ import annotations
 
 import importlib
+import os
 import re
 import stat
 import subprocess
@@ -233,6 +234,7 @@ def _default_git_runner(args: list[str], cwd: Path) -> subprocess.CompletedProce
         cwd=cwd,
         capture_output=True,
         check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never"},
     )
 
 

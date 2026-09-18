@@ -129,6 +129,22 @@ def _git_repo(tmp_path: Path) -> Path:
     return repo
 
 
+def test_default_git_runner_disables_interactive_credentials(tmp_path: Path) -> None:
+    """A stale-base refresh must warn/fall back, never block for credentials."""
+    repo = _git_repo(tmp_path)
+    _git(
+        repo,
+        "config",
+        "alias.print-interactive-env",
+        '!printf "%s|%s" "$GIT_TERMINAL_PROMPT" "$GCM_INTERACTIVE"',
+    )
+
+    result = new_code_coverage._default_git_runner(["print-interactive-env"], repo)
+
+    assert result.returncode == 0
+    assert result.stdout == b"0|Never"
+
+
 # --------------------------------------------------------------------------- #
 # Pure parser: per-line Cobertura coverage.
 # --------------------------------------------------------------------------- #
