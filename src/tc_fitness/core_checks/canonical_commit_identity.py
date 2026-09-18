@@ -66,15 +66,16 @@ def _is_platform_committer(email: str) -> bool:
 
 REMEDIATION = _remediation(
     fix=(
-        "re-author the commit(s) under the canonical identity — mint a per-agent App "
-        "token (agent-token) so the author/committer is the three-cubes-agent App, or "
-        "for local work set git user.name/user.email to an allowlisted identity and "
-        "`git commit --amend --reset-author`. Add a genuinely new human maintainer to "
-        "the check's `allowed_emails` (a CODEOWNERS-gated control-plane edit)."
+        "set local Git `user.name` and `user.email` to an allowlisted identity, then "
+        "amend with `git commit --amend --reset-author` or recreate the affected commits. "
+        "Commit metadata does not authenticate GitHub network writes. For push, PR, or "
+        "API operations, use the consumer's approved host credential broker; tc-fitness "
+        "neither mints nor stores credentials. Add a genuinely new human maintainer to "
+        "the check's `allowed_emails` only as a CODEOWNERS-gated control-plane edit."
     ),
     nxt="re-run this check to confirm it goes green.",
     run="python -m tc_fitness.core_checks.canonical_commit_identity",
-    passing="author + committer = three-cubes-agent[bot] or an allowlisted human",
+    passing="Git author + committer metadata = an allowlisted bot or human identity",
     forbidden="author feat-156-deploy <noreply@anthropic.com>  (off-allowlist identity)",
 )
 

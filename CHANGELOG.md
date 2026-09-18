@@ -15,6 +15,15 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+### Changed
+
+- **Commit identity guidance now separates metadata from authentication** —
+  `canonical_commit_identity` validates Git author and committer metadata; it
+  does not prove who authenticated a GitHub write. Remediation and contributor
+  docs now route push, PR, and API authentication to the platform-owned,
+  harness-neutral host credential broker while keeping credentials out of
+  tc-fitness.
+
 ## [0.16.1] — 2026-09-18
 
 ### Added

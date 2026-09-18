@@ -13,13 +13,16 @@ Branch off `main` named `<user>/<team>-<number>-<slug>` (the Linear
 `gitBranchName` shape). The engine's own `branch_naming` gate enforces it, so a
 non-conforming name fails the gate.
 
-## Commit identity
+## Commit metadata
 
-Author and commit as the canonical `three-cubes-agent` GitHub App
-(`295831460+three-cubes-agent[bot]@users.noreply.github.com`). Keep authorship
-clean of AI/LLM self-attribution — no `Co-Authored-By: <model>` trailer, no
-"Generated with <tool>" credit, no robot emoji. The `no_llm_attribution` and
-`canonical_commit_identity` CORE checks enforce this.
+Set Git author and committer metadata to the canonical `three-cubes-agent[bot]`
+identity (`295831460+three-cubes-agent[bot]@users.noreply.github.com`). This is
+local commit metadata: set it through repo-local Git configuration or the
+commit process. It needs no GitHub token and does not authenticate a network
+write. Keep authorship clean of AI/LLM self-attribution — no
+`Co-Authored-By: <model>` trailer, no "Generated with <tool>" credit, no robot
+emoji. The `no_llm_attribution` and `canonical_commit_identity` CORE checks
+enforce this metadata contract.
 
 ## Run the gate before every push
 
@@ -34,9 +37,16 @@ uv run pytest tests/ -q
 
 ## Open the PR and merge
 
-Open the PR from the `three-cubes-agent` App (short-lived installation token via
-WIF / Key Vault `kv-tc-agents`), never a human account — a PR author cannot
-approve their own PR, so bot-authorship is what lets a human maintainer review.
+Use the approved host credential broker for each push, PR, or GitHub API write.
+It must live outside the writable checkout, obtain a short-lived
+repository-scoped credential for one operation, and pass it only to a validated
+child process without printing or persisting it. The broker pattern belongs to
+tc-pipelines; broker deployment and credential storage belong to the consuming
+environment. tc-fitness does not own either. See the canonical
+[Agent SDLC access + HITL standard](https://github.com/three-cubes/tc-pipelines/blob/main/governance/agent-sdlc-access-and-hitl.md).
+
+Open the PR as the `three-cubes-agent` App, never a human account — a PR author
+cannot approve their own PR, so App-authorship lets a human maintainer review.
 CI runs the fan-in Quality gate plus SonarCloud; the required contexts gate the
 merge.
 

@@ -10,6 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.canonical_commit_identity import (
     CanonicalCommitIdentity,
     build,
@@ -92,6 +94,22 @@ def test_non_allowed_author_email_fails(tmp_path: Path) -> None:
     _commit(repo, "rogue", an="feat-156-deploy", ae="noreply@anthropic.com")
     rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
     assert rule.run() == 1
+
+
+def test_failure_remediation_separates_commit_metadata_from_github_authentication(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _init(tmp_path)
+    base = _commit(repo, "base", ae=HUMAN)
+    _commit(repo, "rogue", an=ROGUE_AUTHOR, ae=ROGUE_EMAIL)
+    rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
+
+    assert rule.run() == 1
+
+    output = capsys.readouterr().out.lower()
+    assert "commit metadata does not authenticate github network writes" in output
+    assert "host credential broker" in output
+    assert "mint a per-agent app token" not in output
 
 
 def test_committer_distinct_from_author_is_checked(tmp_path: Path) -> None:

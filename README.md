@@ -68,11 +68,17 @@ tc-fitness is the one check every repo uses instead of its own copy:
 2. **Run the gate before every push:** `uv run tc-fitness run`, and get it green.
    Local matches CI by construction — both run this same catalogue. Run your
    repo's own pytest separately where the gate does not.
-3. **Commit as the `three-cubes-agent` App** and open the PR from that App
-   (short-lived installation token via WIF / Key Vault `kv-tc-agents`), never a
-   human account — a PR author cannot approve their own PR, so bot-authorship is
-   what lets a human maintainer review. Keep authorship clean of AI/LLM
-   attribution; `no_llm_attribution` and `canonical_commit_identity` enforce it.
+3. **Set canonical commit metadata.** Git author and committer must be an
+   allowlisted bot or human identity, with no AI/LLM attribution.
+   `no_llm_attribution` and `canonical_commit_identity` inspect commit metadata;
+   they do not authenticate a push, PR, or API request.
+4. **Authenticate GitHub writes through the approved host broker.** The broker
+   lives outside the writable checkout, obtains a short-lived repository-scoped
+   credential for one operation, and passes it only to a validated `git` or `gh`
+   child process. It must not print or persist the credential. tc-fitness owns
+   the identity gate, not credentials or broker installation. The canonical
+   pattern and consumer responsibilities live in the
+   [Agent SDLC access + HITL standard](https://github.com/three-cubes/tc-pipelines/blob/main/governance/agent-sdlc-access-and-hitl.md).
 
 The full branch / commit / PR / merge procedure is canon in
 [tc-pipelines `governance/standards/development-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/development-workflow.md);
@@ -106,6 +112,9 @@ this repo's contributor specifics live in [CONTRIBUTING.md](CONTRIBUTING.md).
 - The shared commit / PR / merge procedure: **[tc-pipelines `governance/standards/development-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/development-workflow.md)**
   — every repo follows it; the `harness_canon_reference` gate requires this
   reference to be present.
+- The identity and authentication boundary: **[tc-pipelines `governance/agent-sdlc-access-and-hitl.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/agent-sdlc-access-and-hitl.md)**
+  — commit metadata is configured locally; authenticated GitHub writes use the
+  approved host broker owned by the platform and consuming repo.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to author or improve a CORE check
   in this repo and cut a release tag.
 - **[tc-pipelines](https://github.com/three-cubes/tc-pipelines)** — the shared CI

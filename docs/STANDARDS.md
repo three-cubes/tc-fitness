@@ -9,6 +9,25 @@
 
 ---
 
+## Ownership resolver — commit identity and GitHub authentication
+
+These are separate controls. A commit can carry valid author and committer
+metadata without any GitHub credential, while a valid credential can push a
+commit whose metadata fails policy.
+
+| Intent | Canonical home | Contract |
+| --- | --- | --- |
+| Validate Git author and committer metadata | tc-fitness `core:canonical_commit_identity` | Read commit history and compare metadata with the consumer's allowlist. Do not mint, read, or store credentials. |
+| Define GitHub authentication and the host credential broker | [tc-pipelines Agent SDLC access + HITL standard](https://github.com/three-cubes/tc-pipelines/blob/main/governance/agent-sdlc-access-and-hitl.md) | Canonical governance owner. tc-fitness links to this standard and does not restate its security contract. |
+| Wire the broker into a development environment | consuming repo and host documentation | Apply the canonical tc-pipelines standard through that environment's integration docs; keep credentials and harness adapters outside tc-fitness. |
+
+When `canonical_commit_identity` fails, fix or recreate the commit metadata. When
+a push or PR cannot authenticate, fix the consumer's broker path. Changing an
+identity allowlist cannot repair authentication, and supplying a token cannot
+repair commit metadata.
+
+---
+
 ## Deterministic tests — no `--reruns`, flakes are a must-fix work-item
 
 **Status:** the dynamic half — `core:deterministic_tests` — ships here (SGO-200).
