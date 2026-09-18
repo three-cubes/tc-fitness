@@ -23,13 +23,13 @@ tc-fitness is the one check every repo uses instead of its own copy:
 
 ## How to add it to a repo
 
-1. **Install it.** Pin the latest release tag (see [CHANGELOG.md](CHANGELOG.md))
-   in your `pyproject.toml`:
+1. **Install it.** Select an immutable release tag from
+   [CHANGELOG.md](CHANGELOG.md) and pin it in your `pyproject.toml`:
 
    ```toml
    [project.optional-dependencies]
    dev = [
-     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@v0.11.0",
+     "three-cubes-fitness @ git+https://github.com/three-cubes/tc-fitness.git@vX.Y.Z",
    ]
    ```
 
@@ -56,16 +56,18 @@ tc-fitness is the one check every repo uses instead of its own copy:
    the code, set up `uv`, then run `uv run tc-fitness run`. The check you run
    locally is the exact same one CI runs. Call the reusable job from
    [tc-pipelines](https://github.com/three-cubes/tc-pipelines)
-   (`uses: …/python-quality-gate.yml@<tag>`), pin it to a tag, and SHA-pin every
-   third-party `uses:` — improve the pipeline in tc-pipelines, never fork it into
-   your repo.
+   (`uses: …/python-quality-gate.yml@<full-commit-sha> # vX.Y.Z`), pin it to the
+   release commit, and SHA-pin every third-party `uses:` — improve the pipeline
+   in tc-pipelines, never fork it into your repo.
 
 ## The daily loop
 
 1. **Branch off `main`** named `<user>/<team>-<number>-<slug>` — the shape the
    engine's own `branch_naming` gate enforces (this repo dogfoods
    `tc_fitness.checks.branch_naming`).
-2. **Run the gate before every push:** `uv run tc-fitness run`, and get it green.
+2. **Run the gate before every push:** sync with
+   `uv sync --locked --all-extras --all-groups`, run
+   `uv run tc-fitness run`, and get it green.
    Local matches CI by construction — both run this same catalogue. Run your
    repo's own pytest separately where the gate does not.
 3. **Set canonical commit metadata.** Git author and committer must be an
@@ -116,9 +118,13 @@ this repo's contributor specifics live in [CONTRIBUTING.md](CONTRIBUTING.md).
   — commit metadata is configured locally; authenticated GitHub writes use the
   approved host broker owned by the platform and consuming repo.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to author or improve a CORE check
-  in this repo and cut a release tag.
+  in this repo and prepare the feature PR that becomes the release.
+- The canonical package-release workflow:
+  **[tc-pipelines `governance/standards/sdlc-release-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/sdlc-release-workflow.md)**
+  — preparation receipt, reviewed merge, immutable tag and replay behavior.
 - **[tc-pipelines](https://github.com/three-cubes/tc-pipelines)** — the shared CI
-  and deploy steps every repo's GitHub Actions calls (`uses: …/python-quality-gate.yml@v1`).
+  and deploy steps every repo's GitHub Actions calls
+  (`uses: …/python-quality-gate.yml@<full-commit-sha> # vX.Y.Z`).
   These steps *run* this check.
 
 ---

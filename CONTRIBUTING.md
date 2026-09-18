@@ -30,7 +30,7 @@ Run `uv run tc-fitness run` and get it green. Local matches CI by construction �
 both run this same catalogue. Run the repo's own pytest where the gate does not:
 
 ```bash
-uv sync --all-extras --all-groups
+uv sync --locked --all-extras --all-groups
 uv run tc-fitness run
 uv run pytest tests/ -q
 ```
@@ -73,15 +73,37 @@ ruleset with no bypass actors blocks even an admin.
    `RuleEntry(check="core:<name>")` row. A check with no config block is a vacuous
    pass, so adopting it never breaks a build until the repo opts in.
 
-## Release a tag (this repo's deploy analog)
+## Release the reviewed feature PR
 
-tc-fitness is a pinned library, not a VM service — its "deploy" is a release tag,
-so no VM deploy or runbook applies. Release **additively**: keep every existing
-public signature byte-identical and make new surface opt-in with a safe default,
-then cut a new immutable tag `vX.Y.Z` and record it in
-[CHANGELOG.md](CHANGELOG.md). Consumers repin `three-cubes-fitness` on their own
-schedule. The release procedure is canon in
-[tc-pipelines `governance/standards/sdlc-release-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/sdlc-release-workflow.md).
+tc-fitness is a pinned library. Its release output is an immutable tag and
+GitHub Release at the reviewed merge commit.
+
+1. Add the release notes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md).
+2. Dispatch `Prepare release` on the feature branch with one exact `vX.Y.Z`
+   value or one semantic bump. The pinned tc-pipelines action updates the
+   project version, `uv.lock`, dated CHANGELOG section and
+   `.release-prepared.json`, then commits those generated outputs to the same
+   branch as `three-cubes-agent[bot]`.
+3. Sync from the updated lockfile and run the local gate and pytest commands
+   above. Record the tested commit and terminal results in the PR.
+4. Merge the reviewed feature PR with a merge commit. The receipt-filtered
+   `release-on-merge.yml` caller validates the preparation receipt at the exact
+   merge SHA, then creates or confirms the annotated tag and GitHub Release.
+5. Consumers repin `three-cubes-fitness` on their own schedule and run their
+   full gate against the new engine.
+
+Preparation failure stays on the feature branch for correction. Release
+failure records the merge SHA and receipt validation error. Correct the
+canonical release machinery, then replay the idempotent workflow against the
+same merge. An existing tag at another SHA is a hard conflict; recovery creates
+a new reviewed release coordinate and preserves the original tag.
+
+Keep releases additive: preserve existing public signatures and make new
+surface opt-in with a safe default. The canonical procedure and evidence
+contract live in
+[tc-pipelines `governance/standards/sdlc-release-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/sdlc-release-workflow.md)
+and
+[`ci-release-deployment-architecture.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/ci-release-deployment-architecture.md).
 
 ## Converge up — one home each
 

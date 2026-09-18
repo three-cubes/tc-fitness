@@ -20,6 +20,8 @@ commit whose metadata fails policy.
 | Validate Git author and committer metadata | tc-fitness `core:canonical_commit_identity` | Read commit history and compare metadata with the consumer's allowlist. Do not mint, read, or store credentials. |
 | Define GitHub authentication and the host credential broker | [tc-pipelines Agent SDLC access + HITL standard](https://github.com/three-cubes/tc-pipelines/blob/main/governance/agent-sdlc-access-and-hitl.md) | Canonical governance owner. tc-fitness links to this standard and does not restate its security contract. |
 | Wire the broker into a development environment | consuming repo and host documentation | Apply the canonical tc-pipelines standard through that environment's integration docs; keep credentials and harness adapters outside tc-fitness. |
+| Define toolchain sources, locked dependency parity and reusable CI | [tc-pipelines CI, release and deployment architecture](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/ci-release-deployment-architecture.md) | tc-fitness owns its selected version files and lockfile; tc-pipelines owns how local and CI resolve them. |
+| Prepare and publish a tc-fitness release | [tc-pipelines SDLC release workflow](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/sdlc-release-workflow.md) | tc-fitness keeps thin pinned callers and the preparation receipt; tc-pipelines owns release orchestration. |
 
 When `canonical_commit_identity` fails, fix or recreate the commit metadata. When
 a push or PR cannot authenticate, fix the consumer's broker path. Changing an
