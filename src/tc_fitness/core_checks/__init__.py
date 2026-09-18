@@ -186,6 +186,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:no_test_doubles_in_runtime_tiers",
     "core:no_test_imports_in_prod",
     "core:no_test_only_kwargs",
+    "core:osv_scanner_sca",
     "core:path_naming",
     "core:pattern_chokepoint",
     "core:posix_path_serialisation",
