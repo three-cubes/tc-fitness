@@ -103,6 +103,10 @@ ignore = ["E501", "RUF022"]
 # the binary is absent-tolerant (soft-skip), so this is not attacker-controlled
 # input (S404 the import, S603 the call).
 "src/tc_fitness/core_checks/checkov_iac_security.py" = ["S404", "S603"]
+# osv_scanner_sca resolves the trusted scanner executable with shutil.which and
+# passes a fixed argv list without a shell. Consumer values are exact versions
+# and repo-contained lockfile paths, not executable input.
+"src/tc_fitness/core_checks/osv_scanner_sca.py" = ["S404", "S603"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -180,7 +184,7 @@ ruff format --check \
     no_env_monkeypatch no_hardcoded_repo_paths no_internal_monkeypatch \
     no_internal_patches no_internal_patches_ts \
     no_language_suffix_in_package_names no_llm_attribution no_logging_secrets \
-    no_noop_test_scripts no_production_suppressions no_real_names \
+    no_noop_test_scripts no_production_suppressions no_real_names osv_scanner_sca \
     no_test_doubles_in_runtime_tiers no_test_imports_in_prod no_test_only_kwargs path_naming \
     posix_path_serialisation readme_resolver_coverage schema_conformance \
     script_help_smoke shellcheck_disable_with_reason sonar_ignore_rationale \
