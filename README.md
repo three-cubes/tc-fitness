@@ -252,6 +252,13 @@ in. [`docs/STANDARDS.md`](docs/STANDARDS.md) is the worked example
 (`deterministic_tests`); every shipped check binds through the same
 `[tool.tc_fitness.core_checks.<name>]` table.
 
+For deployable surfaces, `core:behavioural_evidence` prevents a static
+source-shape test from being credited as runtime proof. Consumers declare the
+critical surface globs plus claims that bind each surface to its executable and
+integration/E2E tests. The hard gate verifies that a named test invokes the
+exact executable and asserts its result and produced output; it does not support
+baselines.
+
 ## Library modules
 
 tc-fitness also ships these modules (the helpers `tc-fitness run` and a repo's

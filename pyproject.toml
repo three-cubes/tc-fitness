@@ -161,6 +161,7 @@ ruff format --check \
   tests/test_baseline.py tests/test_fitness_rule.py \
   tests/test_keystone.py tests/_core_check_assertions.py \
   tests/test_runtime_contracts.py tests/test_runtime_contract_cli.py \
+  tests/test_core_behavioural_evidence.py \
   tests/test_core_runtime_evidence_contract.py tests/test_core_runtime_filesystem_contract.py \
   tests/test_core_no_duplicate_string.py \
   tests/test_core_registry_consistency.py \
