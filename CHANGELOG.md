@@ -15,6 +15,8 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-09-18
+
 ### Added
 
 - **Behavioural evidence integrity** — the opt-in, hard
