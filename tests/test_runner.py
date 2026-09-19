@@ -1348,19 +1348,3 @@ def test_core_entry_in_process_even_under_subprocess_dispatch(
     assert not verdict.ok
     assert "FAIL [no-duplicate-string]" in out
     assert "check script not found" not in out
-
-
-def test_core_entry_establish_baseline_then_passes(repo_root: Path) -> None:
-    (repo_root / "src").mkdir()
-    (repo_root / "src" / "dup.py").write_text(_CORE_DUP_FIXTURE, encoding="utf-8")
-    cfg_kwargs = {
-        "repo_root": repo_root,
-        "core_check_configs": {"no_duplicate_string": {"roots": ["src"]}},
-    }
-    # Establish writes the baseline and passes…
-    assert run(_core_rule(), mode="all", establish_baseline=True, **cfg_kwargs).ok  # type: ignore[arg-type]
-    baseline = repo_root / ".architecture" / "baseline" / "no-duplicate-string-files.txt"
-    assert baseline.exists()
-    assert "src/dup.py" in baseline.read_text(encoding="utf-8")
-    # …and the subsequent gate run passes (offender grandfathered).
-    assert run(_core_rule(), mode="all", **cfg_kwargs).ok  # type: ignore[arg-type]

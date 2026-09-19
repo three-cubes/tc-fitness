@@ -9,10 +9,8 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.no_internal_patches import (
-    NoInternalPatches,
     build,
     file_patches_internal,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -188,24 +186,6 @@ def test_config_scopes_internal_roots(tmp_path: Path) -> None:
     )
     _seed(tmp_path, "tests/t.py", "def test_x(monkeypatch):\n    monkeypatch.setattr('scripts.a.b', 1)\n")
     assert {str(x) for x in rule.collect_violations()} == {"tests/t.py"}
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "tests/t.py", "def test_x(monkeypatch):\n    monkeypatch.setattr('scripts.a.b', 1)\n")
-    rule = NoInternalPatches.from_config(
-        {"roots": ["tests"], "internal_roots": ["scripts"]}, repo_root=tmp_path
-    )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "t.py", "def test_x(monkeypatch):\n    monkeypatch.setattr('scripts.a.b', 1)\n")
-    # internal_roots empty by default → no violations; establish writes empty baseline.
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-internal-patches-files.txt").exists()
 
 
 def test_module_entrypoint_accepts_repository_root(tmp_path: Path) -> None:

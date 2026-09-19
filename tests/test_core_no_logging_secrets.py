@@ -13,7 +13,6 @@ from tc_fitness.core_checks.no_logging_secrets import (
     DEFAULT_SECRET_PATTERNS,
     NoLoggingSecrets,
     build,
-    main,
     module_logs_secret,
 )
 
@@ -172,24 +171,3 @@ def test_non_secret_name_is_clean(tmp_path: Path) -> None:
         )
         is False
     )
-
-
-def test_exempt_file_skipped_via_config(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/boundary.py", "logging.info(api_key)\n")
-    rule = build({"roots": ["src"], "exempt_files": ["src/boundary.py"]}, repo_root=tmp_path)
-    assert rule.collect_violations() == set()
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/leak.py", "logging.info(api_key)\n")
-    rule = NoLoggingSecrets.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "leak.py", "logging.info(api_key)\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-logging-secrets-files.txt").exists()

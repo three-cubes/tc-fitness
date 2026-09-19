@@ -8,10 +8,8 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.readme_resolver_coverage import (
-    ReadmeResolverCoverage,
     build,
     directory_missing_resolver,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -89,21 +87,6 @@ def test_existing_resolver_directory_has_no_violation(tmp_path: Path) -> None:
     _with_readme(tmp_path, "platform")
 
     assert build({}, repo_root=tmp_path).collect_violations() == set()
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _mkdir(tmp_path, "platform")
-    rule = ReadmeResolverCoverage.from_config({}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _mkdir(tmp_path, "platform")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "readme-resolver-coverage-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

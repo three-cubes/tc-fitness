@@ -13,9 +13,7 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.canonical_commit_identity import (
-    CanonicalCommitIdentity,
     build,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -176,15 +174,6 @@ def test_emoji_in_name_fails_when_name_pattern_configured(tmp_path: Path) -> Non
     assert rule.run() == 1
 
 
-def test_cutover_ref_grandfathers_prior_commits(tmp_path: Path) -> None:
-    repo = _init(tmp_path)
-    _commit(repo, "old-rogue", an="feat-156-deploy", ae="noreply@anthropic.com")
-    cutover = _commit(repo, "cutover-line", ae=HUMAN, an="Dan")
-    _commit(repo, "clean-after", ae=HUMAN, an="Dan")
-    rule = build({**ALLOW, "cutover_ref": cutover, "head_ref": "HEAD"}, repo_root=repo)
-    assert rule.run() == 0  # the pre-cutover rogue commit is out of range
-
-
 def test_webflow_merge_committer_passes(tmp_path: Path) -> None:
     """A squash/merge stamped by GitHub's web-flow committer passes: the author is
     the allowlisted agent, the committer is ``GitHub <noreply@github.com>`` (SGO-198)."""
@@ -242,18 +231,3 @@ def test_non_platform_bot_committer_still_fails(tmp_path: Path) -> None:
     _commit(repo, "work", an="Dan", ae=HUMAN, cn=GHA_NAME, ce=GHA_EMAIL)
     rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
     assert rule.run() == 1
-
-
-def test_main_repo_root_and_establish(tmp_path: Path) -> None:
-    repo = _init(tmp_path)
-    base = _commit(repo, "base", ae=HUMAN)
-    _commit(repo, "rogue", an="x", ae="noreply@anthropic.com")
-    # Config isn't passed through main() here, so with no allowlist it's a no-op pass.
-    assert main(["--repo-root", str(repo)]) == 0
-    # Direct rule with allowlist fails, then baseline grandfathers.
-    rule = CanonicalCommitIdentity.from_config(
-        {**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo
-    )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0

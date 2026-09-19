@@ -8,9 +8,7 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.path_naming import (
-    PathNaming,
     build,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -42,21 +40,6 @@ def test_snake_root_init_allowed(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/_private_helper.py")
     rule = build({"snake_roots": ["scripts/"]}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/BadNote.md")
-    rule = PathNaming.from_config({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/BadNote.md")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "path-naming-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

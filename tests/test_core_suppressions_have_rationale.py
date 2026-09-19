@@ -13,7 +13,6 @@ from tc_fitness.core_checks.suppressions_have_rationale import (
     SuppressionsHaveRationale,
     build,
     file_has_bare_suppression,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -83,21 +82,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/b.py", _BARE)
     rule = SuppressionsHaveRationale.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/b.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/b.py", _BARE)
-    rule = SuppressionsHaveRationale.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "b.py", _BARE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "suppressions-have-rationale-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

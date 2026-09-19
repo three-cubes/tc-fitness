@@ -145,7 +145,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> NoTest
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoTestOnlyKwargs, argv)
 
 

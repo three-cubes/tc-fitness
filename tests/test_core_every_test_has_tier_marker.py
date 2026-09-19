@@ -14,7 +14,6 @@ from tc_fitness.core_checks.every_test_has_tier_marker import (
     EveryTestHasTierMarker,
     build,
     file_missing_tier_marker,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -597,21 +596,6 @@ def test_scope_skips_non_test_files_and_excluded_parts(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_real.py", _UNTAGGED)
     rule = EveryTestHasTierMarker.from_config({"roots": ["tests"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_real.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "tests/test_x.py", _UNTAGGED)
-    rule = EveryTestHasTierMarker.from_config({"roots": ["tests"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "test_x.py", _UNTAGGED)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "every-test-has-tier-marker-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

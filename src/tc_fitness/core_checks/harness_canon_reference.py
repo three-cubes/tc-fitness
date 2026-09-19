@@ -144,8 +144,7 @@ class HarnessCanonReference(FitnessRule):
 
     name = "harness-canon-reference"
     remediation = REMEDIATION
-    #: Not a file-scan rule — the enumeration hooks stay empty so the base
-    #: --establish-baseline mode writes an empty baseline harmlessly.
+    #: Not a file-scan rule — the enumeration hooks stay empty.
     extensions = ()
 
     #: Rule-specific config (instance attrs; from_config overrides per consumer).
@@ -284,7 +283,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(HarnessCanonReference, argv)
 
 

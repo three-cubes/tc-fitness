@@ -6,11 +6,7 @@ floor — every source file recorded in a coverage report must clear a minimum
 line-coverage percentage — so the gap is surfaced file-by-file rather than
 washed out in the mean.
 
-The rule is the :class:`tc_fitness.fitness_rule.FitnessRule` expression of a
-coverage *ratchet*: today's below-floor files are grandfathered into the
-per-file baseline (``--establish-baseline``), and the gate FAILS only when a
-file NOT in the baseline drops below the floor. The baseline may only shrink,
-so coverage debt is paid down, never accreted.
+The rule fails whenever any measured source file is below the configured floor.
 
 Ported from kairix ``scripts/checks/check_per_file_coverage.py`` (F7/F9) and
 the coverage.xml parsing in tc-agent-zone ``scripts/checks/coverage_ratchet.py``
@@ -207,8 +203,8 @@ class CoverageFloor(FitnessRule):
                     or not 0 <= value <= 100
                 ):
                     raise ValueError(f"{name} must be a finite percentage between zero and 100")
-            if not rule._roots or rule._exempt_files or rule._extensions != (".py",):
-                raise ValueError("strict coverage requires source roots, Python files and no exemptions")
+            if not rule._roots or rule._extensions != (".py",):
+                raise ValueError("strict coverage requires source roots and Python files")
             measured_roots: set[Path] = set()
             for source_root in rule._roots:
                 source = Path(source_root)
@@ -337,11 +333,6 @@ class CoverageFloor(FitnessRule):
             print(f"FAIL [{self.name}] {relative}: {message}")
         return int(bool(failures))
 
-    def establish_baseline(self) -> Path:
-        if self.branch_floor_pct is not None:
-            raise ValueError("strict coverage cannot establish a baseline")
-        return super().establish_baseline()
-
 
 def build(
     config: Mapping[str, Any],
@@ -353,7 +344,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(CoverageFloor, argv)
 
 

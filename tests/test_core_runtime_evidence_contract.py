@@ -18,18 +18,13 @@ import pytest
 
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.check_evidence import capture_check_evidence
-from tc_fitness.core_checks import run_core_check
 from tc_fitness.core_checks._runtime_contracts import (
     CONTRACT_SCHEMA,
     EVIDENCE_SCHEMA,
     ContractDocuments,
     canonical_json_bytes,
 )
-from tc_fitness.core_checks.runtime_evidence_contract import (
-    RuntimeEvidenceContract,
-    build,
-    validate_runtime_evidence,
-)
+from tc_fitness.core_checks.runtime_evidence_contract import build, validate_runtime_evidence
 from tc_fitness.runner import run
 
 pytestmark = pytest.mark.integration
@@ -210,60 +205,6 @@ def test_baseline_cannot_suppress_bad_evidence(tmp_path: Path, capsys: object) -
     )
     assert build(_config(), repo_root=tmp_path).run() == 1
     assert "source-sha-mismatch" in capsys.readouterr().err  # type: ignore[attr-defined]
-
-
-def test_establish_baseline_rejects_invalid_runtime_evidence(tmp_path: Path, capsys: object) -> None:
-    rule = build(
-        {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"},
-        repo_root=tmp_path,
-    )
-
-    with pytest.raises(RuntimeError, match="cannot establish a baseline"):
-        rule.establish_baseline()
-
-    assert "missing-file" in capsys.readouterr().err  # type: ignore[attr-defined]
-    assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
-
-
-def test_shared_core_helper_cannot_baseline_invalid_runtime_evidence(tmp_path: Path) -> None:
-    config = {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"}
-
-    with pytest.raises(RuntimeError, match="cannot establish a baseline"):
-        run_core_check(
-            RuntimeEvidenceContract,
-            ["--establish-baseline", "--repo-root", str(tmp_path)],
-            config=config,
-        )
-
-    assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
-
-
-def test_catalogue_runner_fails_invalid_runtime_evidence_baseline(
-    tmp_path: Path,
-    capsys: object,
-) -> None:
-    rules = (
-        RuleEntry(
-            id="runtime-evidence-contract",
-            gate="runtime-evidence-contract",
-            check="core:runtime_evidence_contract",
-            summary="runtime evidence matches the deployment attempt",
-        ),
-    )
-    config = {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"}
-
-    verdict = run(
-        rules,
-        repo_root=tmp_path,
-        core_check_configs={"runtime_evidence_contract": config},
-        establish_baseline=True,
-    )
-
-    assert not verdict.ok
-    captured = capsys.readouterr()  # type: ignore[attr-defined]
-    assert "missing-file" in captured.err
-    assert "FAIL [runtime-evidence-contract]" in captured.out
-    assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
 
 
 def test_configured_duplicate_key_fails_actionably(tmp_path: Path, capsys: object) -> None:

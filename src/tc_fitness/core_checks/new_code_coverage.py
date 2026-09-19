@@ -25,8 +25,7 @@ identity, no exemptions and 100 percent changed lines. ``coverage_receipt``
 additionally binds the fresh execution and accepted-base monotonic evidence.
 Strict-mode missing inputs raise; they never enter the legacy soft-pass path.
 
-Hard floor, by design. Unlike :mod:`coverage_floor`, this rule is baseline-free:
-new code is inherently non-grandfatherable (see :meth:`NewCodeCoverage.establish_baseline`).
+Hard floor, by design: new code that misses the threshold always fails.
 
 The floor, the report path, the trunk ref, and the scan roots are CONFIG the
 consumer supplies; nothing here names a repo, a source package, or a threshold
@@ -51,7 +50,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from tc_fitness.baseline import establish_baseline as _establish_baseline
 from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
@@ -448,22 +446,6 @@ class NewCodeCoverage(FitnessRule):
         print(self.remediation)
         return 1
 
-    def establish_baseline(self) -> Path:
-        """Freeze an EMPTY baseline — new-code coverage is non-grandfatherable.
-
-        Modelling note: the base class freezes today's offenders so a repo can
-        pay down PRE-EXISTING debt behind a ratchet. New-code coverage has no
-        such notion — the "new" line set is recomputed against the merge-base on
-        every branch, so a frozen path is meaningless on the next one, and a line
-        ADDED on THIS branch that runs uncovered is a FRESH defect, never
-        inherited debt. This override freezes the EMPTY set so ``--establish-baseline``
-        writes a coherent (empty) file; the hard floor is enforced by
-        :meth:`run`, which consults no baseline at all.
-        """
-        if self.exact_config is not None:
-            raise ValueError("exact-base coverage cannot establish a baseline")
-        return _establish_baseline(self._name, set(), self._repo_root)
-
 
 def build(
     config: Mapping[str, Any],
@@ -484,7 +466,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NewCodeCoverage, argv)
 
 

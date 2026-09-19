@@ -6,8 +6,7 @@ INHERITS them via its catalogue instead of porting Python. Each CORE check is
 a single module under this package exposing:
 
 * a :class:`tc_fitness.fitness_rule.FitnessRule` subclass (the detector), and
-* a ``main(argv=None) -> int`` entry point that runs the rule, supporting the
-  ``--establish-baseline`` adoption mode.
+* a ``main(argv=None) -> int`` entry point that runs the rule.
 
 The CORE-check-module convention
 ================================
@@ -15,7 +14,7 @@ The CORE-check-module convention
 **Location.** One module per check at
 ``src/tc_fitness/core_checks/<canonical-name>.py`` (canonical name in
 ``snake_case``; the rule's ``name`` attribute uses the same name in
-``kebab-case`` for the baseline file). Tests live at
+``kebab-case`` for findings). Tests live at
 ``tests/core_checks/test_<canonical-name>.py``.
 
 **Module shape.** Copy the exemplar (:mod:`tc_fitness.core_checks.no_duplicate_string`):
@@ -23,7 +22,7 @@ The CORE-check-module convention
 .. code-block:: python
 
     class MyRule(FitnessRule):
-        name = "my-rule"                 # → .architecture/baseline/my-rule-files.txt
+        name = "my-rule"
         remediation = REMEDIATION        # built with tc_fitness.remediation(...)
         extensions = (".py",)            # repo-NEUTRAL default; roots come from config
 
@@ -38,7 +37,7 @@ The CORE-check-module convention
 
 **Repo-agnostic.** A CORE module contains ZERO repo strings — no ``kairix`` /
 ``taz`` / ``kata`` paths, globs, or thresholds. Everything repo-specific
-(``roots``, ``extensions``, ``exempt_files``, thresholds, the baseline path)
+(``roots``, ``extensions``, thresholds)
 arrives through the consumer's ``[tool.tc_fitness]`` catalogue entry and is
 applied via :meth:`FitnessRule.from_config`.
 
@@ -52,7 +51,7 @@ its ``check`` field using the ``core:`` namespace:
     # in the consumer's catalogue.py
     RuleEntry(
         id="no-duplicate-string",
-        gate="no-duplicate-string",          # baseline filename root
+        gate="no-duplicate-string",
         check="core:no_duplicate_string",    # resolves to tc_fitness.core_checks.no_duplicate_string
         category="maintainability",
         summary="No string literal duplicated 3+ times in one module.",
@@ -64,7 +63,6 @@ its ``check`` field using the ``core:`` namespace:
     [tool.tc_fitness.core_checks.no_duplicate_string]
     roots = ["scripts", "tools", "src"]
     extensions = [".py"]
-    exempt_files = []
     min_length = 10        # rule-specific knob the subclass reads from config
     min_occurrences = 3
 
@@ -74,8 +72,8 @@ with the matching config block, and runs the returned rule. A consumer pinned
 to ``@v0.5.0`` that never adds a ``core:`` row is unaffected (purely additive).
 
 **The shared entry-point helper.** :func:`run_core_check` gives every CORE
-module an identical ``main()`` that parses ``--establish-baseline`` and the
-optional ``--repo-root``, so no module re-implements argv handling.
+module an identical ``main()`` that parses the optional ``--repo-root``, so no
+module re-implements argv handling.
 """
 
 from __future__ import annotations
@@ -96,11 +94,7 @@ def run_core_check(
 ) -> int:
     """Shared ``main()`` body for a CORE check module.
 
-    Parses the two universal flags and dispatches:
-
-    * ``--establish-baseline`` — write today's offenders as the frozen baseline
-      (adoption mode) and exit ``0``.
-    * ``--repo-root PATH`` — gate a tree other than the CWD (tests / monorepo
+    Parses the universal ``--repo-root PATH`` flag to gate a tree other than the CWD (tests / monorepo
       sub-trees).
 
     ``config`` is the consumer's config block for this check (from
@@ -108,11 +102,6 @@ def run_core_check(
     apply. Returns the rule's exit code (or ``0`` after establishing).
     """
     parser = argparse.ArgumentParser(prog=rule_cls.name)
-    parser.add_argument(
-        "--establish-baseline",
-        action="store_true",
-        help="freeze today's offenders as the baseline (rule adoption mode).",
-    )
     parser.add_argument(
         "--repo-root",
         type=Path,
@@ -124,10 +113,6 @@ def run_core_check(
     cfg: Mapping[str, Any] = config if config is not None else {}
     rule = rule_cls.from_config(cfg, repo_root=args.repo_root)
 
-    if args.establish_baseline:
-        path = rule.establish_baseline()
-        print(f"established baseline: {path}")
-        return 0
     return rule.run()
 
 

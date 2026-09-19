@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tc_fitness.core_checks.no_real_names import NoRealNames, build, file_has_real_name, main
+from tc_fitness.core_checks.no_real_names import build, file_has_real_name
 
 pytestmark = pytest.mark.integration
 
@@ -103,20 +103,3 @@ def test_missing_and_binary_files_do_not_report_names(tmp_path: Path) -> None:
         )
         is False
     )
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "examples/a.md", "AcmeCorp")
-    rule = NoRealNames.from_config(
-        {"roots": ["examples"], "tokens": ["AcmeCorp"], "extensions": [".md"]}, repo_root=tmp_path
-    )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "examples/a.md", "AcmeCorp")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-real-names-files.txt").exists()

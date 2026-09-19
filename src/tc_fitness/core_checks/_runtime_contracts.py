@@ -1188,14 +1188,6 @@ class RuntimeContractRule(FitnessRule):
         render_findings(findings)
         return 1
 
-    def establish_baseline(self) -> Path:
-        """Validate active runtime documents and reject grandfathering defects."""
-        findings = self.collect_findings()
-        if findings:
-            render_findings(findings)
-            raise RuntimeError("runtime contract findings cannot establish a baseline")
-        return super().establish_baseline()
-
 
 __all__ = [
     "CONTRACT_SCHEMA",

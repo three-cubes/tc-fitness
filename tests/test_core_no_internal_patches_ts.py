@@ -7,10 +7,8 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.no_internal_patches_ts import (
-    NoInternalPatchesTs,
     build,
     file_mocks_internal_ts,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -108,23 +106,6 @@ def test_default_and_namespace_imports_resolve_spy_sources(tmp_path: Path) -> No
 
 def test_missing_source_is_ignored(tmp_path: Path) -> None:
     assert _flags(tmp_path / "missing.test.ts") is False
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "pkg/a.test.ts", "vi.mock('../../src/client.js');\n")
-    rule = NoInternalPatchesTs.from_config(
-        {"roots": ["pkg"], "internal_packages": ["mcp-x"], "exempt_specifiers": ["fs"]}, repo_root=tmp_path
-    )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "a.test.ts", "vi.mock('../../src/client.js');\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-internal-patches-ts-files.txt").exists()
 
 
 def test_non_test_ts_out_of_scope(tmp_path: Path) -> None:

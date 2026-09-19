@@ -9,10 +9,8 @@ import pytest
 
 from tc_fitness.core_checks.adr_number_unique import (
     DEFAULT_RECORD_PATTERN,
-    AdrNumberUnique,
     build,
     find_collisions,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -92,20 +90,3 @@ def test_custom_dir_and_pattern_via_config(tmp_path: Path) -> None:
     _seed(tmp_path, "rfc/RFC-7-b.md")
     rule = build({"record_dir": "rfc", "record_pattern": r"^RFC-(\d+)-.+\.md$"}, repo_root=tmp_path)
     assert len(rule.collect_violations()) == 2
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/decisions/ADR-041-foo.md")
-    _seed(tmp_path, "docs/decisions/ADR-041-bar.md")
-    rule = AdrNumberUnique.from_config({}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/decisions/ADR-041-foo.md")
-    _seed(tmp_path, "docs/decisions/ADR-041-bar.md")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "adr-number-unique-files.txt").exists()

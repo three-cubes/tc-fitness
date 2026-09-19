@@ -1698,11 +1698,6 @@ def main(argv: list[str] | None = None) -> int:
     """Run one configured filesystem contract directly from the command line."""
     parser = argparse.ArgumentParser(prog=RuntimeFilesystemContract.name)
     parser.add_argument(
-        "--establish-baseline",
-        action="store_true",
-        help="validate the configured contract and reject baseline establishment on any finding",
-    )
-    parser.add_argument(
         "--repo-root",
         type=Path,
         default=None,
@@ -1757,10 +1752,6 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     rule = RuntimeFilesystemContract.from_config(config, repo_root=args.repo_root)
-    if args.establish_baseline:
-        path = rule.establish_baseline()
-        print(f"established baseline: {path}")
-        return 0
     return rule.run()
 
 

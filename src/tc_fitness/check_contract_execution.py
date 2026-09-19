@@ -18,7 +18,6 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import UUID, uuid4
 
-from tc_fitness.baseline import baseline_free_execution
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.check_contract_policy import validate_contract_configuration
 from tc_fitness.check_contracts import (
@@ -97,7 +96,6 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
         with (
             _case_environment(case.environment.path, Path(temporary)),
             capture_check_evidence() as evidence,
-            baseline_free_execution(),
         ):
             entry = RuleEntry(id=contract.check, gate=contract.check, check=contract.check)
             run(
@@ -111,8 +109,6 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
             raise CheckContractError("original fixture changed during execution")
         if candidate_identity() != candidate:
             raise CheckContractError("candidate source changed during execution")
-        if (repo / ".architecture" / "baseline").exists():
-            raise CheckContractError("execution created a suppression baseline")
         if len(evidence.results) != 1:
             raise CheckContractError("missing or multiple terminal check results")
         result = evidence.results[0]
@@ -147,13 +143,11 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
 
 
 def _portable_configuration(value: object) -> None:
-    """Keep configured inputs inside the fixture and forbid baseline overrides."""
+    """Keep configured inputs inside the fixture."""
     if isinstance(value, dict):
         for key, item in value.items():
             if key == "name" and not re.fullmatch(r"[a-zA-Z0-9_-]+", str(item)):
-                raise CheckContractError(
-                    "contract configuration cannot select a baseline or external rule name"
-                )
+                raise CheckContractError("contract configuration cannot select an external rule name")
             _portable_configuration(item)
     elif isinstance(value, list):
         for item in value:
@@ -267,8 +261,6 @@ def _fixture_path(manifest: Path, name: str) -> Path:
     ]
     if any(path.is_symlink() for path in ancestors) or any(path.is_symlink() for path in fixture.rglob("*")):
         raise CheckContractError("contract fixtures cannot contain symlinks")
-    if (fixture / ".architecture" / "baseline").exists():
-        raise CheckContractError("contract fixtures cannot contain a suppression baseline")
     return fixture
 
 

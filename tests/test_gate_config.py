@@ -239,32 +239,6 @@ def test_stage_cannot_depend_on_itself(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "options",
-    [
-        "run=['true']",
-        "catalogue='module:RULES'\ndispatch='subprocess'",
-        "catalogue='module:RULES'\nparallel=true",
-        "catalogue='module:RULES'\nallow_missing=true",
-        "catalogue='module:RULES'\ncontinue_on_error=true",
-    ],
-)
-def test_baseline_free_requires_a_gating_inprocess_catalogue_without_skips(
-    tmp_path: Path, options: str
-) -> None:
-    with pytest.raises(GateConfigError, match="baseline-free assurance requires"):
-        parse_config_table(f"[[steps]]\nid='baseline'\n{options}\nbaseline_free=true\n", tmp_path)
-
-
-def test_baseline_free_accepts_a_gating_inprocess_catalogue() -> None:
-    cfg = parse_config_table(
-        "[[steps]]\nid='baseline'\ncatalogue='module:RULES'\nbaseline_free=true\n",
-        Path.cwd(),
-    )
-
-    assert cfg.steps[0].baseline_free
-
-
 def test_non_strict_stage_planning_drops_a_filtered_dependency() -> None:
     step = StepSpec(id="kept", run=("true",), stage="kept", depends_on=("filtered",))
 
@@ -293,7 +267,7 @@ def test_join_stage_waits_until_each_real_predecessor_is_ready() -> None:
         ("[tool]\ntc_fitness = 'not a table'\n", "must be a table"),
         ("steps = [false]\n", "is not a table"),
         ("[[steps]]\nid='x'\nshell=1\n", "`shell` must be a string"),
-        ("[[steps]]\nid='x'\nrun=['true']\nbaseline_free=1\n", "baseline_free must be a boolean"),
+        ("[[steps]]\nid='x'\nrun=['true']\nbaseline_free=1\n", "removed option `baseline_free`"),
         ("[[steps]]\nid='x'\nrun=['true']\nstage=1\n", "`stage` must be a non-empty string"),
     ],
 )

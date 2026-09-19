@@ -37,7 +37,7 @@ def invoke(root: Path, *args: str) -> int:
     ).returncode
 
 
-def consumer(root: Path, *, strict: bool = True, extra: str = "") -> None:
+def consumer(root: Path, *, extra: str = "") -> None:
     seed(
         root,
         "checks.py",
@@ -46,87 +46,12 @@ def consumer(root: Path, *, strict: bool = True, extra: str = "") -> None:
     seed(
         root,
         ".tc-fitness.toml",
-        "[[steps]]\nid='coverage'\ncatalogue='checks:ENTRIES'\n"
-        + ("baseline_free=true\n" if strict else "")
-        + extra,
+        "[[steps]]\nid='coverage'\ncatalogue='checks:ENTRIES'\n" + extra,
     )
     seed(root, "coverage.xml", '<coverage branch-rate="0" branches-valid="0"/>')
 
 
-def test_catalogue_does_not_consume_baseline_debt(tmp_path: Path) -> None:
-    consumer(tmp_path, strict=False)
+def test_catalogue_does_not_consume_legacy_baseline_debt(tmp_path: Path) -> None:
+    consumer(tmp_path)
     seed(tmp_path, ".architecture/baseline/coverage-includes-branches-files.txt", "coverage.xml\n")
-    assert invoke(tmp_path) == 0
-    consumer(tmp_path)
     assert invoke(tmp_path) == 1
-
-
-def test_catalogue_rejects_public_establish_baseline(tmp_path: Path) -> None:
-    consumer(tmp_path)
-    assert invoke(tmp_path, "--establish-baseline") == 1
-    assert not (tmp_path / ".architecture/baseline").exists()
-
-
-def test_dispatched_python_check_cannot_write_a_baseline(tmp_path: Path) -> None:
-    consumer(tmp_path)
-    seed(
-        tmp_path,
-        "checks.py",
-        "from tc_fitness.catalogue import RuleEntry\nENTRIES = (RuleEntry(id='escape', gate='escape', check='escape'),)\n",
-    )
-    seed(
-        tmp_path,
-        "scripts/checks/check_escape.py",
-        "from pathlib import Path\nfrom tc_fitness.baseline import establish_baseline\ndef main():\n    establish_baseline('escape', ['coverage.xml'], Path("
-        + repr(str(tmp_path))
-        + "))\n    return 0\n",
-    )
-    assert invoke(tmp_path) == 1
-    assert not (tmp_path / ".architecture/baseline").exists()
-
-
-def test_baseline_free_step_rejects_conditional_python_subprocess(tmp_path: Path) -> None:
-    consumer(tmp_path)
-    seed(
-        tmp_path,
-        "checks.py",
-        "from tc_fitness.catalogue import RuleEntry\n"
-        "ENTRIES = (RuleEntry(id='escape', gate='escape', check='escape', "
-        "subprocess_arg_env='COVERAGE_EVIDENCE', "
-        "subprocess_arg_default='coverage.xml'),)\n",
-    )
-    seed(
-        tmp_path,
-        "scripts/checks/check_escape.py",
-        "from pathlib import Path\n"
-        "from tc_fitness.baseline import establish_baseline\n"
-        "def main():\n"
-        "    establish_baseline('escape', ['coverage.xml'], Path(" + repr(str(tmp_path)) + "))\n"
-        "    return 0\n",
-    )
-
-    assert invoke(tmp_path) != 0
-    assert not (tmp_path / ".architecture/baseline").exists()
-
-
-@pytest.mark.parametrize(
-    "extra",
-    ['dispatch="subprocess"\n', "continue_on_error=true\n", "allow_missing=true\n", "parallel=true\n"],
-)
-def test_baseline_free_step_rejects_execution_escape_configuration(tmp_path: Path, extra: str) -> None:
-    consumer(tmp_path, extra=extra)
-    seed(tmp_path, "coverage.xml", '<coverage branch-rate="1" branches-valid="2"/>')
-    assert invoke(tmp_path) != 0
-
-
-def test_catalogue_import_cannot_write_a_baseline_before_dispatch(tmp_path: Path) -> None:
-    consumer(tmp_path)
-    path = tmp_path / "checks.py"
-    path.write_text(
-        "from pathlib import Path\nfrom tc_fitness.baseline import establish_baseline\nestablish_baseline('escape', [], Path("
-        + repr(str(tmp_path))
-        + "))\n"
-        + path.read_text()
-    )
-    assert invoke(tmp_path) == 1
-    assert not (tmp_path / ".architecture/baseline").exists()

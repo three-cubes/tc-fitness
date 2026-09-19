@@ -433,7 +433,7 @@ def _mutating_script(target: Path) -> str:
     )
 
 
-@pytest.mark.parametrize("effect", ["manifest", "original-fixture", "suppression-baseline"])
+@pytest.mark.parametrize("effect", ["manifest", "original-fixture"])
 def test_public_executor_rejects_mutations_from_the_executed_fixture(tmp_path: Path, effect: str) -> None:
     from tc_fitness.check_contract_execution import execute_contract_case
     from tc_fitness.check_contracts import CheckContractError
@@ -441,24 +441,9 @@ def test_public_executor_rejects_mutations_from_the_executed_fixture(tmp_path: P
     manifest = tmp_path / "script-help.yaml"
     fixture = tmp_path / "fixture"
     source_path = fixture / "src" / "entrypoint.py"
-    if effect == "manifest":
-        script_source = _mutating_script(manifest)
-    elif effect == "original-fixture":
-        script_source = _mutating_script(source_path)
-    else:
-        script_source = (
-            "from pathlib import Path\n"
-            "(Path(__file__).resolve().parents[1] / '.architecture' / 'baseline').mkdir(parents=True)\n"
-            "import argparse\n"
-            "def main():\n"
-            "    parser = argparse.ArgumentParser()\n"
-            "    parser.add_argument('--value')\n"
-            "    parser.parse_args()\n"
-            "if __name__ == '__main__':\n"
-            "    main()\n"
-        )
+    script_source = _mutating_script(manifest if effect == "manifest" else source_path)
     manifest = make_script_help_contract(tmp_path, script_source)
-    with pytest.raises(CheckContractError, match=r"changed|created a suppression baseline"):
+    with pytest.raises(CheckContractError, match="changed"):
         execute_contract_case(manifest, "script-help", tmp_path / "ledger.json")
 
 
@@ -732,7 +717,7 @@ def test_existing_ledger_is_preserved_for_retry(tmp_path: Path) -> None:
     assert ledger.read_bytes() == original
 
 
-@pytest.mark.parametrize("sabotage", ["outside-fixture", "symlink", "baseline", "unregistered-check"])
+@pytest.mark.parametrize("sabotage", ["outside-fixture", "symlink", "unregistered-check"])
 def test_case_setup_rejects_unbound_or_suppressed_inputs(tmp_path: Path, sabotage: str) -> None:
     manifest = make_contract(tmp_path)
     data = yaml.safe_load(manifest.read_text())
@@ -742,10 +727,6 @@ def test_case_setup_rejects_unbound_or_suppressed_inputs(tmp_path: Path, sabotag
         (tmp_path / "compliant" / "src" / "external.py").symlink_to(
             tmp_path / "violation" / "src" / "example.py"
         )
-    elif sabotage == "baseline":
-        baseline = tmp_path / "compliant" / ".architecture" / "baseline"
-        baseline.mkdir(parents=True)
-        (baseline / "license-present-files.txt").write_text("src/example.py\n")
     else:
         data["check"] = "core:__init__"
     manifest.write_text(yaml.safe_dump(data))
@@ -857,7 +838,6 @@ def test_embedded_public_entrypoint_retains_evidence_and_restores_outer_capture(
         "missing-fixture",
         "absolute-fixture",
         "symlink",
-        "baseline",
         "existing-ledger",
         "ledger-in-fixture",
     ],
@@ -879,8 +859,6 @@ def test_embedded_public_entrypoint_fails_closed_on_invalid_setup(tmp_path: Path
         )
     elif sabotage == "symlink":
         (tmp_path / "compliant" / "linked").symlink_to(tmp_path / "violation")
-    elif sabotage == "baseline":
-        (tmp_path / "compliant" / ".architecture" / "baseline").mkdir(parents=True)
     elif sabotage == "existing-ledger":
         ledger.write_text("retained evidence")
     else:

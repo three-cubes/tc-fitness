@@ -11,7 +11,6 @@ from _core_check_assertions import assert_no_repo_identity
 from tc_fitness.core_checks.script_help_smoke import (
     ScriptHelpSmoke,
     build,
-    main,
     script_help_violates,
 )
 
@@ -111,21 +110,6 @@ def test_rule_scopes_roots_and_skips_tests(tmp_path: Path) -> None:
     rule = ScriptHelpSmoke.from_config({"roots": ["scripts"], "help_timeout_seconds": 10}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"scripts/broken.py"}
     assert rule.is_in_scope("outside/readme.txt") is False
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
-    rule = ScriptHelpSmoke.from_config({"roots": ["scripts"], "help_timeout_seconds": 10}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "script-help-smoke-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

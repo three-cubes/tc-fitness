@@ -590,13 +590,6 @@ class BehaviouralEvidence(FitnessRule):
             print("run: python -m tc_fitness.core_checks.behavioural_evidence", file=sys.stderr)
         return 1
 
-    def establish_baseline(self) -> Path:
-        findings = self.collect_findings()
-        if findings:
-            self.run()
-            raise RuntimeError("behavioural evidence findings cannot establish a baseline")
-        return super().establish_baseline()
-
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> BehaviouralEvidence:
     """Bind the hard behavioural-evidence rule to a consumer configuration."""

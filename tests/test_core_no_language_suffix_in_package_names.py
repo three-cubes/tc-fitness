@@ -8,9 +8,7 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.no_language_suffix_in_package_names import (
-    NoLanguageSuffixInPackageNames,
     build,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -63,22 +61,6 @@ def test_forbidden_suffixes_config_driven(tmp_path: Path) -> None:
     assert default_rule.collect_violations() == set()
     rule = build({"boundary_roots": ["pkgs"], "forbidden_suffixes": ["-rb"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"pkgs/thing-rb"}
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _mkdir(tmp_path, "tools/mcp/render-ts")
-    rule = NoLanguageSuffixInPackageNames.from_config({"boundary_roots": ["tools/mcp"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _mkdir(tmp_path, "tools/mcp/render-ts")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    expected = tmp_path / ".architecture" / "baseline" / "no-language-suffix-in-package-names-files.txt"
-    assert expected.exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

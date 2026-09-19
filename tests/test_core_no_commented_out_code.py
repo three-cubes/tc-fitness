@@ -10,7 +10,6 @@ import pytest
 from tc_fitness.core_checks.no_commented_out_code import (
     NoCommentedOutCode,
     build,
-    main,
     module_has_commented_code,
 )
 
@@ -130,21 +129,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/d.py", _DEAD)
     rule = NoCommentedOutCode.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/d.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/d.py", _DEAD)
-    rule = NoCommentedOutCode.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "d.py", _DEAD)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-commented-out-code-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

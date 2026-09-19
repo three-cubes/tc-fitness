@@ -246,13 +246,6 @@ def test_evaluate_without_configuration_is_a_pass(tmp_path: Path) -> None:
     assert execution.report == {"results": []}
 
 
-def test_osv_scan_has_no_baseline_operation(tmp_path: Path) -> None:
-    rule = OsvScannerSca(tmp_path, scanner_version="2.2.4", lockfiles=("uv.lock",))
-
-    with pytest.raises(RuntimeError, match="no baseline"):
-        rule.establish_baseline()
-
-
 def _scanner_script(
     path: Path,
     *,

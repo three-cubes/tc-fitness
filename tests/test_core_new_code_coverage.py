@@ -22,7 +22,6 @@ from _core_check_assertions import assert_no_repo_identity
 import tc_fitness.core_checks.new_code_coverage as new_code_coverage
 from tc_fitness.core_checks.new_code_coverage import (
     build,
-    main,
     parse_line_coverage,
 )
 
@@ -556,24 +555,6 @@ def test_unsafe_base_ref_skips_without_touching_git(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_run_fails_hard_and_baseline_grandfathers_nothing(tmp_path: Path) -> None:
-    _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
-    diff = _diff("src/a.py", 10, ["x = 1"])
-    rule = build(_cfg(), repo_root=tmp_path, git_runner=_fake_git(diff=diff))
-    assert rule.run() == 1
-    rule.establish_baseline()
-    # Unlike coverage_floor, establishing does NOT grandfather the offender: the
-    # baseline is frozen EMPTY, so the floor stays hard and the run still FAILs.
-    assert rule.run() == 1
-    baseline = tmp_path / ".architecture" / "baseline" / "new-code-coverage-files.txt"
-    entries = [
-        ln
-        for ln in baseline.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    assert entries == []
-
-
 def test_hand_crafted_baseline_cannot_soften_the_floor(tmp_path: Path) -> None:
     # Even a MANUALLY written baseline naming the offender is ignored: run()
     # consults no baseline at all, so the hard floor holds.
@@ -584,20 +565,6 @@ def test_hand_crafted_baseline_cannot_soften_the_floor(tmp_path: Path) -> None:
     diff = _diff("src/a.py", 10, ["x = 1"])
     rule = build(_cfg(), repo_root=tmp_path, git_runner=_fake_git(diff=diff))
     assert rule.run() == 1
-
-
-def test_main_establish_baseline_writes_empty_baseline(tmp_path: Path) -> None:
-    _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    baseline = tmp_path / ".architecture" / "baseline" / "new-code-coverage-files.txt"
-    assert baseline.exists()
-    entries = [
-        ln
-        for ln in baseline.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    assert entries == []  # new code is non-grandfatherable
 
 
 # --------------------------------------------------------------------------- #

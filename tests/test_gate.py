@@ -650,44 +650,6 @@ def test_catalogue_step_runs_concurrently_with_subprocess_step(
     assert "run [fitness]" in out  # in-process catalogue leg (main thread) replayed cleanly
 
 
-def test_baseline_free_catalogue_rejects_baseline_adoption(
-    repo: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _write_synthetic_catalogue(repo)
-    _write_config(
-        repo,
-        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
-        'checks_dir = "scripts/checks"\nbaseline_free = true\n',
-    )
-
-    outcome = run_gate(load_config(repo), repo, establish_baseline=True)
-
-    assert not outcome.ok
-    assert "baseline-free assurance cannot establish baselines" in _plain(capsys.readouterr().out)
-
-
-def test_baseline_free_catalogue_rejects_out_of_process_rules(
-    repo: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    checks = repo / "scripts/checks"
-    checks.mkdir(parents=True)
-    (checks / "check.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-    (repo / "shell_catalogue.py").write_text(
-        "from tc_fitness.catalogue import RuleEntry\n"
-        "ENTRIES = (RuleEntry(id='shell', gate='shell', check='shell', script='check.sh'),)\n"
-    )
-    _write_config(
-        repo,
-        '[[steps]]\nid = "fitness"\ncatalogue = "shell_catalogue:ENTRIES"\n'
-        'checks_dir = "scripts/checks"\nbaseline_free = true\n',
-    )
-
-    outcome = run_gate(load_config(repo), repo)
-
-    assert not outcome.ok
-    assert "baseline-free assurance requires in-process checks" in _plain(capsys.readouterr().out)
-
-
 def test_unknown_only_selector_runs_nothing_and_reports_valid_ids(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -812,17 +774,6 @@ def test_catalogue_preserves_repo_path_that_caller_already_owns(repo: Path) -> N
         assert path in sys.path
     finally:
         sys.path.remove(path)
-
-
-def test_catalogue_threads_baseline_adoption_to_ordinary_rules(repo: Path) -> None:
-    _write_synthetic_catalogue(repo)
-    _write_config(
-        repo,
-        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
-        'checks_dir = "scripts/checks"\n',
-    )
-
-    assert run_gate(load_config(repo), repo, establish_baseline=True).ok
 
 
 def test_in_memory_configuration_has_no_file_banner(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

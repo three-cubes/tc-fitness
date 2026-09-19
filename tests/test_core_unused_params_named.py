@@ -10,7 +10,6 @@ import pytest
 from tc_fitness.core_checks.unused_params_named import (
     UnusedParamsNamed,
     build,
-    main,
     module_has_unused_param,
 )
 
@@ -146,21 +145,6 @@ def test_unparseable_configured_source_is_reported(tmp_path: Path) -> None:
     rule = build({"roots": ["src"]}, repo_root=tmp_path)
 
     assert rule.run() == 1
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/u.py", _UNUSED)
-    rule = build({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "u.py", _UNUSED)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "unused-params-named-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:
