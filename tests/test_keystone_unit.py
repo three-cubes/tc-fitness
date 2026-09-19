@@ -81,3 +81,18 @@ def test_catalogue_check_consistency_exit_codes() -> None:
         print_fn=lambda _m: None,
     )
     assert bad == 1
+
+
+def test_catalogue_check_consistency_reports_orphan_check_and_remediation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = catalogue_check_consistency(
+        cataloged_check_ids=["core:present"],
+        available_check_ids=["core:present", "core:orphan"],
+        remediation="add the missing catalogue entry",
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert "core:orphan" in output
+    assert "add the missing catalogue entry" in output
