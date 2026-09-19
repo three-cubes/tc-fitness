@@ -116,6 +116,14 @@ strict = true
 warn_unused_ignores = true
 files = ["src/tc_fitness"]
 
+[tool.coverage.run]
+branch = true
+source = ["src/tc_fitness"]
+
+[tool.coverage.report]
+exclude_lines = []
+partial_branches = []
+
 [[tool.mypy.overrides]]
 # PyYAML is a required runtime dependency, but does not ship type stubs.
 module = ["yaml"]
@@ -176,7 +184,7 @@ next = "re-run `tc-fitness run`"
 [[tool.tc_fitness.steps]]
 id = "pytest"
 summary = "pytest (with coverage)"
-run = ["pytest", "-q", "--cov=tc_fitness", "--cov-report=term-missing", "--cov-report=xml"]
+run = ["pytest", "-q", "--cov", "--cov-report=term-missing", "--cov-report=xml", "--cov-report=json"]
 skip_when_staged = true
 fix = "fix the failing test or the code under test"
 next = "re-run `tc-fitness run`"

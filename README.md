@@ -362,6 +362,39 @@ actual decision point. `gate()`-based checks, including `license_present`, alrea
 use this interface. Custom checks must emit their own structured findings;
 console output is never parsed and detectors are never invoked twice.
 
+### Independent coverage floors
+
+The existing `core:coverage_floor` check supports strict, baseline-free admission
+by configuring `branch_floor_pct` alongside its per-file line floor:
+
+```toml
+[tool.tc_fitness.core_checks.coverage_floor]
+roots = ["src/tc_fitness"]
+coverage_report = "coverage.xml"
+floor_pct = 95
+branch_floor_pct = 95
+critical_branch_files = [
+  "src/tc_fitness/gate.py",
+  "src/tc_fitness/runner.py",
+  "src/tc_fitness/gate_config.py",
+  "src/tc_fitness/runtime_contract.py",
+]
+```
+
+This mode requires complete Cobertura file and line detail, reconciles summary
+counts, and calculates line and branch percentages independently. Critical files
+require 100% branch coverage. Missing files/details, inconsistent counts, invalid
+thresholds, exemptions and empty source scope cannot pass. Untracked Python files
+within the declared roots are included. Existing line-only consumers remain
+compatible when `branch_floor_pct` is absent.
+
+The repository now produces branch-aware XML and JSON for the complete package,
+without line/partial-branch exclusion patterns. This is measurement, not a claim
+that the repository meets its required floors. Exact-base changed-line coverage,
+digest-bound monotonic and freshness admission, and the final baseline-free self
+catalogue remain separate assurance work. Cobertura consistency alone cannot
+authenticate a report or prove it belongs to the current source execution.
+
 ### Pytest tier assurance
 
 Canonical pytest tier assurance uses two complementary checks. Configure
