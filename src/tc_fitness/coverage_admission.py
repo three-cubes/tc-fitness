@@ -375,7 +375,7 @@ def produce_coverage(
         raise ValueError("coverage digest output must be a new external handoff file")
     settings = output / "coverage.ini"
     settings.write_text(
-        "[run]\nbranch = true\nsource =\n"
+        "[run]\nbranch = true\nparallel = true\npatch = subprocess\nsource =\n"
         + "".join(f"    {root / name}\n" for name in roots)
         + f"data_file = {output / 'coverage.data'}\n[report]\nexclude_lines =\npartial_branches =\n"
     )

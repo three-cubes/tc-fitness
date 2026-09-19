@@ -8,6 +8,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -258,6 +260,8 @@ def test_public_transaction_rejects_unsafe_or_reused_evidence_directory(
 
 
 def test_transaction_ratchets_against_fresh_base_above_absolute_floor(tmp_path: Path) -> None:
+    from tc_fitness.coverage_transaction import assure_coverage
+
     root = tmp_path / "repo"
     repository(root)
     source = root / "src/tc_fitness/subject.py"
@@ -278,10 +282,10 @@ def test_transaction_ratchets_against_fresh_base_above_absolute_floor(tmp_path: 
     base = commit(root)
     test.write_text(prefix + "".join(checks[:96]))
     candidate = commit(root)
-    code, result = invoke(root, base, candidate, tmp_path / "result.json")
-    assert code == 1, result
-    assert any("branch coverage decreased from fresh exact base" in item for item in result["failures"])
-    assert not any("below" in item for item in result["failures"])
+    result = assure_coverage(root, base=base, candidate=candidate, evidence_dir=tmp_path / "evidence")
+    assert "line coverage decreased from fresh exact base" in result.failures
+    assert "branch coverage decreased from fresh exact base" in result.failures
+    assert not any("below" in item for item in result.failures)
 
 
 def test_failed_base_is_not_replaced_by_a_passing_candidate_measurement(tmp_path: Path) -> None:
@@ -392,3 +396,177 @@ def test_each_commit_uses_its_own_locked_pytest_version(tmp_path: Path) -> None:
     assert result["base"]["toolchain"]["pytest"] == "9.1.0"
     assert result["candidate"]["toolchain"]["pytest"] == "9.0.2"
     assert result["base"]["toolchain"]["lock_digest"] != result["candidate"]["toolchain"]["lock_digest"]
+
+
+def test_in_process_transaction_retains_terminal_error_for_invalid_identity(tmp_path: Path) -> None:
+    from tc_fitness.coverage_transaction import assure_coverage
+
+    root = tmp_path / "repo"
+    _, candidate = repository(root)
+    evidence = tmp_path / "evidence"
+
+    with pytest.raises(ValueError, match="explicit full immutable commit IDs"):
+        assure_coverage(root, base="HEAD~1", candidate=candidate, evidence_dir=evidence)
+
+    payload = json.loads((evidence / "transaction.json").read_text())
+    assert payload["status"] == "error"
+    assert payload["phase"] == "transaction"
+    assert payload["side"] is None
+
+
+@pytest.mark.parametrize("output_location", ["external", "inside-evidence", "missing-parent"])
+def test_transaction_main_reports_errors_without_overwriting_unsafe_output(
+    tmp_path: Path, output_location: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tc_fitness.coverage_transaction import main
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    evidence = tmp_path / "evidence"
+    if output_location == "external":
+        output = tmp_path / "result.json"
+    elif output_location == "inside-evidence":
+        output = evidence / "result.json"
+    else:
+        output = tmp_path / "missing" / "result.json"
+
+    code = main(
+        [
+            "--repo-root",
+            str(root),
+            "--base-commit",
+            "a" * 40,
+            "--candidate-commit",
+            "b" * 40,
+            "--evidence-dir",
+            str(evidence),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert code == 2
+    if output_location == "external":
+        assert json.loads(output.read_text())["status"] == "error"
+        assert capsys.readouterr().out == ""
+    else:
+        assert not output.exists()
+        assert json.loads(capsys.readouterr().out)["status"] == "error"
+
+
+def test_in_process_transaction_retains_locked_provision_failure(tmp_path: Path) -> None:
+    from tc_fitness.coverage_transaction import TransactionError, assure_coverage
+
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    config = root / "pyproject.toml"
+    config.write_text(config.read_text().replace("pytest==9.1.0", "pytest==9.0.2"))
+    candidate = commit(root)
+
+    with pytest.raises(TransactionError) as raised:
+        assure_coverage(root, base=base, candidate=candidate, evidence_dir=tmp_path / "evidence")
+
+    assert raised.value.details["side"] == "candidate"
+    assert raised.value.details["phase"] == "provision"
+
+
+def test_in_process_transaction_wraps_controller_measurement_failure(tmp_path: Path) -> None:
+    from tc_fitness.coverage_transaction import TransactionError, assure_coverage
+
+    root = tmp_path / "repo"
+    repository(root)
+    git(root, "rm", "-q", "uv.lock")
+    candidate = commit(root)
+    evidence = tmp_path / "evidence"
+
+    with pytest.raises(TransactionError) as raised:
+        assure_coverage(root, base=candidate, candidate=candidate, evidence_dir=evidence)
+
+    assert raised.value.details["side"] == "base"
+    assert raised.value.details["phase"] == "measurement"
+    assert "uv.lock" in (evidence / str(raised.value.details["stderr_log"])).read_text()
+
+
+def test_transaction_rejects_lock_changed_after_provisioning_starts(tmp_path: Path) -> None:
+    from tc_fitness.coverage_transaction import TransactionError, assure_coverage
+
+    root = tmp_path / "repo"
+    _, candidate = repository(root)
+    evidence = tmp_path / "evidence"
+    changed: list[Path] = []
+
+    def change_detached_lock() -> None:
+        deadline = time.monotonic() + 10
+        log = evidence / "base/uv.stdout.log"
+        while time.monotonic() < deadline and not log.exists():
+            time.sleep(0.001)
+        if not log.exists():
+            return
+        worktrees = git(root, "worktree", "list", "--porcelain").splitlines()
+        snapshots = [
+            Path(line.removeprefix("worktree "))
+            for line in worktrees
+            if line.startswith("worktree ")
+            and "tc-fitness-coverage-transaction-" in line
+            and line.endswith("/base")
+        ]
+        if snapshots:
+            lock = snapshots[0] / "uv.lock"
+            lock.write_text(lock.read_text() + "\n# concurrent drift\n")
+            changed.append(lock)
+
+    writer = threading.Thread(target=change_detached_lock)
+    writer.start()
+    try:
+        with pytest.raises(TransactionError, match="changed the bound lockfile"):
+            assure_coverage(root, base=candidate, candidate=candidate, evidence_dir=evidence)
+    finally:
+        writer.join(timeout=10)
+
+    assert changed
+
+
+def test_in_process_transaction_classifies_only_registered_contract_fixtures(tmp_path: Path) -> None:
+    from tc_fitness.coverage_transaction import assure_coverage
+
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    registry = root / "tests/check_contracts"
+    name = "every_test_has_tier_marker"
+    shutil.copytree(Path(__file__).parent / "check_contracts" / name, registry / name)
+    (registry / "unknown").mkdir()
+    (registry / "unknown/contract.yaml").write_text("not-a-contract: true\n")
+    candidate = commit(root)
+
+    result = assure_coverage(root, base=base, candidate=candidate, evidence_dir=tmp_path / "evidence")
+
+    assert result.failures == ()
+
+
+@pytest.mark.parametrize("write_output", [False, True])
+def test_transaction_main_returns_public_result_for_successful_measurement(
+    tmp_path: Path, write_output: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tc_fitness.coverage_transaction import main
+
+    root = tmp_path / "repo"
+    _, candidate = repository(root)
+    arguments = [
+        "--repo-root",
+        str(root),
+        "--base-commit",
+        candidate,
+        "--candidate-commit",
+        candidate,
+        "--evidence-dir",
+        str(tmp_path / "evidence"),
+    ]
+    output = tmp_path / "result.json"
+    if write_output:
+        arguments.extend(["--output", str(output)])
+
+    code = main(arguments)
+
+    assert code == 0
+    payload = json.loads(output.read_text() if write_output else capsys.readouterr().out)
+    assert payload["status"] == "pass"
