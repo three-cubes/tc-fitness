@@ -411,9 +411,32 @@ def test_module_marker_passes(tmp_path: Path) -> None:
     assert file_missing_tier_marker(p, tiers=_TIERS) is False
 
 
+def test_list_module_markers_and_call_decorators_are_recognised(tmp_path: Path) -> None:
+    module = _seed(
+        tmp_path,
+        "test_module.py",
+        "import pytest\npytestmark = [pytest.mark.unit, pytest.mark.integration]\ndef test_one(): pass\n",
+    )
+    function = _seed(
+        tmp_path,
+        "test_function.py",
+        "import pytest\n@pytest.mark.unit()\ndef test_one(): pass\n",
+    )
+
+    assert file_missing_tier_marker(module, tiers=_TIERS) is False
+    assert file_missing_tier_marker(function, tiers=_TIERS) is False
+
+
 def test_function_marker_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _FUNCTION_MARKER)
     assert file_missing_tier_marker(p, tiers=_TIERS) is False
+
+
+@pytest.mark.parametrize("decorator", ["dynamic", "suite.integration"])
+def test_unrelated_decorator_does_not_count_as_a_tier(tmp_path: Path, decorator: str) -> None:
+    p = _seed(tmp_path, "test_other.py", f"@{decorator}\ndef test_parser():\n    assert True\n")
+
+    assert file_missing_tier_marker(p, tiers=_TIERS) is True
 
 
 def test_canonical_mode_rejects_function_only_module(tmp_path: Path) -> None:
@@ -422,6 +445,20 @@ def test_canonical_mode_rejects_function_only_module(tmp_path: Path) -> None:
         {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
     )
     assert rule.collect_violations() == {Path("tests/test_x.py")}
+
+
+def test_unrelated_pytest_import_does_not_make_a_valid_direct_tier_ambiguous(tmp_path: Path) -> None:
+    _seed(
+        tmp_path,
+        "tests/test_x.py",
+        "import pytest\nfrom pytest import raises\n"
+        "pytestmark = pytest.mark.unit\ndef test_parser():\n    assert True\n",
+    )
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+
+    assert rule.collect_violations() == set()
 
 
 def test_canonical_mode_rejects_module_and_function_tiers(tmp_path: Path) -> None:
@@ -514,6 +551,16 @@ def test_canonical_mode_rejects_other_pytestmark_binding_contexts(tmp_path: Path
 def test_file_without_tests_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _NO_TESTS)
     assert file_missing_tier_marker(p, tiers=_TIERS) is False
+
+
+def test_unreadable_or_unparseable_test_modules_are_ignored(tmp_path: Path) -> None:
+    syntax = _seed(tmp_path, "syntax.py", "def test_x(:\n")
+    binary = tmp_path / "binary.py"
+    binary.write_bytes(b"def test_x(): pass\n\xff")
+
+    assert file_missing_tier_marker(tmp_path / "missing.py", tiers=_TIERS) is False
+    assert file_missing_tier_marker(syntax, tiers=_TIERS) is False
+    assert file_missing_tier_marker(binary, tiers=_TIERS) is False
 
 
 def test_tier_vocabulary_is_config_driven(tmp_path: Path) -> None:

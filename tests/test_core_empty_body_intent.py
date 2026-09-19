@@ -9,6 +9,7 @@ import pytest
 
 from tc_fitness.core_checks.empty_body_intent import (
     EmptyBodyIntent,
+    _has_docstring,
     build,
     main,
     module_has_undocumented_empty_body,
@@ -67,6 +68,72 @@ def test_intent_comment_satisfies(tmp_path: Path) -> None:
 def test_abstractmethod_is_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.py", _ABSTRACT)
     assert module_has_undocumented_empty_body(p, marker="Intentionally empty") is False
+
+
+@pytest.mark.parametrize(
+    ("body", "violates"),
+    [
+        ("def on_event():\n    ...\n", True),
+        ('def on_event():\n    """Protocol hook."""\n    pass\n', False),
+        ('def on_event():\n    """Protocol hook."""\n    ...\n', False),
+        ("async def on_event():\n    pass\n", True),
+    ],
+)
+def test_ellipsis_async_and_documented_empty_bodies(body: str, violates: bool, tmp_path: Path) -> None:
+    path = _seed(tmp_path, "protocol.py", body)
+
+    assert module_has_undocumented_empty_body(path, marker="Intentionally empty") is violates
+
+
+def test_nested_and_called_abstract_decorators_are_exempt(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "abstract.py",
+        "class Contract:\n"
+        "    @framework.abstractmethod\n"
+        "    def first(self):\n        ...\n"
+        "    @overload()\n"
+        "    def second(self):\n        pass\n",
+    )
+
+    assert module_has_undocumented_empty_body(path, marker="Intentionally empty") is False
+
+
+def test_non_name_decorator_and_multi_statement_bodies_are_evaluated(tmp_path: Path) -> None:
+    decorated = _seed(tmp_path, "decorated.py", "@decorators[0]\ndef empty():\n    pass\n")
+    two_statements = _seed(tmp_path, "two_statements.py", "def does_work():\n    pass\n    return 1\n")
+    three_statements = _seed(
+        tmp_path, "three_statements.py", "def also_works():\n    value = 1\n    pass\n    return value\n"
+    )
+
+    assert module_has_undocumented_empty_body(decorated, marker="Intentionally empty") is True
+    assert module_has_undocumented_empty_body(two_statements, marker="Intentionally empty") is False
+    assert module_has_undocumented_empty_body(three_statements, marker="Intentionally empty") is False
+
+
+def test_empty_function_ast_has_no_docstring() -> None:
+    function = ast.parse("def placeholder():\n    pass\n").body[0]
+    assert isinstance(function, ast.FunctionDef)
+    function.body.clear()
+
+    assert _has_docstring(function) is False
+
+
+def test_nonempty_body_and_custom_marker_comment_above_function_are_clean(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "clean.py",
+        "def has_work():\n    return 1\n\n# DELIBERATE CONTRACT HOOK\ndef protocol_hook():\n    pass\n",
+    )
+
+    assert module_has_undocumented_empty_body(path, marker="DELIBERATE CONTRACT HOOK") is False
+
+
+def test_broken_source_is_not_classified_as_an_empty_body(tmp_path: Path) -> None:
+    path = tmp_path / "broken.py"
+    path.write_bytes(b"def (:\n\xff")
+
+    assert module_has_undocumented_empty_body(path, marker="Intentionally empty") is False
 
 
 def test_marker_is_config_driven(tmp_path: Path) -> None:

@@ -55,6 +55,29 @@ def test_clean(tmp_path: Path) -> None:
     assert file_has_env_monkeypatch(p, prefixes=("MYAPP_",)) is False
 
 
+def test_non_mutating_monkeypatch_methods_aliases_and_dynamic_keys_are_ignored(tmp_path: Path) -> None:
+    p = _seed(
+        tmp_path,
+        "test_x.py",
+        "def test_x(monkeypatch, mp, key):\n"
+        "    monkeypatch.undo()\n"
+        "    mp.setenv('MYAPP_DATA_DIR', '/tmp')\n"
+        "    monkeypatch.setenv(key, '/tmp')\n",
+    )
+
+    assert file_has_env_monkeypatch(p, prefixes=("MYAPP_",)) is False
+
+
+def test_unparseable_or_unreadable_source_is_ignored(tmp_path: Path) -> None:
+    syntax = _seed(tmp_path, "syntax.py", "def test_x(:\n")
+    encoding = tmp_path / "encoding.py"
+    encoding.write_bytes(b"monkeypatch.setenv('MYAPP_X', 'y')\n\xff")
+
+    assert file_has_env_monkeypatch(tmp_path / "missing.py", prefixes=("MYAPP_",)) is False
+    assert file_has_env_monkeypatch(syntax, prefixes=("MYAPP_",)) is False
+    assert file_has_env_monkeypatch(encoding, prefixes=("MYAPP_",)) is False
+
+
 def test_no_prefixes_matches_nothing(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _SETENV)
     assert file_has_env_monkeypatch(p, prefixes=()) is False

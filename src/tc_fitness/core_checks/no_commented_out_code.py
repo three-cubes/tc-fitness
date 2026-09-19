@@ -64,10 +64,7 @@ REMEDIATION = _remediation(
 def _strip_comment_prefix(line: str) -> str:
     """Strip leading whitespace + ``#`` + one optional space, preserving the rest."""
     leading_ws = len(line) - len(line.lstrip())
-    rest = line[leading_ws:]
-    if not rest.startswith("#"):
-        return ""
-    rest = rest[1:]
+    rest = line[leading_ws + 1 :]
     if rest.startswith(" "):
         rest = rest[1:]
     return rest
@@ -87,8 +84,6 @@ def _looks_like_code(block_text: str) -> bool:
     try:
         lines = stripped.splitlines()
         non_empty = [line for line in lines if line.strip()]
-        if not non_empty:
-            return False
         min_indent = min(len(line) - len(line.lstrip()) for line in non_empty)
         dedented = "\n".join(line[min_indent:] if line.strip() else "" for line in lines)
         ast.parse(dedented)
@@ -143,7 +138,7 @@ def module_has_commented_code(path: Path, *, min_run: int) -> bool:
             cur = lines[j]
             if not cur.strip().startswith("#") or _is_commentlike_directive(cur):
                 break
-            if j + 1 in docstring_lines:
+            if j + 2 in docstring_lines:
                 break
             block_lines.append(_strip_comment_prefix(cur))
             j += 1
