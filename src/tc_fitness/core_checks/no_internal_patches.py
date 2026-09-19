@@ -253,7 +253,7 @@ def file_patches_internal(
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (SyntaxError, OSError):
+    except (SyntaxError, UnicodeDecodeError, OSError):
         return False
     aliases = _resolve_internal_aliases(tree, internal_roots)
     dyn_vars = _resolve_dynamic_module_vars(tree)
