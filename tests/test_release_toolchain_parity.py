@@ -12,11 +12,15 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+CI_WORKFLOW = WORKFLOWS / "ci.yml"
 RESOLVER_ACTION = REPO_ROOT / ".github" / "actions" / "resolve-uv-version" / "action.yml"
 RESOLVER_USE = "./.github/actions/resolve-uv-version"
 DIRECT_SETUP_UV = "astral-sh/setup-uv@"
 SHARED_SETUP_UV = "three-cubes/tc-pipelines/actions/setup-uv-cached@"
 EXACT_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+QUALITY_GATE_WORKERS = frozenset({"check", "distribution-qualification"})
+FAN_IN_NEEDS_JSON = "${{ toJSON(needs) }}"
+FAN_IN_RUN = "python3 scripts/qualification/quality_gate_fanin.py"
 
 
 def _jobs(workflows: Path) -> list[tuple[Path, str, list[dict[str, Any]]]]:
@@ -77,9 +81,54 @@ def _uv_setup_violations(repo_root: Path) -> list[str]:
     return violations
 
 
+def _quality_gate_violations(workflow: dict[str, Any]) -> list[str]:
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict):
+        return ["workflow must declare jobs"]
+
+    fan_ins = [
+        (job_id, job)
+        for job_id, job in jobs.items()
+        if isinstance(job, dict) and job.get("name") == "Quality gate"
+    ]
+    if len(fan_ins) != 1:
+        return ["workflow must declare exactly one job named Quality gate"]
+
+    job_id, quality_gate = fan_ins[0]
+    violations: list[str] = []
+    if job_id in QUALITY_GATE_WORKERS:
+        violations.append("Quality gate must be distinct from its worker jobs")
+    if "strategy" in quality_gate:
+        violations.append("Quality gate must be a non-matrix fan-in job")
+    needs = quality_gate.get("needs", [])
+    needed_jobs = {needs} if isinstance(needs, str) else set(needs) if isinstance(needs, list) else set()
+    missing = sorted(QUALITY_GATE_WORKERS - needed_jobs)
+    if missing:
+        violations.append(f"Quality gate must need every worker: {', '.join(missing)}")
+    if quality_gate.get("if") != "${{ always() }}":
+        violations.append("Quality gate must run after failed workers to report their result")
+    steps = quality_gate.get("steps", [])
+    invokes_evaluator = any(
+        isinstance(step, dict)
+        and step.get("run") == FAN_IN_RUN
+        and isinstance(step.get("env"), dict)
+        and step["env"].get("NEEDS_JSON") == FAN_IN_NEEDS_JSON
+        for step in steps
+    )
+    if not invokes_evaluator:
+        violations.append("Quality gate must evaluate every worker result")
+    return violations
+
+
 def test_every_uv_setup_reads_the_reviewed_repository_pin() -> None:
     """Changing or adding any workflow installer must not create a second uv pin."""
     assert _uv_setup_violations(REPO_ROOT) == []
+
+
+def test_quality_gate_is_a_non_matrix_fan_in_for_all_qualification_workers() -> None:
+    """A worker matrix must not replace branch protection's one Quality gate result."""
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    assert _quality_gate_violations(workflow) == []
 
 
 def test_resolver_action_accepts_only_an_exact_uv_version(tmp_path: Path) -> None:
