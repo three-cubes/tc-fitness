@@ -94,6 +94,44 @@ def _module_tier_marker(tree: ast.Module, tiers: frozenset[str]) -> set[str]:
     return set()
 
 
+def _is_pytestmark_target(target: ast.expr) -> bool:
+    return isinstance(target, ast.Name) and target.id == "pytestmark"
+
+
+def _module_tier_declarations(tree: ast.Module) -> list[ast.Assign | ast.AnnAssign | ast.AugAssign]:
+    """Return every top-level declaration or augmentation of ``pytestmark``."""
+    declarations: list[ast.Assign | ast.AnnAssign | ast.AugAssign] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(_is_pytestmark_target(target) for target in node.targets):
+            declarations.append(node)
+        elif isinstance(node, ast.AnnAssign) and _is_pytestmark_target(node.target):
+            declarations.append(node)
+        elif isinstance(node, ast.AugAssign) and _is_pytestmark_target(node.target):
+            declarations.append(node)
+    return declarations
+
+
+def _tier_marker_occurrences(value: ast.expr, tiers: frozenset[str]) -> int:
+    """Count tier-marker occurrences without deduplicating repeated markers."""
+    if isinstance(value, ast.List | ast.Tuple):
+        return sum(_tier_marker_occurrences(elt, tiers) for elt in value.elts)
+    if isinstance(value, ast.Attribute):
+        return int(bool(_extract_marker_names(value) & tiers))
+    if isinstance(value, ast.Call):
+        return _tier_marker_occurrences(value.func, tiers)
+    return 0
+
+
+def _canonical_module_tier_is_valid(tree: ast.Module, tiers: frozenset[str]) -> bool:
+    """True iff a module declares one, and only one, primary tier marker."""
+    declarations = _module_tier_declarations(tree)
+    if len(declarations) != 1 or not isinstance(declarations[0], ast.Assign):
+        return False
+    declaration = declarations[0]
+    markers = _extract_marker_names(declaration.value) & tiers
+    return len(markers) == 1 and _tier_marker_occurrences(declaration.value, tiers) == 1
+
+
 def _function_tier_marker(node: ast.FunctionDef | ast.AsyncFunctionDef, tiers: frozenset[str]) -> set[str]:
     out: set[str] = set()
     for dec in node.decorator_list:
@@ -111,6 +149,14 @@ def _untagged_functions(tree: ast.Module, tiers: frozenset[str]) -> list[str]:
         if not _function_tier_marker(node, tiers):
             out.append(node.name)
     return out
+
+
+def _has_function_tier_marker(tree: ast.Module, tiers: frozenset[str]) -> bool:
+    return any(
+        _function_tier_marker(node, tiers)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test_")
+    )
 
 
 def file_missing_tier_marker(
@@ -139,7 +185,9 @@ def file_missing_tier_marker(
     )
     untagged = _untagged_functions(tree, tiers)
     if require_module_marker:
-        return has_tests and len(module_markers) != 1
+        return has_tests and (
+            not _canonical_module_tier_is_valid(tree, tiers) or _has_function_tier_marker(tree, tiers)
+        )
     if module_markers:
         return False
     return bool(untagged)

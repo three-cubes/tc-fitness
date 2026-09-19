@@ -38,6 +38,36 @@ def test_parser() -> None:
     assert True
 """
 
+_MODULE_AND_FUNCTION_MARKER = """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+@pytest.mark.integration
+def test_parser() -> None:
+    assert True
+"""
+
+_REASSIGNED_MODULE_MARKER = """
+import pytest
+
+pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.integration]
+
+def test_parser() -> None:
+    assert True
+"""
+
+_REPEATED_MODULE_MARKER = """
+import pytest
+
+pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.unit
+
+def test_parser() -> None:
+    assert True
+"""
+
 _NO_TESTS = """
 import pytest
 
@@ -73,6 +103,30 @@ def test_function_marker_passes(tmp_path: Path) -> None:
 
 def test_canonical_mode_rejects_function_only_module(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _FUNCTION_MARKER)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+    assert rule.collect_violations() == {Path("tests/test_x.py")}
+
+
+def test_canonical_mode_rejects_module_and_function_tiers(tmp_path: Path) -> None:
+    _seed(tmp_path, "tests/test_x.py", _MODULE_AND_FUNCTION_MARKER)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+    assert rule.collect_violations() == {Path("tests/test_x.py")}
+
+
+def test_canonical_mode_rejects_reassigned_module_markers(tmp_path: Path) -> None:
+    _seed(tmp_path, "tests/test_x.py", _REASSIGNED_MODULE_MARKER)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+    assert rule.collect_violations() == {Path("tests/test_x.py")}
+
+
+def test_canonical_mode_rejects_repeated_module_markers(tmp_path: Path) -> None:
+    _seed(tmp_path, "tests/test_x.py", _REPEATED_MODULE_MARKER)
     rule = EveryTestHasTierMarker.from_config(
         {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
     )
