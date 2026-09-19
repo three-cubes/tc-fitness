@@ -44,6 +44,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -212,6 +213,7 @@ class CiConsumesSharedGate(FitnessRule):
 
         compiled = self._compile_patterns()
         if isinstance(compiled, str):
+            report_finding(self.name, ".", compiled)
             print(f"FAIL [{self._name}] — a configured pattern is not a valid regex:")
             print(f"  - {compiled}")
             print()
@@ -230,11 +232,10 @@ class CiConsumesSharedGate(FitnessRule):
             return 0
 
         scanned = ", ".join(sorted(path.name for path in files))
+        finding = f"{len(files)} workflow file(s) under {self.workflows_dir!r} ({scanned}), and NONE consumes the shared gate."
+        report_finding(self.name, ".", finding)
         print(f"FAIL [{self._name}] — CI runs but forked its quality gate off the shared standard:")
-        print(
-            f"  - {len(files)} workflow file(s) under {self.workflows_dir!r} "
-            f"({scanned}), and NONE consumes the shared gate."
-        )
+        print(f"  - {finding}")
         print(
             f"  - no `uses:` reference matches {self.reusable_pattern!r} and no step "
             f"matches {self.engine_pattern!r}."
