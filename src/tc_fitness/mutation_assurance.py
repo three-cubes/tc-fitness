@@ -74,6 +74,7 @@ def _inputs(
         "scope": scope,
         "engine": candidate_identity(),
         "tool": {"name": "mutmut", "version": TOOL_VERSION},
+        "test_tiers": ["unit", "contract"],
     }
     return binding, head_files, policy
 
@@ -92,6 +93,7 @@ def _native_config(snapshot: Path, files: dict[str, bytes], policy: dict[str, An
     controls = {
         "source_paths": policy["source_roots"],
         "pytest_add_cli_args_test_selection": policy["tests"],
+        "pytest_add_cli_args": ["-m", "unit or contract"],
         "also_copy": copy_roots,
         "max_stack_depth": -1,
         "mutate_only_covered_lines": False,
