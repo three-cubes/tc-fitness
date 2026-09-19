@@ -13,6 +13,8 @@ from tc_fitness.lib import load_yaml
 SCHEMA = "tc.fitness/check-contract/v1"
 _STATUSES = frozenset({"pass", "fail", "error"})
 _EXITS = frozenset({"zero", "nonzero"})
+_EVIDENCE_CLASSES = frozenset({"unclassified", "protocol-unit", "integration", "live"})
+_LIVE_QUALIFICATIONS = frozenset({"not-required", "required-unmet", "qualified"})
 
 
 class CheckContractError(ValueError):
@@ -81,6 +83,9 @@ class CheckContract:
     config: Mapping[str, Any]
     cases: tuple[ContractCase, ...]
     dependencies: tuple[str, ...]
+    evidence_class: str = "unclassified"
+    live_qualification: str = "not-required"
+    release_admission: bool = False
 
 
 def _mapping(value: object, location: str) -> Mapping[str, Any]:
@@ -227,6 +232,24 @@ def _validate_case_set(cases: tuple[ContractCase, ...], dependencies: tuple[str,
         raise CheckContractError("unavailable case must expect at least one stable finding")
 
 
+def _parse_evidence_classification(raw: Mapping[str, Any]) -> tuple[str, str, bool]:
+    """Bind protocol evidence to its admissibility without inferring live proof."""
+    evidence_class = str(raw.get("evidence_class", "unclassified"))
+    if evidence_class not in _EVIDENCE_CLASSES:
+        raise CheckContractError(f"evidence_class must be one of {sorted(_EVIDENCE_CLASSES)}")
+    live_qualification = str(raw.get("live_qualification", "not-required"))
+    if live_qualification not in _LIVE_QUALIFICATIONS:
+        raise CheckContractError(f"live_qualification must be one of {sorted(_LIVE_QUALIFICATIONS)}")
+    release_admission = raw.get("release_admission", False)
+    if type(release_admission) is not bool:
+        raise CheckContractError("release_admission must be a boolean")
+    if evidence_class == "protocol-unit" and live_qualification != "required-unmet":
+        raise CheckContractError("protocol-unit evidence requires an explicitly unmet live qualification")
+    if release_admission and (evidence_class != "live" or live_qualification != "qualified"):
+        raise CheckContractError("release admission requires qualified live evidence")
+    return evidence_class, live_qualification, release_admission
+
+
 def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckContract:
     """Load and validate one check-contract manifest."""
     if source is None and not path.is_file():
@@ -247,7 +270,16 @@ def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckCont
         for index, item in enumerate(_list(raw.get("dependencies"), "dependencies"))
     )
     _validate_case_set(cases, dependencies)
-    return CheckContract(check=check, config=config, cases=cases, dependencies=dependencies)
+    evidence_class, live_qualification, release_admission = _parse_evidence_classification(raw)
+    return CheckContract(
+        check=check,
+        config=config,
+        cases=cases,
+        dependencies=dependencies,
+        evidence_class=evidence_class,
+        live_qualification=live_qualification,
+        release_admission=release_admission,
+    )
 
 
 def validate_contract_registry(

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import importlib
 import json
+import os
 import subprocess
 import sys
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -15,6 +19,7 @@ from typing import Any
 import pytest
 
 from tc_fitness.catalogue import RuleEntry
+from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks._runtime_contracts import (
     CONTRACT_SCHEMA,
     EVIDENCE_SCHEMA,
@@ -2342,3 +2347,56 @@ def test_already_selected_contract_resolves_its_external_references(tmp_path: Pa
     assert resolved is not None
     assert resolved["clusters"] == [{"cluster_id": "alpha"}]
     assert "external_references" not in resolved
+
+
+def test_fifo_invalid_then_valid_filesystem_evidence_cannot_split_status_from_findings(
+    tmp_path: Path,
+) -> None:
+    """The filesystem rule must not re-read a FIFO after reporting its first result."""
+    _seed(tmp_path, _contract(), _evidence())
+    valid = (tmp_path / "evidence.json").read_bytes()
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.unlink()
+    os.mkfifo(evidence_path)
+    valid_written = threading.Event()
+
+    def writer() -> None:
+        with evidence_path.open("wb", buffering=0) as pipe:
+            pipe.write(b"{}")
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            try:
+                descriptor = os.open(evidence_path, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+                time.sleep(0.01)
+                continue
+            with os.fdopen(descriptor, "wb", closefd=True) as pipe:
+                pipe.write(valid)
+            valid_written.set()
+            return
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    rules = (
+        RuleEntry(
+            id="runtime-filesystem-contract",
+            gate="runtime-filesystem-contract",
+            check="core:runtime_filesystem_contract",
+            summary="runtime filesystem declarations agree",
+        ),
+    )
+    with capture_check_evidence() as evidence:
+        verdict = run(
+            rules,
+            repo_root=tmp_path,
+            core_check_configs={"runtime_filesystem_contract": _config(observations=True)},
+        )
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert not valid_written.is_set()
+    assert not verdict.ok
+    assert evidence.findings
+    assert evidence.results[0].status == "fail"

@@ -1,5 +1,8 @@
 schema: tc.fitness/check-contract/v1
 check: core:checkov_iac_security
+evidence_class: protocol-unit
+live_qualification: required-unmet
+release_admission: false
 config:
   scan_dir: infra
   framework: bicep

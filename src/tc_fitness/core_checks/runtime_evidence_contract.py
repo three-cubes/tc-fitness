@@ -18,6 +18,7 @@ from tc_fitness.core_checks._runtime_contracts import (
     canonical_json_bytes,
     is_integer_identity,
     is_sha256_digest,
+    render_findings,
     sort_findings,
 )
 from tc_fitness.lib import remediation as _remediation
@@ -751,13 +752,17 @@ class RuntimeEvidenceContract(RuntimeContractRule):
 
     def run(self) -> int:
         """Emit each validated receipt defect into the structured check ledger."""
-        for finding in self.collect_findings():
+        findings = self.collect_findings()
+        for finding in findings:
             report_finding(
                 finding.code,
                 str(finding.source.relative_to(self._repo_root)),
                 finding.message,
             )
-        return super().run()
+        if not findings:
+            return 0
+        render_findings(findings)
+        return 1
 
 
 def build(
