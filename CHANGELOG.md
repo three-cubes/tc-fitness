@@ -10,7 +10,7 @@ schedule.
 
 The package is the single source for the helper + runner code kairix and
 tc-agent-zone previously maintained as two slowly-drifting copies. It is pure
-stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
+Python at runtime (PyYAML supplies required manifest parsing) and must never import
 `kairix` or `tc-agent-zone` — it is the shared core both depend on.
 
 ## [Unreleased]
@@ -38,6 +38,11 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
   Repinning consumers should expect their `ran` count to fall and `skipped` to
   rise by the number of rules that were already skipping silently. No exit code
   changes: a skip is not a failure.
+- **Structured check-contract execution** — `tc-fitness run --contract --case
+  --ledger` executes a fixture through the existing CORE dispatcher and retains
+  versioned evidence binding inputs, candidate source, terminal outcomes and
+  findings. The public process helper rejects missing, stale, mismatched or
+  unexpected evidence; unavailable declared executables are explicit errors.
 
 ### Changed
 

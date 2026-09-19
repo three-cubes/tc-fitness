@@ -130,6 +130,10 @@ def gate(
     new = sorted(current_rel - baseline)
 
     if new:
+        from tc_fitness.check_evidence import report_finding
+
+        for path in new:
+            report_finding(name, path.as_posix(), remediation)
         print(f"{_RED}FAIL [arch:{name}]{_RESET} — new violation(s) introduced:")
         for p in new:
             print(f"  {p}")

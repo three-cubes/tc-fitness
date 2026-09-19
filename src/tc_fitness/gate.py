@@ -666,9 +666,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     run_p = sub.add_parser("run", help="run the repo's declared [tool.tc_fitness] gate")
+    run_p.add_argument("--contract", type=Path, help="execute a check-contract manifest case")
+    run_p.add_argument("--case", help="case id within --contract")
+    run_p.add_argument("--ledger", type=Path, help="write structured check-case evidence")
     run_p.add_argument(
         "--repo-root",
-        default=".",
+        default=None,
         help="repo root holding the gate config (default: CWD)",
     )
     run_p.add_argument(
@@ -715,7 +718,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    repo_root = Path(args.repo_root).resolve()
+    contract_mode = any(value is not None for value in (args.contract, args.case, args.ledger))
+    if contract_mode:
+        if any(value is None for value in (args.contract, args.case, args.ledger)):
+            run_p.error("--contract, --case and --ledger are required together")
+        if any(
+            (
+                args.repo_root is not None,
+                args.only,
+                args.gate,
+                args.staged,
+                args.changed_files_from,
+                args.shard,
+                args.tier,
+                args.establish_baseline,
+            )
+        ):
+            run_p.error("contract arguments cannot be combined with ordinary gate options")
+        from tc_fitness.check_contract_execution import execute_contract_case
+        from tc_fitness.check_contracts import CheckContractError
+
+        try:
+            return execute_contract_case(args.contract.resolve(), args.case, args.ledger.resolve())
+        except (CheckContractError, OSError) as exc:
+            print(f"FAIL check contract: {exc}", file=sys.stderr)
+            return 2
+
+    repo_root = Path(args.repo_root or ".").resolve()
     try:
         cfg = load_config(repo_root)
     except GateConfigError as exc:

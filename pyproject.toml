@@ -163,10 +163,12 @@ ruff format --check \
   src/tc_fitness/keystone.py src/tc_fitness/core_checks/ \
   src/tc_fitness/runtime_contract.py \
   src/tc_fitness/check_contracts.py \
+  src/tc_fitness/check_contract_execution.py src/tc_fitness/check_evidence.py \
   tests/test_baseline.py tests/test_fitness_rule.py \
   tests/test_keystone.py tests/_core_check_assertions.py \
   tests/test_runtime_contracts.py tests/test_runtime_contract_cli.py \
   tests/test_check_contracts.py \
+  tests/test_check_contract_execution.py tests/test_check_evidence.py \
   tests/test_check_contract_default_install.py \
   tests/test_release_toolchain_parity.py \
   tests/test_core_behavioural_evidence.py \
