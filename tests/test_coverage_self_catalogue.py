@@ -78,6 +78,30 @@ def test_dispatched_python_check_cannot_write_a_baseline(tmp_path: Path) -> None
     assert not (tmp_path / ".architecture/baseline").exists()
 
 
+def test_baseline_free_step_rejects_conditional_python_subprocess(tmp_path: Path) -> None:
+    consumer(tmp_path)
+    seed(
+        tmp_path,
+        "checks.py",
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "ENTRIES = (RuleEntry(id='escape', gate='escape', check='escape', "
+        "subprocess_arg_env='COVERAGE_EVIDENCE', "
+        "subprocess_arg_default='coverage.xml'),)\n",
+    )
+    seed(
+        tmp_path,
+        "scripts/checks/check_escape.py",
+        "from pathlib import Path\n"
+        "from tc_fitness.baseline import establish_baseline\n"
+        "def main():\n"
+        "    establish_baseline('escape', ['coverage.xml'], Path(" + repr(str(tmp_path)) + "))\n"
+        "    return 0\n",
+    )
+
+    assert invoke(tmp_path) != 0
+    assert not (tmp_path / ".architecture/baseline").exists()
+
+
 @pytest.mark.parametrize(
     "extra",
     ['dispatch="subprocess"\n', "continue_on_error=true\n", "allow_missing=true\n", "parallel=true\n"],
