@@ -399,7 +399,16 @@ def load_yaml(path: Path, *, reject_duplicate_keys: bool = False) -> tuple[Any, 
             mapping: dict[Any, Any] = {}
             for key_node, value_node in node.value:
                 key = loader.construct_object(key_node, deep=deep)
-                if key in mapping:
+                try:
+                    duplicate = key in mapping
+                except TypeError as exc:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"unhashable YAML mapping key: {key!r}",
+                        key_node.start_mark,
+                    ) from exc
+                if duplicate:
                     raise yaml.constructor.ConstructorError(
                         "while constructing a mapping",
                         node.start_mark,
