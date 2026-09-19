@@ -43,6 +43,14 @@ def test_empty_needles_flags_nothing(tmp_path: Path) -> None:
     assert file_contains_needle(p, needles=()) is False
 
 
+def test_missing_and_non_utf8_files_have_no_match(tmp_path: Path) -> None:
+    binary = tmp_path / "binary.py"
+    binary.write_bytes(_BAD.encode("utf-8") + b"\xff")
+
+    assert file_contains_needle(tmp_path / "missing.py", needles=(_NEEDLE,)) is False
+    assert file_contains_needle(binary, needles=(_NEEDLE,)) is False
+
+
 def test_no_needles_configured_is_clean(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", _BAD)
     rule = build({"roots": ["src"]}, repo_root=tmp_path)
@@ -74,6 +82,22 @@ def test_exempt_prefix_from_config(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
     assert {str(p) for p in rule.collect_violations()} == {"src/app/run.py"}
+
+
+def test_exempt_extensions_can_be_configured(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "src/generated.cfg", _BAD)
+    rule = build(
+        {
+            "roots": ["src"],
+            "extensions": [".cfg"],
+            "needles": [_NEEDLE],
+            "exempt_extensions": [".cfg"],
+        },
+        repo_root=tmp_path,
+    )
+
+    assert rule.is_in_scope("src/generated.cfg") is False
+    assert rule.file_has_violation(path) is True
 
 
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:

@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.no_llm_attribution import (
+    NoLlmAttribution,
+    build,
+    main,
     scan_text,
+    strip_text,
 )
 
 pytestmark = pytest.mark.unit
@@ -93,9 +97,66 @@ def test_strip_text_removes_trailer_and_credit_lines() -> None:
 
 
 def test_strip_text_keeps_genuine_human_coauthor() -> None:
-    from tc_fitness.core_checks.no_llm_attribution import strip_text
-
     msg = "fix: y\n\nCo-Authored-By: Jane Doe <jane@example.com>\n"
     cleaned, stripped = strip_text(msg)
     assert stripped == []
     assert "Jane Doe" in cleaned
+
+
+def test_strip_text_preserves_multiple_trailing_newlines() -> None:
+    msg = "feat: x\n\nCo-Authored-By: Claude <bot@example.com>\n\n"
+
+    cleaned, dropped = strip_text(msg)
+
+    assert dropped == ["Co-Authored-By: Claude <bot@example.com>"]
+    assert cleaned == "feat: x\n\n"
+
+
+def test_scan_file_reports_residue_and_clean_messages(tmp_path: Path) -> None:
+    contaminated = _seed(tmp_path, "contaminated.txt", "Co-Authored-By: Claude <bot@example.com>\n")
+    clean = _seed(tmp_path, "clean.txt", "Co-Authored-By: Jane <jane@example.com>\n")
+
+    assert main(["--scan-file", str(contaminated)]) == 1
+    assert main(["--scan-file", str(clean)]) == 0
+    assert main(["--scan-file"]) == 2
+    assert main(["--scan-file", str(tmp_path / "missing.txt")]) == 2
+
+
+def test_strip_file_removes_whole_credit_lines_and_rejects_inline_residue(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "message.txt",
+        "feat: x\nGenerated with Claude Code\ninline robot 🤖 stays\n",
+    )
+
+    assert main(["--strip-file", str(path)]) == 1
+    assert path.read_text(encoding="utf-8") == "feat: x\ninline robot 🤖 stays\n"
+
+
+def test_strip_file_with_only_removable_lines_passes_after_rewrite(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "message.txt", f"feat: x\n{ROBOT}\n")
+
+    assert main(["--strip-file", str(path)]) == 0
+    assert path.read_text(encoding="utf-8") == "feat: x\n"
+
+
+def test_strip_file_leaves_non_strippable_residue_untouched(tmp_path: Path) -> None:
+    original = "robot in a sentence 🤖\n"
+    path = _seed(tmp_path, "message.txt", original)
+
+    assert main(["--strip-file", str(path)]) == 1
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_file_rule_finds_attribution_and_ignores_unreadable_paths(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/bad.py", "Generated with Copilot\n")
+    clean = _seed(tmp_path, "src/clean.py", "Mention Copilot as a product, not authorship.\n")
+    binary = tmp_path / "src/binary.py"
+    binary.write_bytes(b"Co-Authored-By: Claude\n\xff")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert {str(path) for path in rule.collect_violations()} == {"src/bad.py"}
+    assert rule.file_has_violation(clean) is False
+    assert rule.file_has_violation(tmp_path / "src/missing.py") is False
+    assert rule.file_has_violation(binary) is False
+    assert isinstance(NoLlmAttribution.from_config({}), NoLlmAttribution)

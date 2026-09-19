@@ -144,11 +144,10 @@ def strip_text(text: str) -> tuple[str, list[str]]:
     """
     kept: list[str] = []
     dropped: list[str] = []
+    trailing_newlines = len(text) - len(text.rstrip("\n"))
     for line in text.splitlines():
         (dropped if _is_strippable_line(line) else kept).append(line)
-    cleaned = "\n".join(kept).rstrip("\n")
-    if text.endswith("\n"):
-        cleaned += "\n"
+    cleaned = "\n".join(kept).rstrip("\n") + ("\n" * trailing_newlines)
     return cleaned, dropped
 
 

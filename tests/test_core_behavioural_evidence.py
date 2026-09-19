@@ -253,6 +253,160 @@ def test_claim_cannot_omit_surfaces_tests_or_executables(tmp_path: Path) -> None
     }
 
 
+def test_invalid_public_config_values_produce_actionable_findings(tmp_path: Path) -> None:
+    config: dict[str, object] = {
+        "surface_globs": ["/absolute/path", "../outside", "bad\\path", "", 3, "missing/*"],
+        "behaviour_markers": "integration",
+        "claims": [
+            "not a mapping",
+            {
+                "id": "",
+                "surfaces": ["/absolute", "../escape", "missing.py"],
+                "tests": ["../outside.py", "tests/missing.py"],
+                "executables": ["../run.sh"],
+            },
+            {"id": "", "surfaces": [], "tests": [], "executables": []},
+        ],
+    }
+
+    findings = build(config, repo_root=tmp_path).collect_findings()
+    codes = {finding.code for finding in findings}
+
+    assert {
+        "invalid-behaviour-markers",
+        "invalid-surface-glob",
+        "unmatched-surface-glob",
+        "invalid-evidence-claim",
+        "invalid-evidence-claim-id",
+        "invalid-claimed-surface",
+        "missing-claimed-surface",
+        "invalid-evidence-test",
+        "missing-evidence-test",
+        "invalid-evidence-executable",
+        "missing-claim-surfaces",
+        "missing-claim-tests",
+        "missing-claim-executables",
+    } <= codes
+
+
+def test_missing_or_non_sequence_claims_are_reported(tmp_path: Path) -> None:
+    no_claims = build(
+        {"surface_globs": [], "behaviour_markers": ["e2e"]}, repo_root=tmp_path
+    ).collect_findings()
+    wrong_shape = build(
+        {"surface_globs": [], "behaviour_markers": ["e2e"], "claims": "one claim"}, repo_root=tmp_path
+    ).collect_findings()
+
+    assert {finding.code for finding in no_claims} == {
+        "missing-evidence-claims",
+    }
+    assert {finding.code for finding in wrong_shape} == {
+        "missing-evidence-claims",
+    }
+
+
+@pytest.mark.parametrize("binary", [False, True])
+def test_unreadable_evidence_test_cannot_supply_a_marker(tmp_path: Path, binary: bool) -> None:
+    _seed_surfaces(tmp_path)
+    path = tmp_path / "tests/integration/test_image_build.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if binary:
+        path.write_bytes(b"def test_broken(): pass\n\xff")
+    else:
+        path.write_text("def test_broken(:\n", encoding="utf-8")
+
+    findings = build(_config(), repo_root=tmp_path).collect_findings()
+
+    assert {finding.code for finding in findings} == {"missing-behaviour-marker"}
+
+
+def test_aliased_runner_check_true_and_observed_file_satisfy_claim(tmp_path: Path) -> None:
+    _seed_surfaces(tmp_path)
+    test_source = """
+import pytest
+from pathlib import Path as FilePath
+from subprocess import run as execute
+
+pytestmark = [pytest.mark.integration]
+BUILD = "infra/docker/build-tool-runtime.sh"
+
+def test_image_build():
+    result: object = execute([str(BUILD)], check=True)
+    assert FilePath(BUILD).is_file()
+"""
+    _seed(tmp_path, "tests/integration/test_image_build.py", test_source)
+
+    assert build(_config(), repo_root=tmp_path).collect_findings() == ()
+
+
+def test_unknown_path_suffix_cannot_prove_the_declared_executable(tmp_path: Path) -> None:
+    _seed_surfaces(tmp_path)
+    test_source = """
+import subprocess
+from pathlib import Path
+import pytest
+
+pytestmark = pytest.mark.integration
+BUILD = Path("infra/docker/build-tool-runtime.sh") / runtime_suffix
+
+def test_image_build(tmp_path):
+    output = tmp_path / "image.tar"
+    result = subprocess.run([str(BUILD), str(output)], capture_output=True)
+    assert result.returncode == 0
+    assert output.exists()
+"""
+    _seed(tmp_path, "tests/integration/test_image_build.py", test_source)
+
+    findings = build(_config(), repo_root=tmp_path).collect_findings()
+
+    assert {finding.code for finding in findings} == {"missing-executable-evidence"}
+
+
+def test_empty_and_unrelated_process_calls_do_not_prove_the_executable(tmp_path: Path) -> None:
+    _seed_surfaces(tmp_path)
+    test_source = """
+import os
+import subprocess
+import pytest
+
+pytestmark = pytest.mark.integration
+
+def test_image_build():
+    subprocess.run()
+    subprocess.run([])
+    os.system("infra/docker/build-tool-runtime.sh")
+"""
+    _seed(tmp_path, "tests/integration/test_image_build.py", test_source)
+
+    findings = build(_config(), repo_root=tmp_path).collect_findings()
+
+    assert {finding.code for finding in findings} == {"missing-executable-evidence"}
+
+
+def test_import_aliases_callable_markers_and_reassigned_paths_are_resolved(tmp_path: Path) -> None:
+    _seed_surfaces(tmp_path)
+    test_source = """
+import subprocess as child
+from pathlib import Path
+from . import helpers
+import pytest
+
+ROOT = Path()
+BUILD = "not-the-build-command"
+BUILD = "infra/docker/build-tool-runtime.sh"
+
+@pytest.mark.integration()
+def test_image_build(tmp_path):
+    output = tmp_path / "image.tar"
+    result = child.run([str(BUILD), str(output)], capture_output=True)
+    assert result.returncode == 0
+    assert output.exists()
+"""
+    _seed(tmp_path, "tests/integration/test_image_build.py", test_source)
+
+    assert build(_config(), repo_root=tmp_path).collect_findings() == ()
+
+
 def test_empty_configuration_is_vacuous_for_additive_adoption(tmp_path: Path) -> None:
     assert build({}, repo_root=tmp_path).run() == 0
 

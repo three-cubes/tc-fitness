@@ -37,6 +37,16 @@ def test_detection_core_clean(tmp_path: Path) -> None:
     assert file_contains_suppression(p, ("# noqa:",)) is False
 
 
+def test_empty_patterns_and_unreadable_sources_are_clean(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "empty.py", "value = 1\n")
+    binary = tmp_path / "binary.py"
+    binary.write_bytes(b"# noqa: BLE001\n\xff")
+
+    assert file_contains_suppression(path, ()) is False
+    assert file_contains_suppression(tmp_path / "missing.py", ("# noqa:",)) is False
+    assert file_contains_suppression(binary, ("# noqa:",)) is False
+
+
 def test_exempt_prefix_skips_file(tmp_path: Path) -> None:
     _seed(tmp_path, "src/app.py", _SUPPRESSED)
     _seed(tmp_path, "scripts/tool.py", _SUPPRESSED)
@@ -52,6 +62,13 @@ def test_test_file_basename_is_exempt(tmp_path: Path) -> None:
     _seed(tmp_path, "src/test_app.py", _SUPPRESSED)
     rule = NoProductionSuppressions.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/app.py"}
+
+
+def test_files_outside_python_extension_scope_are_not_production(tmp_path: Path) -> None:
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.is_in_scope("src/app.txt") is False
+    assert rule.is_in_scope("src/test_app.py") is False
 
 
 def test_suppression_patterns_config_driven(tmp_path: Path) -> None:

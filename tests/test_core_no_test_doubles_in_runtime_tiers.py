@@ -18,6 +18,7 @@ pytestmark = pytest.mark.integration
 
 def _seed(tmp_path: Path, content: str) -> Path:
     path = tmp_path / "test_subject.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -70,6 +71,64 @@ def test_rejects_fixture_double_used_by_individually_marked_test(tmp_path: Path)
     )
 
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_resolves_explicit_fixture_alias_and_autouse_fixtures(tmp_path: Path) -> None:
+    explicit = _seed(
+        tmp_path / "explicit",
+        "import pytest\nfrom unittest.mock import Mock\n\n"
+        "@pytest.fixture(name='live_client')\ndef fixture_client():\n    return Mock()\n\n"
+        "@pytest.mark.e2e\ndef test_live(live_client):\n    assert live_client\n",
+    )
+    autouse = _seed(
+        tmp_path / "autouse",
+        "import pytest\npytestmark = pytest.mark.e2e\n\n"
+        "@pytest.fixture(autouse=True)\ndef patch_boundary(monkeypatch):\n"
+        "    monkeypatch.setattr('service.send', fake_send)\n\ndef test_live():\n    assert True\n",
+    )
+
+    assert file_has_runtime_tier_test_double(explicit, runtime_markers=("e2e",)) is True
+    assert file_has_runtime_tier_test_double(autouse, runtime_markers=("e2e",)) is True
+
+
+def test_keyword_bound_monkeypatch_and_recursive_helpers_are_followed(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "import pytest\npytestmark = pytest.mark.e2e\n\n"
+        "def _first(*, mp):\n    _second(mp=mp)\n"
+        "def _second(*, mp):\n    _first(mp=mp)\n    mp.setattr('service.send', fake_send)\n"
+        "def test_live(monkeypatch):\n    _first(mp=monkeypatch)\n",
+    )
+
+    assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
+
+
+def test_missing_fixtures_dynamic_factory_calls_and_annassign_are_safe(tmp_path: Path) -> None:
+    live = _seed(
+        tmp_path / "live",
+        "import pytest\nfrom unittest.mock import *\n"
+        "from pytest import mark as marks\npytestmark = (marks.e2e,)\n\n"
+        "@pytest.fixture()\ndef actual_fixture():\n    return 3\n\n"
+        "def test_live(missing_fixture):\n    client = factories['client']()\n    assert client\n",
+    )
+    synthetic = _seed(
+        tmp_path / "synthetic",
+        "import sys\nimport pytest\npytestmark = pytest.mark.e2e\n\n"
+        "def test_live():\n    sys.modules['vendor.client']: ModuleType\n",
+    )
+
+    assert file_has_runtime_tier_test_double(live, runtime_markers=("e2e",)) is False
+    assert file_has_runtime_tier_test_double(synthetic, runtime_markers=("e2e",)) is False
+
+
+def test_parse_errors_and_missing_files_do_not_report_doubles(tmp_path: Path) -> None:
+    syntax = _seed(tmp_path, "import pytest\ndef test_live(:\n")
+    binary = tmp_path / "binary.py"
+    binary.write_bytes(b"import pytest\ndef test_live(): pass\n\xff")
+
+    assert file_has_runtime_tier_test_double(tmp_path / "missing.py", runtime_markers=("e2e",)) is False
+    assert file_has_runtime_tier_test_double(syntax, runtime_markers=("e2e",)) is False
+    assert file_has_runtime_tier_test_double(binary, runtime_markers=("e2e",)) is False
 
 
 def test_rejects_double_in_in_file_helper_called_by_runtime_test(tmp_path: Path) -> None:
