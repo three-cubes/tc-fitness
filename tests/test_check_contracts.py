@@ -86,6 +86,38 @@ dependencies: []
     assert contract.cases[1].expected.findings[0].path == "src/broken.py"
 
 
+def test_manifest_cannot_grant_its_own_release_admission(tmp_path: Path) -> None:
+    """Only protected release receipts, never fixture-authored metadata, grant admission."""
+    manifest = _write(
+        tmp_path / "example_check" / "contract.yaml",
+        """
+schema: tc.fitness/check-contract/v1
+check: core:example_check
+evidence_class: live
+live_qualification: qualified
+release_admission: true
+config: {}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: example-check
+          path: src/broken.py
+          message_contains: required behaviour is missing
+dependencies: []
+""",
+    )
+
+    with pytest.raises(CheckContractError, match="cannot grant release admission"):
+        load_check_contract(manifest)
+
+
 def test_rejects_case_without_exit_expectation(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path / "example_check" / "contract.yaml",

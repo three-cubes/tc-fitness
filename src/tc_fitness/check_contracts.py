@@ -233,7 +233,7 @@ def _validate_case_set(cases: tuple[ContractCase, ...], dependencies: tuple[str,
 
 
 def _parse_evidence_classification(raw: Mapping[str, Any]) -> tuple[str, str, bool]:
-    """Bind protocol evidence to its admissibility without inferring live proof."""
+    """Bind evidence labels while reserving admission authority for protected receipts."""
     evidence_class = str(raw.get("evidence_class", "unclassified"))
     if evidence_class not in _EVIDENCE_CLASSES:
         raise CheckContractError(f"evidence_class must be one of {sorted(_EVIDENCE_CLASSES)}")
@@ -243,11 +243,11 @@ def _parse_evidence_classification(raw: Mapping[str, Any]) -> tuple[str, str, bo
     release_admission = raw.get("release_admission", False)
     if type(release_admission) is not bool:
         raise CheckContractError("release_admission must be a boolean")
+    if release_admission:
+        raise CheckContractError("contract manifests cannot grant release admission")
     if evidence_class == "protocol-unit" and live_qualification != "required-unmet":
         raise CheckContractError("protocol-unit evidence requires an explicitly unmet live qualification")
-    if release_admission and (evidence_class != "live" or live_qualification != "qualified"):
-        raise CheckContractError("release admission requires qualified live evidence")
-    return evidence_class, live_qualification, release_admission
+    return evidence_class, live_qualification, False
 
 
 def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckContract:
