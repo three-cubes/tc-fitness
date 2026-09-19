@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_commented_out_code import (
     NoCommentedOutCode,
     build,
@@ -43,21 +45,25 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_detection_core_flags_dead_code(tmp_path: Path) -> None:
     p = _seed(tmp_path, "d.py", _DEAD)
     assert module_has_commented_code(p, min_run=3) is True
 
 
+@pytest.mark.integration
 def test_prose_is_not_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "p.py", _PROSE)
     assert module_has_commented_code(p, min_run=3) is False
 
 
+@pytest.mark.integration
 def test_short_run_below_min_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "s.py", _SHORT)
     assert module_has_commented_code(p, min_run=3) is False
 
 
+@pytest.mark.integration
 def test_min_run_is_config_driven(tmp_path: Path) -> None:
     p = _seed(tmp_path, "s.py", _SHORT)
     # default 3 → clean; lower min_run to 1 → the single dead line is flagged.
@@ -65,6 +71,7 @@ def test_min_run_is_config_driven(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is True
 
 
+@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/d.py", _DEAD)
     _seed(tmp_path, "vendor/d.py", _DEAD)
@@ -72,6 +79,7 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/d.py"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/d.py", _DEAD)
     rule = NoCommentedOutCode.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -80,6 +88,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "d.py", _DEAD)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -87,6 +96,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-commented-out-code-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_commented_out_code as mod
 

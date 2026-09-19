@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.coverage_includes_branches import (
     build,
     main,
@@ -22,31 +24,37 @@ _BRANCH_AWARE = '<coverage line-rate="0.9" branch-rate="0.38" branches-valid="30
 _LINES_ONLY = '<coverage line-rate="0.9" branch-rate="0" branches-valid="0"/>'
 
 
+@pytest.mark.integration
 def test_lines_only_report_violates(tmp_path: Path) -> None:
     p = _seed(tmp_path, _LINES_ONLY)
     assert report_lacks_branches(p) is True
 
 
+@pytest.mark.integration
 def test_branch_aware_report_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, _BRANCH_AWARE)
     assert report_lacks_branches(p) is False
 
 
+@pytest.mark.integration
 def test_missing_report_not_a_violation(tmp_path: Path) -> None:
     assert report_lacks_branches(tmp_path / "absent.xml") is False
 
 
+@pytest.mark.integration
 def test_rule_flags_lines_only(tmp_path: Path) -> None:
     _seed(tmp_path, _LINES_ONLY)
     rule = build({}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"coverage.xml"}
 
 
+@pytest.mark.integration
 def test_rule_clean_on_branch_aware(tmp_path: Path) -> None:
     _seed(tmp_path, _BRANCH_AWARE)
     assert build({}, repo_root=tmp_path).collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_report_path_is_config_driven(tmp_path: Path) -> None:
     nested = tmp_path / "build" / "cov.xml"
     nested.parent.mkdir(parents=True)
@@ -55,10 +63,12 @@ def test_report_path_is_config_driven(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
+@pytest.mark.integration
 def test_run_passes_when_no_report(tmp_path: Path) -> None:
     assert build({}, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_unsafe_xml_rejected(tmp_path: Path) -> None:
     p = _seed(tmp_path, "<!ENTITY x>\n<coverage/>")
     try:
@@ -69,11 +79,13 @@ def test_unsafe_xml_rejected(tmp_path: Path) -> None:
         raise AssertionError("expected ValueError for ENTITY declaration")
 
 
+@pytest.mark.integration
 def test_main_runs(tmp_path: Path) -> None:
     _seed(tmp_path, _BRANCH_AWARE)
     assert main(["--repo-root", str(tmp_path)]) == 0
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.coverage_includes_branches as mod
 

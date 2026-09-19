@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.script_help_smoke import (
@@ -56,6 +57,7 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.unit
 def test_extract_declared_flags() -> None:
     import ast
 
@@ -63,22 +65,26 @@ def test_extract_declared_flags() -> None:
     assert extract_declared_flags(tree) == ("--agent", "--out-dir")
 
 
+@pytest.mark.integration
 def test_good_cli_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "scripts/good.py", _GOOD_CLI)
     assert script_help_violates(p, python=sys.executable, timeout=10) is False
 
 
+@pytest.mark.integration
 def test_broken_cli_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
     assert script_help_violates(p, python=sys.executable, timeout=10) is True
 
 
+@pytest.mark.integration
 def test_non_cli_is_not_in_scope(tmp_path: Path) -> None:
     p = _seed(tmp_path, "scripts/helper.py", _NOT_A_CLI)
     # No main()+ArgumentParser → never a violation regardless of help.
     assert script_help_violates(p, python=sys.executable, timeout=10) is False
 
 
+@pytest.mark.integration
 def test_rule_scopes_roots_and_skips_tests(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
     _seed(tmp_path, "scripts/tests/test_thing.py", _BROKEN_CLI)  # skip segment
@@ -87,6 +93,7 @@ def test_rule_scopes_roots_and_skips_tests(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"scripts/broken.py"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
     rule = ScriptHelpSmoke.from_config({"roots": ["scripts"], "help_timeout_seconds": 10}, repo_root=tmp_path)
@@ -95,6 +102,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -102,10 +110,12 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "script-help-smoke-files.txt").exists()
 
 
+@pytest.mark.unit
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), ScriptHelpSmoke)
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.script_help_smoke as mod
 

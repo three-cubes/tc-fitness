@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.adr_number_unique import (
     DEFAULT_RECORD_PATTERN,
     AdrNumberUnique,
@@ -23,6 +25,7 @@ def _seed(tmp_path: Path, rel: str, body: str = "x\n") -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_collision_detected(tmp_path: Path) -> None:
     d = tmp_path / "docs" / "decisions"
     _seed(tmp_path, "docs/decisions/ADR-041-foo.md")
@@ -32,6 +35,7 @@ def test_collision_detected(tmp_path: Path) -> None:
     assert len(collisions["041"]) == 2
 
 
+@pytest.mark.integration
 def test_unique_numbers_no_collision(tmp_path: Path) -> None:
     d = tmp_path / "docs" / "decisions"
     _seed(tmp_path, "docs/decisions/ADR-041-foo.md")
@@ -39,6 +43,7 @@ def test_unique_numbers_no_collision(tmp_path: Path) -> None:
     assert find_collisions(d, pattern=_PATTERN) == {}
 
 
+@pytest.mark.integration
 def test_collect_violations_returns_colliding_files(tmp_path: Path) -> None:
     _seed(tmp_path, "docs/decisions/ADR-041-foo.md")
     _seed(tmp_path, "docs/decisions/ADR-041-bar.md")
@@ -48,6 +53,7 @@ def test_collect_violations_returns_colliding_files(tmp_path: Path) -> None:
     assert rels == {"docs/decisions/ADR-041-foo.md", "docs/decisions/ADR-041-bar.md"}
 
 
+@pytest.mark.integration
 def test_custom_dir_and_pattern_via_config(tmp_path: Path) -> None:
     _seed(tmp_path, "rfc/RFC-7-a.md")
     _seed(tmp_path, "rfc/RFC-7-b.md")
@@ -55,6 +61,7 @@ def test_custom_dir_and_pattern_via_config(tmp_path: Path) -> None:
     assert len(rule.collect_violations()) == 2
 
 
+@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "docs/decisions/ADR-041-foo.md")
     _seed(tmp_path, "docs/decisions/ADR-041-bar.md")
@@ -64,6 +71,7 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "docs/decisions/ADR-041-foo.md")
     _seed(tmp_path, "docs/decisions/ADR-041-bar.md")

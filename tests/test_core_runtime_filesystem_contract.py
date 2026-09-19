@@ -303,6 +303,7 @@ def _run_filesystem_module_cli(*args: str) -> subprocess.CompletedProcess[bytes]
     )
 
 
+@pytest.mark.integration
 def test_valid_declaration_and_complete_live_observation_pass(tmp_path: Path) -> None:
     _seed(tmp_path, _contract(), _evidence())
     module = _module()
@@ -311,6 +312,7 @@ def test_valid_declaration_and_complete_live_observation_pass(tmp_path: Path) ->
     assert module.build(_config(observations=True), repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_module_cli_runs_a_selected_configured_contract(tmp_path: Path) -> None:
     """The module entry point must not silently skip a supplied contract."""
     contract = _contract()
@@ -338,10 +340,12 @@ def test_module_cli_runs_a_selected_configured_contract(tmp_path: Path) -> None:
     assert b"undefined-namespace" in result.stderr
 
 
+@pytest.mark.integration
 def test_empty_configuration_is_a_vacuous_pass(tmp_path: Path) -> None:
     assert _module().build({}, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("mutation", "code"),
     [
@@ -401,6 +405,7 @@ def test_invalid_references_and_namespaces_fail(
     assert "run:" in error
 
 
+@pytest.mark.integration
 def test_sibling_prefix_is_not_a_physical_overlap(tmp_path: Path) -> None:
     contract = _contract()
     filesystem = contract["filesystem"]
@@ -428,6 +433,7 @@ def test_sibling_prefix_is_not_a_physical_overlap(tmp_path: Path) -> None:
     assert _module().build(_config(), repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_cross_namespace_component_prefix_requires_reasoned_allowance(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -476,6 +482,7 @@ def test_cross_namespace_component_prefix_requires_reasoned_allowance(
     assert "/hermes-home/profiles/consultant-delivery-consultant/USER.md" in error
 
 
+@pytest.mark.integration
 def test_literal_namespace_root_does_not_contain_child_identity_wildcard(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -496,6 +503,7 @@ def test_literal_namespace_root_does_not_contain_child_identity_wildcard(
     assert "namespace-escape" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("path", "exit_code"),
     [
@@ -526,6 +534,7 @@ def test_namespace_boundary_requires_consistent_repeated_identity(
     assert ("namespace-escape" in error) == bool(exit_code)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("surface", "code"),
     [
@@ -593,6 +602,7 @@ def test_repeated_identity_collisions_require_one_consistent_binding(
     assert (code in error) == bool(exit_code)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("identity", "exit_code"), [("x", 0), ("a", 1)])
 def test_pattern_intersection_propagates_repeated_identity_equalities(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], identity: str, exit_code: int
@@ -620,6 +630,7 @@ def test_pattern_intersection_propagates_repeated_identity_equalities(
     assert ("duplicate-root-path" in capsys.readouterr().err) == bool(exit_code)
 
 
+@pytest.mark.integration
 def test_independent_container_namespaces_may_reuse_absolute_paths(tmp_path: Path) -> None:
     contract = _minimal_contract(
         namespaces={
@@ -646,6 +657,7 @@ def test_independent_container_namespaces_may_reuse_absolute_paths(tmp_path: Pat
     assert _module().build(_config(), repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("namespaces", "expected_code"),
     [
@@ -693,6 +705,7 @@ def test_invalid_physical_namespace_relationships_produce_structured_findings(
     assert expected_code in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_explicitly_shared_physical_namespaces_detect_duplicate_root_paths(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -726,6 +739,7 @@ def test_explicitly_shared_physical_namespaces_detect_duplicate_root_paths(
     assert "duplicate-root-path" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("surface", "expected_code"),
     [
@@ -819,6 +833,7 @@ def test_identity_pattern_and_literal_paths_collide_within_one_namespace(
     assert expected_code in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_mount_collisions_follow_explicit_physical_namespace_relationships(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -868,6 +883,7 @@ def test_mount_collisions_follow_explicit_physical_namespace_relationships(
     assert "duplicate-mount-destination" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_catalogue_dispatches_configured_filesystem_check(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -897,6 +913,7 @@ def test_catalogue_dispatches_configured_filesystem_check(
     assert "FAIL [runtime-filesystem-contract]" in captured.out
 
 
+@pytest.mark.integration
 def test_file_root_cannot_be_parent_of_a_nested_root(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -928,6 +945,7 @@ def test_file_root_cannot_be_parent_of_a_nested_root(
     assert "file-root-contains-path" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_file_root_cannot_contain_a_mount_target(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A regular file cannot provide a directory that can be mounted into."""
     contract = _contract()
@@ -959,6 +977,7 @@ def test_file_root_cannot_contain_a_mount_target(tmp_path: Path, capsys: pytest.
     assert "file-root-contains-path" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_symlink_cycle_is_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     contract = _contract()
     filesystem = contract["filesystem"]
@@ -983,6 +1002,7 @@ def test_symlink_cycle_is_rejected(tmp_path: Path, capsys: pytest.CaptureFixture
     assert "symlink-cycle" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_symlink_chain_that_enters_a_cycle_reports_its_entry_path(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1018,6 +1038,7 @@ def test_symlink_chain_that_enters_a_cycle_reports_its_entry_path(
     assert "/links/entry" in error
 
 
+@pytest.mark.integration
 def test_shared_physical_namespaces_form_one_symlink_cycle(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1055,6 +1076,7 @@ def test_shared_physical_namespaces_form_one_symlink_cycle(
     assert "symlink-cycle" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_shared_physical_namespace_accepts_cross_logical_symlink_target(tmp_path: Path) -> None:
     contract = _minimal_contract(
         namespaces={
@@ -1087,6 +1109,7 @@ def test_shared_physical_namespace_accepts_cross_logical_symlink_target(tmp_path
     assert _module().build(_config(), repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_symlink_resolution_preserves_suffixes_when_detecting_cycles(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1122,6 +1145,7 @@ def test_symlink_resolution_preserves_suffixes_when_detecting_cycles(
     assert "symlink-cycle" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("count", "exit_code"), [(64, 0), (65, 1)])
 def test_symlink_declaration_budget_bounds_resolution_work(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], count: int, exit_code: int
@@ -1160,6 +1184,7 @@ def test_symlink_declaration_budget_bounds_resolution_work(
         assert error == ""
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("length", "exit_code"), [(4096, 0), (4097, 1)])
 def test_symlink_path_component_budget_is_checked_before_resolution(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], length: int, exit_code: int
@@ -1190,6 +1215,7 @@ def test_symlink_path_component_budget_is_checked_before_resolution(
         assert error == ""
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("extra_component", "exit_code"), [(0, 0), (1, 1)])
 def test_symlink_retained_path_node_budget_counts_distinct_suffixes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], extra_component: int, exit_code: int
@@ -1236,6 +1262,7 @@ def test_symlink_retained_path_node_budget_counts_distinct_suffixes(
         assert error == ""
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("extra_component", "exit_code"), [(0, 0), (1, 1)])
 def test_symlink_total_component_work_budget_has_an_exact_boundary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], extra_component: int, exit_code: int
@@ -1293,6 +1320,7 @@ def test_symlink_total_component_work_budget_has_an_exact_boundary(
         assert error == ""
 
 
+@pytest.mark.integration
 def test_compact_expanding_symlink_hits_path_budget_without_retaining_growing_paths(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1320,6 +1348,7 @@ def test_compact_expanding_symlink_hits_path_budget_without_retaining_growing_pa
     assert "symlink-cycle" not in error
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("final_components", "exit_code"), [(4096, 0), (4097, 1)])
 def test_finite_symlink_growth_respects_the_resolved_path_boundary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], final_components: int, exit_code: int
@@ -1366,6 +1395,7 @@ def test_finite_symlink_growth_respects_the_resolved_path_boundary(
         assert error == ""
 
 
+@pytest.mark.integration
 def test_ambiguous_symlink_patterns_have_a_bounded_resolution_state_space(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1410,6 +1440,7 @@ def test_ambiguous_symlink_patterns_have_a_bounded_resolution_state_space(
     assert "4096" in error
 
 
+@pytest.mark.integration
 def test_shorter_wildcard_branch_does_not_suppress_longer_binding_specific_cycle(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1456,6 +1487,7 @@ def test_shorter_wildcard_branch_does_not_suppress_longer_binding_specific_cycle
     assert "symlink-cycle" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("shorter_path", "longer_path", "exit_code"),
     [
@@ -1494,6 +1526,7 @@ def test_shorter_symlink_takes_precedence_only_for_the_same_binding(
     assert ("symlink-cycle" in capsys.readouterr().err) == bool(exit_code)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("depth", "exit_code"), [(2, 0), (4094, 0), (4095, 1)])
 def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], depth: int, exit_code: int
@@ -1551,6 +1584,7 @@ def test_repeated_symlink_declaration_can_consume_suffix_and_terminate(
         assert error == ""
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("middle_target", "exit_code"),
     [("/a/y/z", 0), ("/a/x", 1)],
@@ -1583,6 +1617,7 @@ def test_symlink_suffix_growth_requires_full_state_repetition_for_a_cycle(
     assert "filesystem-work-limit" not in error
 
 
+@pytest.mark.integration
 def test_symlink_resolution_keeps_identity_binding_when_a_path_omits_it(tmp_path: Path) -> None:
     contract = _minimal_contract(
         namespaces={"container": {"kind": "container", "root": "/"}},
@@ -1605,6 +1640,7 @@ def test_symlink_resolution_keeps_identity_binding_when_a_path_omits_it(tmp_path
     assert _module().build(_config(), repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("target_path", "exit_code"), [("/data/x/y", 0), ("/data/x/x", 1)])
 def test_symlink_source_matching_requires_consistent_repeated_identity(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], target_path: str, exit_code: int
@@ -1632,6 +1668,7 @@ def test_symlink_source_matching_requires_consistent_repeated_identity(
     assert ("symlink-cycle" in capsys.readouterr().err) == bool(exit_code)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("target_path", "exit_code"),
     [("/data/x/y", 1), ("/data/{left}/{right}", 1), ("/data/{other}/{other}", 0)],
@@ -1659,6 +1696,7 @@ def test_symlink_target_coverage_requires_consistent_repeated_identity(
     assert ("undefined-symlink-target" in capsys.readouterr().err) == bool(exit_code)
 
 
+@pytest.mark.integration
 def test_wildcard_symlink_target_requires_complete_declared_pattern_coverage(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1687,6 +1725,7 @@ def test_wildcard_symlink_target_requires_complete_declared_pattern_coverage(
     assert "undefined-symlink-target" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("source_path", "target_path"),
     [
@@ -1728,6 +1767,7 @@ def test_nonrepeating_symlink_expansion_exhausts_work_budget_without_claiming_a_
     assert "symlink-cycle" not in error
 
 
+@pytest.mark.integration
 def test_symlink_missing_declared_target_is_rejected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1745,6 +1785,7 @@ def test_symlink_missing_declared_target_is_rejected(
     assert "undefined-symlink-target" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_duplicate_mount_destination_is_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     contract = _contract()
     filesystem = contract["filesystem"]
@@ -1761,6 +1802,7 @@ def test_duplicate_mount_destination_is_rejected(tmp_path: Path, capsys: pytest.
     assert "duplicate-mount-destination" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("section", "field", "bad_value", "expected_code"),
     [
@@ -1800,6 +1842,7 @@ def test_enum_container_shapes_produce_structured_findings(
     assert expected_code in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("collection", "code"),
     [
@@ -1828,6 +1871,7 @@ def test_live_observation_requires_every_declared_item_once(
     assert code in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_duplicate_live_observation_is_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     evidence = _evidence()
     filesystem = evidence["filesystem"]
@@ -1841,6 +1885,7 @@ def test_duplicate_live_observation_is_rejected(tmp_path: Path, capsys: pytest.C
     assert "duplicate-root-observation" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("collection", "field", "bad_value", "code"),
     [
@@ -1873,6 +1918,7 @@ def test_partial_or_conflicting_live_observation_is_rejected(
     assert code in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_observation_boolean_does_not_accept_integer_truthiness(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1890,6 +1936,7 @@ def test_observation_boolean_does_not_accept_integer_truthiness(
     assert "root-observation-mismatch" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_observation_unknown_fields_are_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     evidence = _evidence()
     filesystem = evidence["filesystem"]
@@ -1905,6 +1952,7 @@ def test_observation_unknown_fields_are_rejected(tmp_path: Path, capsys: pytest.
     assert "root-observation-unknown-field" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_unknown_observation_collection_is_rejected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1918,6 +1966,7 @@ def test_unknown_observation_collection_is_rejected(
     assert "unknown-filesystem-observation-collection" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_filesystem_observation_rejects_evidence_for_another_contract(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1930,6 +1979,7 @@ def test_filesystem_observation_rejects_evidence_for_another_contract(
     assert "contract-digest-mismatch" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_filesystem_observation_rejects_other_deployment_identity(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1942,6 +1992,7 @@ def test_filesystem_observation_rejects_other_deployment_identity(
     assert "deployment-id-mismatch" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_root_permissions_and_effective_access_observation_pass_when_exact(tmp_path: Path) -> None:
     """Observed ownership, mode, identity and access must match the declaration."""
     contract = _contract()
@@ -1951,6 +2002,7 @@ def test_root_permissions_and_effective_access_observation_pass_when_exact(tmp_p
     assert _module().build(_config(observations=True), repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_root_effective_group_membership_mismatch_is_rejected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1971,6 +2023,7 @@ def test_root_effective_group_membership_mismatch_is_rejected(
     assert "root-observation-mismatch" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_filesystem_observation_rejects_stale_evidence(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1983,6 +2036,7 @@ def test_filesystem_observation_rejects_stale_evidence(
     assert "stale-evidence" in capsys.readouterr().err
 
 
+@pytest.mark.integration
 def test_external_registry_reference_is_resolved_by_public_cli(tmp_path: Path) -> None:
     clusters = tmp_path / "platform" / "clusters.yaml"
     clusters.parent.mkdir()
@@ -2038,6 +2092,7 @@ def test_external_registry_reference_is_resolved_by_public_cli(tmp_path: Path) -
     assert "external_references" not in resolved
 
 
+@pytest.mark.integration
 def test_selected_registry_ignores_unreferenced_missing_external_file(tmp_path: Path) -> None:
     """A selected target is not coupled to another target's external input."""
     (tmp_path / "selected.yaml").write_text("clusters: []\n", encoding="utf-8")
@@ -2069,6 +2124,7 @@ def test_selected_registry_ignores_unreferenced_missing_external_file(tmp_path: 
     assert resolved["clusters"] == []
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("reference", "expected_code"),
     [
@@ -2108,6 +2164,7 @@ def test_external_registry_reference_fails_closed(
     assert expected_code in {item["code"] for item in json.loads(output.read_bytes())["findings"]}
 
 
+@pytest.mark.integration
 def test_external_registry_reference_rejects_duplicate_yaml_keys(tmp_path: Path) -> None:
     (tmp_path / "clusters.yaml").write_text(
         "clusters: []\nclusters: [{cluster_id: duplicate}]\n",
@@ -2138,6 +2195,7 @@ def test_external_registry_reference_rejects_duplicate_yaml_keys(tmp_path: Path)
     assert "duplicate-key" in {item["code"] for item in json.loads(output.read_bytes())["findings"]}
 
 
+@pytest.mark.integration
 def test_external_registry_symlink_escape_is_rejected(tmp_path: Path) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside.yaml"
     outside.write_text("clusters: []\n", encoding="utf-8")
@@ -2169,6 +2227,7 @@ def test_external_registry_symlink_escape_is_rejected(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.integration
 def test_undefined_external_reference_is_rejected(tmp_path: Path) -> None:
     registry = {
         "schema": CONTRACT_SCHEMA,
@@ -2196,6 +2255,7 @@ def test_undefined_external_reference_is_rejected(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.integration
 def test_direct_resolution_supports_json_pointer_escapes_and_list_indices(tmp_path: Path) -> None:
     external = tmp_path / "external.json"
     external.write_bytes(canonical_json_bytes({"groups": {"a/b": [{"id": "selected"}]}}))
@@ -2217,6 +2277,7 @@ def test_direct_resolution_supports_json_pointer_escapes_and_list_indices(tmp_pa
     assert resolved["selection"] == {"id": "selected"}
 
 
+@pytest.mark.integration
 def test_external_pointer_rejects_unbounded_array_index_without_raising(tmp_path: Path) -> None:
     (tmp_path / "external.json").write_bytes(canonical_json_bytes({"items": []}))
     registry = {
@@ -2241,6 +2302,7 @@ def test_external_pointer_rejects_unbounded_array_index_without_raising(tmp_path
     assert "invalid-external-pointer" in {finding.code for finding in findings}
 
 
+@pytest.mark.integration
 def test_external_pointer_rejects_noncanonical_array_index(tmp_path: Path) -> None:
     (tmp_path / "external.json").write_bytes(canonical_json_bytes({"items": ["first"]}))
     registry = {
@@ -2260,6 +2322,7 @@ def test_external_pointer_rejects_noncanonical_array_index(tmp_path: Path) -> No
     assert "invalid-external-pointer" in {finding.code for finding in findings}
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("declarations", "code"),
     [
@@ -2298,6 +2361,7 @@ def test_direct_resolution_rejects_malformed_external_declarations(
     assert code in {finding.code for finding in findings}
 
 
+@pytest.mark.integration
 def test_external_reference_placeholder_cannot_have_sibling_fields(tmp_path: Path) -> None:
     (tmp_path / "clusters.yaml").write_text("clusters: []\n", encoding="utf-8")
     registry = {
@@ -2319,6 +2383,7 @@ def test_external_reference_placeholder_cannot_have_sibling_fields(tmp_path: Pat
     assert {finding.code for finding in findings} == {"invalid-external-reference-use"}
 
 
+@pytest.mark.integration
 def test_already_selected_contract_resolves_its_external_references(tmp_path: Path) -> None:
     (tmp_path / "clusters.yaml").write_text("clusters: [{cluster_id: alpha}]\n", encoding="utf-8")
     contract = {

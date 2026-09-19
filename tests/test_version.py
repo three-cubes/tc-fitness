@@ -8,9 +8,12 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 import tc_fitness
 
 
+@pytest.mark.contract
 def test_version_matches_installed_metadata() -> None:
     try:
         metadata_version = importlib.metadata.version("three-cubes-fitness")
@@ -22,12 +25,14 @@ def test_version_matches_installed_metadata() -> None:
     assert tc_fitness.__version__ == metadata_version
 
 
+@pytest.mark.integration
 def test_version_matches_project_declaration() -> None:
     """Installed metadata reflects the single project declaration."""
     project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
     assert tc_fitness.__version__ == project["project"]["version"]
 
 
+@pytest.mark.integration
 def test_bare_checkout_has_stable_unknown_version_without_release_literal() -> None:
     """A source-only import works without creating a second version authority."""
     source = Path(__file__).parents[1] / "src"

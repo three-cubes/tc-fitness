@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_noop_test_scripts import (
@@ -28,21 +29,25 @@ def _seed_pkg(tmp_path: Path, rel: str, test_script: str) -> Path:
     return p
 
 
+@pytest.mark.contract
 def test_placeholder_is_noop() -> None:
     assert (
         script_is_noop("echo 'no tests yet' && exit 0", placeholder=_PLACEHOLDER, real_runner=_REAL) is True
     )
 
 
+@pytest.mark.contract
 def test_real_runner_is_not_noop() -> None:
     assert script_is_noop("vitest run src --coverage", placeholder=_PLACEHOLDER, real_runner=_REAL) is False
 
 
+@pytest.mark.contract
 def test_placeholder_with_real_runner_passes() -> None:
     # mentions "exit 0" but also runs vitest → real
     assert script_is_noop("vitest run || exit 0", placeholder=_PLACEHOLDER, real_runner=_REAL) is False
 
 
+@pytest.mark.integration
 def test_prod_prefix_scoping(tmp_path: Path) -> None:
     _seed_pkg(tmp_path, "agentic/pkg/package.json", "echo 'no tests yet'")
     _seed_pkg(tmp_path, "vendor/pkg/package.json", "echo 'no tests yet'")
@@ -50,12 +55,14 @@ def test_prod_prefix_scoping(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"agentic/pkg/package.json"}
 
 
+@pytest.mark.integration
 def test_root_manifest_in_scope(tmp_path: Path) -> None:
     _seed_pkg(tmp_path, "package.json", "todo")
     rule = NoNoopTestScripts.from_config({}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"package.json"}
 
 
+@pytest.mark.integration
 def test_skip_parts_are_config_driven(tmp_path: Path) -> None:
     _seed_pkg(tmp_path, "agentic/pkg/node_modules/dep/package.json", "todo")
     _seed_pkg(tmp_path, "agentic/pkg/package.json", "todo")
@@ -63,6 +70,7 @@ def test_skip_parts_are_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"agentic/pkg/package.json"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed_pkg(tmp_path, "agentic/pkg/package.json", "echo 'no tests yet'")
     rule = NoNoopTestScripts.from_config({"prod_package_prefixes": ["agentic/"]}, repo_root=tmp_path)
@@ -71,6 +79,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed_pkg(tmp_path, "package.json", "todo")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -78,10 +87,12 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-noop-test-scripts-files.txt").exists()
 
 
+@pytest.mark.unit
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), NoNoopTestScripts)
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_noop_test_scripts as mod
 

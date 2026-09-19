@@ -24,21 +24,25 @@ from tc_fitness.checks.branch_naming import (
 )
 
 
+@pytest.mark.unit
 def test_linear_shape_passes() -> None:
     rc = check_branch("dan/kno-45-pr-a-sync-compose")
     assert rc == 0
 
 
+@pytest.mark.unit
 def test_non_linear_shape_fails() -> None:
     rc = check_branch("broken-branch-name")  # neither Linear shape nor a known prefix
     assert rc == 1
 
 
+@pytest.mark.unit
 def test_default_exempt_branches_main() -> None:
     assert check_branch("main") == 0
     assert check_branch("HEAD") == 0
 
 
+@pytest.mark.unit
 def test_develop_not_exempt_by_default_but_configurable() -> None:
     # kairix: develop is NOT exempt → fails as a non-conforming name.
     assert check_branch("develop") == 1
@@ -46,6 +50,7 @@ def test_develop_not_exempt_by_default_but_configurable() -> None:
     assert check_branch("develop", exempt_branches={"main", "develop", "HEAD"}) == 0
 
 
+@pytest.mark.unit
 def test_exempt_patterns_default_cover_automation() -> None:
     assert check_branch("worktree-agent-abc123") == 0
     assert check_branch("agent/sgo106-tc-fitness") == 0  # autonomous-agent PR branches
@@ -54,6 +59,7 @@ def test_exempt_patterns_default_cover_automation() -> None:
     assert check_branch("gh-pages") == 0
 
 
+@pytest.mark.unit
 def test_custom_exempt_patterns_extend() -> None:
     # `qa/` is not a default-exempt Conventional Branch prefix, so it exercises
     # the extension mechanism (release/ is now a default exemption).
@@ -63,6 +69,7 @@ def test_custom_exempt_patterns_extend() -> None:
     assert check_branch("qa/smoke") == 1
 
 
+@pytest.mark.unit
 def test_custom_pattern_overrides_shape() -> None:
     # A repo with a different convention passes its own compiled pattern.
     custom = re.compile(r"^wip-\d+$")
@@ -70,6 +77,7 @@ def test_custom_pattern_overrides_shape() -> None:
     assert check_branch("dan/kno-45-slug", pattern=custom) == 1
 
 
+@pytest.mark.contract
 def test_fail_prints_remediation(capsys: pytest.CaptureFixture[str]) -> None:
     rc = check_branch("nope")
     err = capsys.readouterr().err
@@ -78,11 +86,13 @@ def test_fail_prints_remediation(capsys: pytest.CaptureFixture[str]) -> None:
     assert "fix:" in err or "rename" in err.lower()
 
 
+@pytest.mark.unit
 def test_default_pattern_is_the_linear_shape() -> None:
     assert DEFAULT_LINEAR_PATTERN.match("dan/kno-45-slug")
     assert not DEFAULT_LINEAR_PATTERN.match("main")
 
 
+@pytest.mark.contract
 def test_none_branch_skips_clean(capsys: pytest.CaptureFixture[str]) -> None:
     # Not in a git repo / detached → skip clean (exit 0), never a false fail.
     rc = check_branch(None)
@@ -119,6 +129,7 @@ def _init_detached_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.mark.integration
 def test_pr_event_resolves_head_ref_over_detached_head(tmp_path: Path) -> None:
     # On a PR event the env var wins over the detached `git` "HEAD" — the gate
     # sees the real source-branch name, not the exempt literal "HEAD".
@@ -127,6 +138,7 @@ def test_pr_event_resolves_head_ref_over_detached_head(tmp_path: Path) -> None:
     assert branch == "feature/random-thing"
 
 
+@pytest.mark.unit
 def test_pr_event_bad_branch_name_now_FAILS() -> None:
     # The regression the bug masked: a non-conforming PR branch name must FAIL,
     # not silently pass as the exempt "HEAD" did before the fix.
@@ -135,6 +147,7 @@ def test_pr_event_bad_branch_name_now_FAILS() -> None:
     assert check_branch(branch) == 1
 
 
+@pytest.mark.unit
 def test_pr_event_good_branch_name_PASSES() -> None:
     # A Linear-shaped PR branch name passes on a PR event.
     branch = current_branch(env={GITHUB_HEAD_REF_ENV: "dan/sgo-106-tc-fitness"})
@@ -142,6 +155,7 @@ def test_pr_event_good_branch_name_PASSES() -> None:
     assert check_branch(branch) == 0
 
 
+@pytest.mark.integration
 def test_detached_head_without_pr_ref_skips_clean(tmp_path: Path) -> None:
     # Detached HEAD and NO PR env var (e.g. a local detached checkout) → the
     # literal "HEAD" is mapped to None (a clean skip), never a false failure.
@@ -150,6 +164,7 @@ def test_detached_head_without_pr_ref_skips_clean(tmp_path: Path) -> None:
     assert check_branch(current_branch(repo, env={})) == 0
 
 
+@pytest.mark.integration
 def test_empty_head_ref_falls_back_to_git(tmp_path: Path) -> None:
     # GITHUB_HEAD_REF is set but EMPTY on non-PR events (push). It must be
     # ignored so the real branch name is resolved from git.
@@ -163,6 +178,7 @@ def test_empty_head_ref_falls_back_to_git(tmp_path: Path) -> None:
     assert branch == "dan/sgo-106-real-branch"
 
 
+@pytest.mark.integration
 def test_push_event_uses_git_branch(tmp_path: Path) -> None:
     # No PR env var at all → the local/push branch name comes from git.
     run = lambda *a: subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)  # noqa: E731

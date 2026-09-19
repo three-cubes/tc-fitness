@@ -42,11 +42,13 @@ def _git_init_and_add(repo: Path, *tracked: str) -> None:
     subprocess.run(["git", "add", *tracked], cwd=repo, check=True, capture_output=True)
 
 
+@pytest.mark.unit
 def test_abstract_cannot_instantiate() -> None:
     with pytest.raises(TypeError):
         FitnessRule()  # type: ignore[abstract]
 
 
+@pytest.mark.integration
 def test_collect_violations_respects_config_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", "x = 'BADWORD'\n")
     _seed(tmp_path, "other/bad.py", "x = 'BADWORD'\n")
@@ -55,6 +57,7 @@ def test_collect_violations_respects_config_roots(tmp_path: Path) -> None:
     assert violations == {"src/bad.py"}  # 'other/' is out of configured scope
 
 
+@pytest.mark.integration
 def test_from_config_overrides_roots_and_exempt(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.py", "x = 'BADWORD'\n")
     _seed(tmp_path, "src/b.py", "x = 'BADWORD'\n")
@@ -65,6 +68,7 @@ def test_from_config_overrides_roots_and_exempt(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
 
 
+@pytest.mark.integration
 def test_extension_filter(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.py", "BADWORD")
     _seed(tmp_path, "src/a.txt", "BADWORD")
@@ -72,6 +76,7 @@ def test_extension_filter(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
 
 
+@pytest.mark.integration
 def test_run_clean_when_no_baseline_and_no_violation(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -80,12 +85,14 @@ def test_run_clean_when_no_baseline_and_no_violation(
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_run_fails_on_net_new_violation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _seed(tmp_path, "src/bad.py", "BADWORD\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
     assert rule.run() == 1
 
 
+@pytest.mark.integration
 def test_establish_then_violation_is_grandfathered(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", "BADWORD\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
@@ -95,6 +102,7 @@ def test_establish_then_violation_is_grandfathered(tmp_path: Path) -> None:
     assert rule.load_baseline() == {"src/bad.py"}
 
 
+@pytest.mark.integration
 def test_grandfathered_does_not_mask_a_new_offender(tmp_path: Path) -> None:
     _seed(tmp_path, "src/old.py", "BADWORD\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
@@ -103,12 +111,14 @@ def test_grandfathered_does_not_mask_a_new_offender(tmp_path: Path) -> None:
     assert rule.run() == 1  # net-new offender still fails
 
 
+@pytest.mark.integration
 def test_name_override_via_config(tmp_path: Path) -> None:
     rule = _BadWord.from_config({"name": "renamed"}, repo_root=tmp_path)
     rule.establish_baseline()
     assert (tmp_path / ".architecture" / "baseline" / "renamed-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_symlinked_repo_root_still_scopes(tmp_path: Path) -> None:
     # A symlinked repo root (e.g. macOS /tmp → /private/tmp) must not break
     # scoping: enumerated paths resolve symlinks, so the root must too, else
@@ -124,6 +134,7 @@ def test_symlinked_repo_root_still_scopes(tmp_path: Path) -> None:
     assert rule.run() == 1  # the net-new offender is detected through the symlink
 
 
+@pytest.mark.integration
 def test_empty_roots_enumerate_nothing(tmp_path: Path) -> None:
     # The empty-roots guard: with NO configured root, the default enumeration
     # yields nothing even when the git repo has tracked in-scope files. Scanning
@@ -137,6 +148,7 @@ def test_empty_roots_enumerate_nothing(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()  # nothing enumerated → nothing flagged
 
 
+@pytest.mark.integration
 def test_untracked_vendor_residue_is_not_scanned(tmp_path: Path) -> None:
     # The issue-25 parity fix: a fresh CI checkout sees only tracked files, so a
     # local run must too. A gitignored pnpm/vendor trash file carrying an
@@ -152,6 +164,7 @@ def test_untracked_vendor_residue_is_not_scanned(tmp_path: Path) -> None:
     assert violations == set()  # the untracked residue is invisible to the scan
 
 
+@pytest.mark.integration
 def test_tracked_file_with_violation_is_still_flagged(tmp_path: Path) -> None:
     # The fix narrows enumeration to tracked files without weakening detection: a
     # tracked file that genuinely carries residue is still flagged. ``roots=("",)``
@@ -162,6 +175,7 @@ def test_tracked_file_with_violation_is_still_flagged(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
 
 
+@pytest.mark.integration
 def test_non_git_fallback_skips_node_modules(tmp_path: Path) -> None:
     # An unpacked source tarball (no git tree) falls back to a working-tree walk;
     # that walk must still exclude `node_modules` so untracked vendor residue
@@ -172,6 +186,7 @@ def test_non_git_fallback_skips_node_modules(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/real.py"}
 
 
+@pytest.mark.integration
 def test_run_core_check_with_no_config_scans_nothing(tmp_path: Path) -> None:
     # Consumer contract at the engine↔consumer boundary: a CORE check dispatched
     # with NO config (`run_core_check` with `config=None` → the rule's empty-roots

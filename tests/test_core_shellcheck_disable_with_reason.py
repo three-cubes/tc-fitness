@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.shellcheck_disable_with_reason import (
     DEFAULT_MIN_RATIONALE_LEN,
     DEFAULT_RATIONALE_MARKERS,
@@ -46,21 +48,25 @@ def _kw() -> dict:
     return {"markers": DEFAULT_RATIONALE_MARKERS, "min_len": DEFAULT_MIN_RATIONALE_LEN}
 
 
+@pytest.mark.integration
 def test_detection_core_flags_bare(tmp_path: Path) -> None:
     p = _seed(tmp_path, "x.sh", _BARE)
     assert file_has_unjustified_disable(p, **_kw()) is True
 
 
+@pytest.mark.integration
 def test_inline_reason_satisfies(tmp_path: Path) -> None:
     p = _seed(tmp_path, "x.sh", _INLINE_REASON)
     assert file_has_unjustified_disable(p, **_kw()) is False
 
 
+@pytest.mark.integration
 def test_preceding_reason_satisfies(tmp_path: Path) -> None:
     p = _seed(tmp_path, "x.sh", _PRECEDING_REASON)
     assert file_has_unjustified_disable(p, **_kw()) is False
 
 
+@pytest.mark.integration
 def test_shebang_file_without_sh_ext_detected(tmp_path: Path) -> None:
     p = _seed(tmp_path, "src/deploy", _BARE)
     assert is_shell_file(p) is True
@@ -68,6 +74,7 @@ def test_shebang_file_without_sh_ext_detected(tmp_path: Path) -> None:
     assert {str(x) for x in rule.collect_violations()} == {"src/deploy"}
 
 
+@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.sh", _BARE)
     _seed(tmp_path, "vendor/a.sh", _BARE)
@@ -75,6 +82,7 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/a.sh"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.sh", _BARE)
     rule = build({"roots": ["src"]}, repo_root=tmp_path)
@@ -83,6 +91,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "a.sh", _BARE)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -90,6 +99,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "shellcheck-disable-with-reason-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.shellcheck_disable_with_reason as mod
 

@@ -51,22 +51,26 @@ _FAIL_B = {
 }
 
 
+@pytest.mark.unit
 def test_parse_failed_and_finding_key() -> None:
     failed = parse_failed(_report(_FAIL_A, _FAIL_B))
     assert len(failed) == 2
     assert finding_key(_FAIL_A) == "CKV_AZURE_1|/store.bicep|Microsoft.Storage/storageAccounts.store"
 
 
+@pytest.mark.unit
 def test_parse_failed_handles_list_of_reports() -> None:
     # Checkov may emit a LIST of reports (multi-framework) — both are flattened.
     data = [_report(_FAIL_A), _report(_FAIL_B)]
     assert len(parse_failed(data)) == 2
 
 
+@pytest.mark.unit
 def test_parsing_error_count_surfaced() -> None:
     assert parsing_error_count(_report(_FAIL_A, parsing_errors=3)) == 3
 
 
+@pytest.mark.unit
 def test_net_new_findings_excludes_baselined() -> None:
     failed = parse_failed(_report(_FAIL_A, _FAIL_B))
     baseline = {finding_key(_FAIL_A)}
@@ -74,6 +78,7 @@ def test_net_new_findings_excludes_baselined() -> None:
     assert [finding_key(fc) for fc in net_new] == [finding_key(_FAIL_B)]
 
 
+@pytest.mark.integration
 def test_evaluate_flags_net_new_with_injected_runner(tmp_path: Path) -> None:
     rule = CheckovIacSecurity(
         tmp_path,
@@ -86,6 +91,7 @@ def test_evaluate_flags_net_new_with_injected_runner(tmp_path: Path) -> None:
     assert "CKV_AZURE_1" in errors[0]
 
 
+@pytest.mark.integration
 def test_evaluate_rejects_unavailable_real_scanner(tmp_path: Path) -> None:
     output = tmp_path / "evaluation.json"
     process = subprocess.run(
@@ -108,6 +114,7 @@ def test_evaluate_rejects_unavailable_real_scanner(tmp_path: Path) -> None:
     assert meta["unavailable"] is True
 
 
+@pytest.mark.integration
 def test_public_run_returns_error_when_real_scanner_is_unavailable(tmp_path: Path) -> None:
     process = subprocess.run(
         [sys.executable, "-m", "tc_fitness.core_checks.checkov_iac_security", "--repo-root", str(tmp_path)],
@@ -119,6 +126,7 @@ def test_public_run_returns_error_when_real_scanner_is_unavailable(tmp_path: Pat
     assert process.returncode == 2
 
 
+@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     rule = CheckovIacSecurity(tmp_path, scan_dir="infra", runner=lambda _sd: _report(_FAIL_A))
     assert rule.run() == 1
@@ -129,6 +137,7 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_net_new_after_baseline_fails(tmp_path: Path) -> None:
     rule = CheckovIacSecurity(tmp_path, scan_dir="infra", runner=lambda _sd: _report(_FAIL_A))
     rule.establish_baseline()
@@ -138,6 +147,7 @@ def test_net_new_after_baseline_fails(tmp_path: Path) -> None:
     assert rule2.run() == 1
 
 
+@pytest.mark.integration
 def test_from_config_and_baseline_name(tmp_path: Path) -> None:
     rule = CheckovIacSecurity.from_config(
         {"scan_dir": "infra", "name": "checkov_iac_security", "framework": "bicep"},
@@ -147,11 +157,13 @@ def test_from_config_and_baseline_name(tmp_path: Path) -> None:
     assert rule.scan_path == (tmp_path / "infra").resolve()
 
 
+@pytest.mark.integration
 def test_build_factory_returns_instance(tmp_path: Path) -> None:
     rule = build({"scan_dir": "infra"}, repo_root=tmp_path)
     assert isinstance(rule, CheckovIacSecurity)
 
 
+@pytest.mark.integration
 def test_public_adoption_cannot_create_evidence_without_scanner(tmp_path: Path) -> None:
     process = subprocess.run(
         [
@@ -171,6 +183,7 @@ def test_public_adoption_cannot_create_evidence_without_scanner(tmp_path: Path) 
     assert not (tmp_path / ".architecture" / "baseline").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     # DESIGN LAW: a CORE module's LOGIC carries no repo identity.
     import tc_fitness.core_checks.checkov_iac_security as mod

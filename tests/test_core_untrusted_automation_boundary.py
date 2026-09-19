@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.untrusted_automation_boundary import (
     build,
     workflow_has_untrusted_automation_boundary_violation,
@@ -61,11 +63,13 @@ def _violates(path: Path) -> bool:
     )
 
 
+@pytest.mark.integration
 def test_separate_untrusted_and_privileged_jobs_are_clean(tmp_path: Path) -> None:
     assert _violates(_seed(tmp_path, _SAFE)) is False
     assert build(_CONFIG, repo_root=tmp_path).collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_untrusted_job_with_write_permission_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace(
         "contents: read\n    steps:\n      - uses: example/autonomous",
@@ -74,11 +78,13 @@ def test_untrusted_job_with_write_permission_is_flagged(tmp_path: Path) -> None:
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_untrusted_job_with_write_all_permission_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace("permissions:\n      contents: read", "permissions: write-all")
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_untrusted_job_with_cloud_login_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace(
         "prompt-file: agentic/skills/ops/remediate/SKILL.md",
@@ -87,6 +93,7 @@ def test_untrusted_job_with_cloud_login_is_flagged(tmp_path: Path) -> None:
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_untrusted_job_with_credential_environment_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace(
         "prompt-file: agentic/skills/ops/remediate/SKILL.md",
@@ -95,6 +102,7 @@ def test_untrusted_job_with_credential_environment_is_flagged(tmp_path: Path) ->
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_untrusted_job_inherits_workflow_credential_environment(tmp_path: Path) -> None:
     body = _SAFE.replace(
         "on: workflow_dispatch",
@@ -103,6 +111,7 @@ def test_untrusted_job_inherits_workflow_credential_environment(tmp_path: Path) 
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_untrusted_job_with_publishing_command_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace(
         "prompt-file: agentic/skills/ops/remediate/SKILL.md",
@@ -111,6 +120,7 @@ def test_untrusted_job_with_publishing_command_is_flagged(tmp_path: Path) -> Non
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_untrusted_job_with_whitespace_obfuscated_publishing_command_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace(
         "prompt-file: agentic/skills/ops/remediate/SKILL.md",
@@ -119,11 +129,13 @@ def test_untrusted_job_with_whitespace_obfuscated_publishing_command_is_flagged(
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_contract_outside_runtime_root_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace("agentic/skills/ops/remediate/SKILL.md", ".github/prompts/remediate.md")
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_contract_traversal_or_sibling_runtime_prefix_is_flagged(tmp_path: Path) -> None:
     traversal = _SAFE.replace(
         "agentic/skills/ops/remediate/SKILL.md", "agentic/../.github/prompts/remediate.md"
@@ -133,6 +145,7 @@ def test_contract_traversal_or_sibling_runtime_prefix_is_flagged(tmp_path: Path)
     assert _violates(_seed(tmp_path, sibling)) is True
 
 
+@pytest.mark.integration
 def test_action_references_are_matched_case_insensitively(tmp_path: Path) -> None:
     body = _SAFE.replace("example/autonomous-action@v1", "EXAMPLE/AUTONOMOUS-ACTION@v1")
     assert _violates(_seed(tmp_path, body)) is False
@@ -143,14 +156,17 @@ def test_action_references_are_matched_case_insensitively(tmp_path: Path) -> Non
     assert _violates(_seed(tmp_path, body)) is True
 
 
+@pytest.mark.integration
 def test_absent_configured_workflow_is_vacuously_clean(tmp_path: Path) -> None:
     assert build(_CONFIG, repo_root=tmp_path).collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_invalid_configured_workflow_is_flagged(tmp_path: Path) -> None:
     assert _violates(_seed(tmp_path, "jobs: [")) is True
 
 
+@pytest.mark.integration
 def test_existing_baseline_cannot_hide_a_boundary_violation(tmp_path: Path) -> None:
     _seed(tmp_path, _SAFE.replace("contents: read", "id-token: write"))
     baseline = tmp_path / ".architecture/baseline/untrusted-automation-boundary-files.txt"
@@ -159,6 +175,7 @@ def test_existing_baseline_cannot_hide_a_boundary_violation(tmp_path: Path) -> N
     assert build(_CONFIG, repo_root=tmp_path).run() == 1
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.untrusted_automation_boundary as mod
 

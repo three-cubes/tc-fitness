@@ -31,21 +31,25 @@ from tc_fitness.gate_config import (
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_dedicated_file_wins_over_pyproject(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[tool.tc_fitness]\n")
     (tmp_path / ".tc-fitness.toml").write_text("name = 'x'\n")
     assert find_config_file(tmp_path) == tmp_path / ".tc-fitness.toml"
 
 
+@pytest.mark.integration
 def test_pyproject_used_when_no_dedicated_file(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[tool.tc_fitness]\n")
     assert find_config_file(tmp_path) == tmp_path / "pyproject.toml"
 
 
+@pytest.mark.integration
 def test_no_config_file_returns_none(tmp_path: Path) -> None:
     assert find_config_file(tmp_path) is None
 
 
+@pytest.mark.integration
 def test_load_missing_config_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         load_config(tmp_path)
@@ -58,6 +62,7 @@ def test_load_missing_config_is_actionable(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_load_from_pyproject_sub_table(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname = 'demo'\n\n"
@@ -79,6 +84,7 @@ def test_load_from_pyproject_sub_table(tmp_path: Path) -> None:
     assert step.run == ("ruff", "check", ".")
 
 
+@pytest.mark.integration
 def test_pyproject_without_tc_fitness_block_is_actionable(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
     with pytest.raises(GateConfigError) as exc:
@@ -87,6 +93,7 @@ def test_pyproject_without_tc_fitness_block_is_actionable(tmp_path: Path) -> Non
     assert "fix:" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_dedicated_file_whole_document_is_config(tmp_path: Path) -> None:
     (tmp_path / ".tc-fitness.toml").write_text(
         'name = "dedicated"\n\n[[steps]]\nid = "tests"\nshell = "pytest -q"\n'
@@ -115,6 +122,7 @@ def parse_config_table(steps_block: str, tmp_path: Path):
     return parse_config(table, source=src)
 
 
+@pytest.mark.integration
 def test_no_steps_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("name = 'x'\n", tmp_path)
@@ -122,29 +130,34 @@ def test_no_steps_is_actionable(tmp_path: Path) -> None:
     assert "fix:" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_step_requires_exactly_one_action(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nid = 'x'\nrun = ['a']\nshell = 'b'\n", tmp_path)
     assert "EXACTLY ONE" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_step_with_no_action_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError):
         parse_config_table("[[steps]]\nid = 'x'\n", tmp_path)
 
 
+@pytest.mark.integration
 def test_step_missing_id_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nrun = ['a']\n", tmp_path)
     assert "id" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_catalogue_must_be_module_attr(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nid = 'cat'\ncatalogue = 'not_a_ref'\n", tmp_path)
     assert "module.path:attr" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_valid_catalogue_step_parses(tmp_path: Path) -> None:
     cfg = parse_config_table(
         "[[steps]]\n"
@@ -163,6 +176,7 @@ def test_valid_catalogue_step_parses(tmp_path: Path) -> None:
     assert step.parallel is True
 
 
+@pytest.mark.integration
 def test_invalid_dispatch_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table(
@@ -172,18 +186,21 @@ def test_invalid_dispatch_is_actionable(tmp_path: Path) -> None:
     assert "dispatch" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_run_must_be_list_of_strings(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nid = 'x'\nrun = 'ruff check'\n", tmp_path)
     assert "list of strings" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_env_must_be_string_table(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nid = 'x'\nrun = ['a']\nenv = { K = 1 }\n", tmp_path)
     assert "env" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_optional_step_fields_default(tmp_path: Path) -> None:
     cfg = parse_config_table("[[steps]]\nid = 'x'\nrun = ['a']\n", tmp_path)
     step = cfg.steps[0]
@@ -200,6 +217,7 @@ def test_optional_step_fields_default(tmp_path: Path) -> None:
     assert step.tags == ()
 
 
+@pytest.mark.integration
 def test_stage_depends_on_tags_parse(tmp_path: Path) -> None:
     cfg = parse_config_table(
         "[[steps]]\nid = 'l'\nstage = 'lint'\ntags = ['smoke', 'full']\nrun = ['ruff']\n"
@@ -211,6 +229,7 @@ def test_stage_depends_on_tags_parse(tmp_path: Path) -> None:
     assert cfg.steps[1].depends_on == ("lint",)
 
 
+@pytest.mark.integration
 def test_depends_on_cycle_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table(
@@ -221,12 +240,14 @@ def test_depends_on_cycle_is_actionable(tmp_path: Path) -> None:
     assert "cycle" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_depends_on_unknown_stage_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nid = 'a'\nstage = 'A'\ndepends_on = ['Z']\nrun = ['x']\n", tmp_path)
     assert "unknown stage" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_skip_when_staged_parses(tmp_path: Path) -> None:
     cfg = parse_config_table(
         "[[steps]]\nid = 'x'\nrun = ['a']\nskip_when_staged = true\n",
@@ -235,6 +256,7 @@ def test_skip_when_staged_parses(tmp_path: Path) -> None:
     assert cfg.steps[0].skip_when_staged is True
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("step_body", "kind"),
     [
@@ -267,12 +289,14 @@ def test_shard_args_on_a_step_that_cannot_split_is_rejected(
     assert "fix:" in message and "next:" in message
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("step_body", ["catalogue = 'mod:RULES'", "shell = 'pytest'"])
 def test_a_step_that_cannot_split_still_parses_without_shard_args(tmp_path: Path, step_body: str) -> None:
     cfg = parse_config_table(f"[[steps]]\nid = 'x'\n{step_body}\n", tmp_path)
     assert cfg.steps[0].shard_args == ()
 
 
+@pytest.mark.integration
 def test_shard_args_parses_to_tuple(tmp_path: Path) -> None:
     cfg = parse_config_table(
         "[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = ['--splits', '{total}', '--group', '{index}']\n",
@@ -281,12 +305,14 @@ def test_shard_args_parses_to_tuple(tmp_path: Path) -> None:
     assert cfg.steps[0].shard_args == ("--splits", "{total}", "--group", "{index}")
 
 
+@pytest.mark.integration
 def test_shard_args_must_be_list_of_strings(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = '--splits'\n", tmp_path)
     assert "list of strings" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_step_fix_next_and_flags_parse(tmp_path: Path) -> None:
     cfg = parse_config_table(
         "[[steps]]\n"
@@ -307,6 +333,7 @@ def test_step_fix_next_and_flags_parse(tmp_path: Path) -> None:
     assert step.env == {"K": "v"}
 
 
+@pytest.mark.integration
 def test_duplicate_step_ids_rejected(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table(
@@ -316,6 +343,7 @@ def test_duplicate_step_ids_rejected(tmp_path: Path) -> None:
     assert "duplicate" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_malformed_toml_is_actionable(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[tool.tc_fitness\n")  # broken
     with pytest.raises(GateConfigError) as exc:
@@ -328,10 +356,12 @@ def test_malformed_toml_is_actionable(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_core_check_configs_absent_is_empty(tmp_path: Path) -> None:
     assert parse_core_check_configs({"steps": []}, source=tmp_path / "pyproject.toml") == {}
 
 
+@pytest.mark.integration
 def test_core_check_configs_parsed_keyed_by_module(tmp_path: Path) -> None:
     table = {
         "core_checks": {
@@ -344,12 +374,14 @@ def test_core_check_configs_parsed_keyed_by_module(tmp_path: Path) -> None:
     assert parsed["cognitive_complexity"] == {"roots": ["src", "tools"]}
 
 
+@pytest.mark.integration
 def test_core_check_configs_non_table_root_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_core_check_configs({"core_checks": "nope"}, source=tmp_path / "pyproject.toml")
     assert "fix:" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_core_check_configs_non_table_block_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_core_check_configs(
@@ -360,6 +392,7 @@ def test_core_check_configs_non_table_block_is_actionable(tmp_path: Path) -> Non
     assert "fix:" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_load_core_check_configs_from_pyproject(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.tc_fitness]\n"
@@ -375,6 +408,7 @@ def test_load_core_check_configs_from_pyproject(tmp_path: Path) -> None:
     assert configs["no_duplicate_string"]["min_occurrences"] == 3
 
 
+@pytest.mark.integration
 def test_load_core_check_configs_from_dedicated_file(tmp_path: Path) -> None:
     # In a dedicated .tc-fitness.toml the whole document IS the config, so the
     # block is a top-level [core_checks.<module>] table.
@@ -385,5 +419,6 @@ def test_load_core_check_configs_from_dedicated_file(tmp_path: Path) -> None:
     assert configs["no_duplicate_string"]["roots"] == ["lib"]
 
 
+@pytest.mark.integration
 def test_load_core_check_configs_no_config_file_is_empty(tmp_path: Path) -> None:
     assert load_core_check_configs(tmp_path) == {}

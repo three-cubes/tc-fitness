@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_internal_monkeypatch import (
@@ -56,31 +57,37 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_patch_decorator_on_internal_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _PATCH_DECORATOR)
     assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
 
 
+@pytest.mark.integration
 def test_patch_on_stdlib_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _PATCH_STDLIB)
     assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
 
 
+@pytest.mark.integration
 def test_monkeypatch_setattr_ref_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _MONKEYPATCH_REF)
     assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
 
 
+@pytest.mark.integration
 def test_assignment_in_pytest_raises_is_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _FROZEN_RAISES)
     assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
 
 
+@pytest.mark.integration
 def test_no_internal_packages_matches_nothing(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _PATCH_DECORATOR)
     assert file_has_internal_patch(p, internal_packages=(), exempt_roots=_EXEMPT) is False
 
 
+@pytest.mark.integration
 def test_packages_are_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _PATCH_DECORATOR)
     rule = NoInternalMonkeypatch.from_config(
@@ -90,6 +97,7 @@ def test_packages_are_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_x.py"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _PATCH_DECORATOR)
     rule = NoInternalMonkeypatch.from_config(
@@ -100,6 +108,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "test_x.py", _PATCH_DECORATOR)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -107,10 +116,12 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-internal-monkeypatch-files.txt").exists()
 
 
+@pytest.mark.unit
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), NoInternalMonkeypatch)
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_internal_monkeypatch as mod
 
