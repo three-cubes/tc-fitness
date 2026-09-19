@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +13,21 @@ from pathlib import Path
 import pytest
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("binding", ["valid", "malformed", "unregistered"])
+def test_fixed_profile_distinguishes_contract_fixtures_from_outer_tests(tmp_path: Path, binding: str) -> None:
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    name = "every_test_has_tier_marker"
+    fixture = root / "tests/check_contracts" / (name if binding != "unregistered" else "unregistered")
+    shutil.copytree(Path(__file__).parent / "check_contracts" / name, fixture)
+    if binding == "malformed":
+        (fixture / "contract.yaml").write_text("not-a-contract: true\n")
+    candidate = commit(root)
+    code, payload = invoke(root, base, candidate, tmp_path / "result.json")
+    assert code == (0 if binding == "valid" else 2), payload
+    assert payload["status"] == ("pass" if binding == "valid" else "error")
 
 
 def git(root: Path, *args: str) -> str:
@@ -72,7 +89,14 @@ def repository(root: Path, *, covered: bool = True) -> tuple[str, str]:
     return base, commit(root)
 
 
-def invoke(root: Path, base: str, candidate: str, output: Path, *extra: str) -> tuple[int, dict[str, object]]:
+def invoke(
+    root: Path,
+    base: str,
+    candidate: str,
+    output: Path,
+    *extra: str,
+    environment: dict[str, str] | None = None,
+) -> tuple[int, dict[str, object]]:
     result = subprocess.run(
         [
             str(Path(sys.executable).with_name("tc-fitness")),
@@ -85,12 +109,15 @@ def invoke(root: Path, base: str, candidate: str, output: Path, *extra: str) -> 
             candidate,
             "--output",
             str(output),
+            "--evidence-dir",
+            str(output.with_suffix(".evidence")),
             *extra,
         ],
         capture_output=True,
         text=True,
         timeout=60,
         check=False,
+        env=environment,
     )
     return result.returncode, json.loads(output.read_text()) if output.exists() else {"stderr": result.stderr}
 
@@ -99,10 +126,15 @@ def test_public_transaction_freshly_measures_both_commits_with_fixed_profile(tmp
     root = tmp_path / "repo"
     base, candidate = repository(root)
     before = git(root, "worktree", "list", "--porcelain")
+    retained = tmp_path / "result.evidence"
+    retained.mkdir()
     code, result = invoke(root, base, candidate, tmp_path / "result.json")
     assert code == 0, result
     assert result["status"] == "pass"
     for label in ("base", "candidate"):
+        assert (retained / label / "uv.stderr.log").is_file()
+        for report in ("coverage.xml", "coverage.json", "receipt.json", "run.stdout.log", "run.stderr.log"):
+            assert (retained / label / "measurement" / report).is_file()
         toolchain = result[label]["toolchain"]
         assert toolchain["coverage"] == "7.14.2"
         assert toolchain["pytest"] == "9.1.0"
@@ -131,6 +163,7 @@ def test_public_transaction_freshly_measures_both_commits_with_fixed_profile(tmp
         "covered_branches": 10,
     }
     assert result["base"]["source_digest"] != result["candidate"]["source_digest"]
+    assert json.loads((retained / "transaction.json").read_text()) == result
     assert git(root, "status", "--porcelain") == ""
     assert git(root, "worktree", "list", "--porcelain") == before
 
@@ -183,6 +216,8 @@ def test_public_transaction_preserves_existing_output_and_reports_structured_err
             "b" * 40,
             "--output",
             str(output),
+            "--evidence-dir",
+            str(tmp_path / "evidence"),
         ],
         capture_output=True,
         text=True,
@@ -192,6 +227,34 @@ def test_public_transaction_preserves_existing_output_and_reports_structured_err
     assert result.returncode == 2
     assert json.loads(result.stdout)["status"] == "error"
     assert output.read_text() == "retained evidence\n"
+
+
+@pytest.mark.parametrize("location", ["inside", "nonempty", "symlink", "file"])
+def test_public_transaction_rejects_unsafe_or_reused_evidence_directory(
+    tmp_path: Path, location: str
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    retained = tmp_path / "evidence"
+    if location == "inside":
+        retained = root / "evidence"
+    elif location == "file":
+        retained.write_text("existing evidence")
+    else:
+        retained.mkdir()
+        (retained / "existing").write_text("existing evidence")
+        if location == "symlink":
+            link = tmp_path / "linked"
+            link.symlink_to(retained, target_is_directory=True)
+            retained = link
+    code, result = invoke(root, "a" * 40, "b" * 40, tmp_path / "result.json", "--evidence-dir", str(retained))
+    assert code == 2
+    assert result["status"] == "error"
+    assert "evidence directory" in result["error"]
+    if location == "file":
+        assert retained.read_text() == "existing evidence"
+    elif location != "inside":
+        assert (retained / "existing").read_text() == "existing evidence"
 
 
 def test_transaction_ratchets_against_fresh_base_above_absolute_floor(tmp_path: Path) -> None:
@@ -234,6 +297,12 @@ def test_failed_base_is_not_replaced_by_a_passing_candidate_measurement(tmp_path
     code, result = invoke(root, base, candidate, tmp_path / "result.json")
     assert code == 2, result
     assert result["status"] == "error"
+    assert result["side"] == "base"
+    assert result["phase"] == "run"
+    retained = tmp_path / "result.evidence"
+    assert "test_failure" in (retained / result["stdout_log"]).read_text()
+    assert (retained / result["stderr_log"]).is_file()
+    assert json.loads((retained / "transaction.json").read_text()) == result
     assert git(root, "worktree", "list", "--porcelain") == before
 
 
@@ -244,13 +313,13 @@ def test_transaction_measurements_are_immutable_and_never_reused(tmp_path: Path)
 
     root = tmp_path / "repo"
     base, candidate = repository(root)
-    first = assure_coverage(root, base=base, candidate=candidate)
+    first = assure_coverage(root, base=base, candidate=candidate, evidence_dir=tmp_path / "first")
     with pytest.raises(FrozenInstanceError):
         first.base.counts.covered_lines = 0
     exported = first.as_payload()
     exported["base"]["counts"]["covered_lines"] = 0
     assert first.base.counts.covered_lines == 10
-    second = assure_coverage(root, base=base, candidate=candidate)
+    second = assure_coverage(root, base=base, candidate=candidate, evidence_dir=tmp_path / "second")
     assert second.execution_id != first.execution_id
     assert second.failures == first.failures == ()
 
@@ -283,6 +352,26 @@ def test_stale_candidate_lock_is_terminal_error_not_controller_environment_fallb
     code, result = invoke(root, base, candidate, tmp_path / "result.json")
     assert code == 2, result
     assert result["status"] == "error"
+    assert result["side"] == "candidate"
+    assert result["phase"] == "provision"
+    retained = tmp_path / "result.evidence"
+    assert (retained / result["stderr_log"]).read_text()
+    assert json.loads((retained / "transaction.json").read_text()) == result
+
+
+def test_missing_uv_retains_real_provisioning_diagnostics(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    base, candidate = repository(root)
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    (binaries / "git").symlink_to(shutil.which("git"))
+    code, result = invoke(
+        root, base, candidate, tmp_path / "result.json", environment={**os.environ, "PATH": str(binaries)}
+    )
+    assert code == 2
+    assert result["side"] == "base"
+    assert result["phase"] == "provision"
+    assert "uv" in (tmp_path / "result.evidence" / result["stderr_log"]).read_text()
 
 
 def test_each_commit_uses_its_own_locked_pytest_version(tmp_path: Path) -> None:

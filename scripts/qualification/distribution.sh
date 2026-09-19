@@ -186,12 +186,20 @@ candidate = commit()
 payload = json.loads(run(
     str(Path(sys.executable).with_name("tc-fitness")), "assure-coverage", "--repo-root", str(root),
     "--base-commit", base, "--candidate-commit", candidate,
+    "--evidence-dir", str(root.with_name(root.name + "-evidence")),
 ))
 if (payload["status"] != "pass" or payload["base"]["commit"] != base
         or payload["candidate"]["commit"] != candidate
         or payload["base"]["counts"]["branches"] != 0
         or payload["candidate"]["counts"]["covered_branches"] != 2):
     raise SystemExit("installed coverage transaction did not prove the exact A/B branch change")
+retained = root.with_name(root.name + "-evidence")
+if json.loads((retained / "transaction.json").read_text()) != payload:
+    raise SystemExit("installed transaction did not retain its terminal evidence")
+for side in ("base", "candidate"):
+    for name in ("run.stdout.log", "run.stderr.log", "coverage.xml", "coverage.json"):
+        if not (retained / side / "measurement" / name).is_file():
+            raise SystemExit("installed transaction lost its measurement evidence")
 PY
   echo "qualified $label coverage transaction"
 }

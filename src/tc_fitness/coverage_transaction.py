@@ -13,10 +13,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_contracts import registered_contract_directory
 from tc_fitness.check_evidence import capture_check_evidence
+from tc_fitness.core_checks import CORE_CHECKS
 from tc_fitness.core_checks._coverage_evidence import CoverageCounts
 from tc_fitness.core_checks.coverage_floor import build as coverage_floor
 from tc_fitness.coverage_admission import (
+    CoverageExecutionError,
     bytes_digest,
     changed_line_failures,
     exact_checkout,
@@ -96,19 +99,50 @@ def _measurement(payload: dict[str, Any], uv_version: str, lock_digest: str) -> 
     )
 
 
-def _fresh_measurement(snapshot: Path, commit: str, scratch: Path, execution: str) -> Measurement:
+class TransactionError(ValueError):
+    """Phase/side diagnostics are structured by the controller, not parsed logs."""
+
+    def __init__(self, message: str, *, side: str, phase: str, stdout_log: str, stderr_log: str) -> None:
+        super().__init__(message)
+        self.details = dict(side=side, phase=phase, stdout_log=stdout_log, stderr_log=stderr_log)
+
+
+def _error_payload(exc: Exception) -> dict[str, Any]:
+    return {
+        "schema": "tc.fitness/coverage-transaction/v1",
+        "status": "error",
+        "error": str(exc),
+        **(exc.details if isinstance(exc, TransactionError) else {"phase": "transaction", "side": None}),
+    }
+
+
+def _fresh_measurement(
+    snapshot: Path, commit: str, scratch: Path, execution: str, *, environment_dir: Path | None = None
+) -> Measurement:
+    snapshot = snapshot.resolve()
     settings = scratch / "pytest.ini"
     settings.write_text(_PYTEST_CONFIG)
     uv = shutil.which("uv")
     if uv is None:
-        raise ValueError("locked coverage environments require the trusted uv executable")
+        message = "locked coverage environments require the trusted uv executable"
+        (scratch / "uv.stdout.log").write_text("")
+        (scratch / "uv.stderr.log").write_text(message + "\n")
+        raise TransactionError(
+            message,
+            side=scratch.name,
+            phase="provision",
+            stdout_log=scratch.name + "/uv.stdout.log",
+            stderr_log=scratch.name + "/uv.stderr.log",
+        )
     uv = str(Path(uv).resolve())
     identity = run_bounded_process([uv, "--version"], cwd=snapshot, timeout=30)
+    (scratch / "uv-identity.stdout.log").write_bytes(identity.stdout)
+    (scratch / "uv-identity.stderr.log").write_bytes(identity.stderr)
     if identity.returncode:
         raise ValueError("trusted uv identity is unavailable")
     version = identity.stdout.decode().strip()
     lock = bytes_digest((snapshot / "uv.lock").read_bytes())
-    venv = scratch / "venv"
+    venv = environment_dir if environment_dir is not None else scratch / "venv"
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -129,9 +163,24 @@ def _fresh_measurement(snapshot: Path, commit: str, scratch: Path, execution: st
         stderr_path=scratch / "uv.stderr.log",
     )
     if provisioned.returncode:
-        raise ValueError("exact-worktree locked environment provisioning failed")
+        raise TransactionError(
+            "exact-worktree locked environment provisioning failed",
+            side=scratch.name,
+            phase="provision",
+            stdout_log=scratch.name + "/uv.stdout.log",
+            stderr_log=scratch.name + "/uv.stderr.log",
+        )
     if bytes_digest((snapshot / "uv.lock").read_bytes()) != lock:
         raise ValueError("locked environment provisioning changed the bound lockfile")
+    command = ["-m", "pytest", "-q", "-c", str(settings), "--rootdir", str(snapshot), "tests"]
+    registry = snapshot / "tests/check_contracts"
+    if registry.is_dir() and not registry.is_symlink():
+        for path in sorted(registry.iterdir()):
+            # Fixture cases run through their public contract tests, not as
+            # outer pytest modules. Classification uses this trusted engine's
+            # existing manifest boundary, never a candidate-loaded plugin.
+            if registered_contract_directory(path, CORE_CHECKS) is not None:
+                command.extend(["--ignore", str(path)])
     payload = produce_coverage(
         root=snapshot,
         base=commit,
@@ -141,7 +190,7 @@ def _fresh_measurement(snapshot: Path, commit: str, scratch: Path, execution: st
         run_id=execution,
         attempt_id="1",
         output=scratch / "measurement",
-        command=["-m", "pytest", "-q", "-c", str(settings), "--rootdir", str(snapshot), "tests"],
+        command=command,
         environment=environment,
         python_executable=venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python"),
     )
@@ -175,32 +224,78 @@ def _candidate_failures(snapshot: Path, report: Path, base: str, candidate: str)
     return failures
 
 
-def assure_coverage(root: Path, *, base: str, candidate: str) -> CoverageTransaction:
+def assure_coverage(root: Path, *, base: str, candidate: str, evidence_dir: Path) -> CoverageTransaction:
     """Measure both immutable commits now under the engine-owned self profile.
 
     Only the trusted invocation supplies identities. This engine never resolves
     moving refs, reads candidate selectors or imports an accepted measurement.
     """
-    if any(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is None for value in (base, candidate)):
-        raise ValueError("coverage transaction requires explicit full immutable commit IDs")
     root = root.resolve()
-    exact_checkout(root, base, candidate)
+    if (
+        evidence_dir.is_symlink()
+        or evidence_dir.resolve().is_relative_to(root)
+        or (evidence_dir.exists() and (not evidence_dir.is_dir() or any(evidence_dir.iterdir())))
+    ):
+        raise ValueError("evidence directory must be new or empty, external and not a symlink")
+    evidence_dir = evidence_dir.resolve()
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        transaction = _execute_coverage(root, base=base, candidate=candidate, evidence_dir=evidence_dir)
+    except Exception as exc:
+        (evidence_dir / "transaction.json").write_text(json.dumps(_error_payload(exc), sort_keys=True) + "\n")
+        raise
+    (evidence_dir / "transaction.json").write_text(
+        json.dumps(transaction.as_payload(), sort_keys=True) + "\n"
+    )
+    return transaction
+
+
+def _execute_coverage(root: Path, *, base: str, candidate: str, evidence_dir: Path) -> CoverageTransaction:
+    """Cleanup is part of execution and precedes publishing terminal evidence."""
     execution = str(uuid.uuid4())
     with tempfile.TemporaryDirectory(prefix="tc-fitness-coverage-transaction-") as directory:
         scratch = Path(directory)
         snapshots: list[Path] = []
         measurements = []
         try:
+            if any(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is None for value in (base, candidate)):
+                raise ValueError("coverage transaction requires explicit full immutable commit IDs")
+            exact_checkout(root, base, candidate)
             for label, commit in (("base", base), ("candidate", candidate)):
                 snapshot = scratch / label
                 git(root, "worktree", "add", "--detach", str(snapshot), commit)
                 snapshots.append(snapshot)
-                output = scratch / (label + "-evidence")
+                output = evidence_dir / label
                 output.mkdir()
-                measurements.append(_fresh_measurement(snapshot, commit, output, execution))
+                try:
+                    measurements.append(
+                        _fresh_measurement(
+                            snapshot, commit, output, execution, environment_dir=scratch / (label + "-venv")
+                        )
+                    )
+                except CoverageExecutionError as exc:
+                    raise TransactionError(
+                        str(exc),
+                        side=label,
+                        phase=exc.phase,
+                        stdout_log=exc.stdout_log.relative_to(evidence_dir).as_posix(),
+                        stderr_log=exc.stderr_log.relative_to(evidence_dir).as_posix(),
+                    ) from exc
+                except TransactionError:
+                    raise
+                except Exception as exc:
+                    (output / "controller.stdout.log").write_text("")
+                    (output / "controller.stderr.log").write_text(str(exc) + "\n")
+                    raise TransactionError(
+                        str(exc),
+                        side=label,
+                        phase="measurement",
+                        stdout_log=label + "/controller.stdout.log",
+                        stderr_log=label + "/controller.stderr.log",
+                    ) from exc
             before, after = measurements
             failures = _candidate_failures(
-                snapshots[1], scratch / "candidate-evidence/measurement/coverage.xml", base, candidate
+                snapshots[1], evidence_dir / "candidate/measurement/coverage.xml", base, candidate
             )
             for kind in ("lines", "branches"):
                 prior_total, current_total = getattr(before.counts, kind), getattr(after.counts, kind)
@@ -222,24 +317,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--base-commit", required=True)
     parser.add_argument("--candidate-commit", required=True)
+    parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     output = args.output
     try:
         if args.output is not None and (
-            args.output.exists() or args.output.resolve().is_relative_to(args.repo_root.resolve())
+            args.output.exists()
+            or args.output.resolve().is_relative_to(args.repo_root.resolve())
+            or args.output.resolve().is_relative_to(args.evidence_dir.resolve())
         ):
             output = None
             raise ValueError("transaction output must be a new path outside the checkout")
-        result = assure_coverage(args.repo_root, base=args.base_commit, candidate=args.candidate_commit)
+        result = assure_coverage(
+            args.repo_root,
+            base=args.base_commit,
+            candidate=args.candidate_commit,
+            evidence_dir=args.evidence_dir,
+        )
         payload = result.as_payload()
         code = int(bool(result.failures))
         if output is not None:
             with output.open("x") as stream:
                 stream.write(json.dumps(payload, sort_keys=True) + "\n")
             return code
-    except (ValueError, OSError) as exc:
-        payload = {"schema": "tc.fitness/coverage-transaction/v1", "status": "error", "error": str(exc)}
+    except Exception as exc:
+        payload = _error_payload(exc)
         code = 2
         if output is not None and not output.exists():
             try:

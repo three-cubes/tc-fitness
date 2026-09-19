@@ -450,7 +450,8 @@ The new self-assurance transaction measures both exact commits afresh:
 
 ```bash
 tc-fitness assure-coverage --base-commit <full-base-sha> \
-  --candidate-commit <full-head-sha> --output /external/path/result.json
+  --candidate-commit <full-head-sha> --evidence-dir /external/new-evidence \
+  --output /external/path/result.json
 ```
 
 It verifies HEAD and ancestry, creates two detached clean worktrees, runs the
@@ -469,6 +470,16 @@ and actual Python, Coverage.py, pytest and uv identities. The current trusted
 engine independently parses and adjudicates the reports. Its fixed pytest
 configuration registers tier names but does not load the candidate's tier
 plugin or candidate-selected pytest configuration.
+
+The evidence directory must be outside the checkout, new or empty and not a
+symlink. Per-side provisioning logs, Python/pytest/Coverage output, XML/JSON
+and `transaction.json` survive both success and failure; error output names
+the failing side/phase and relative native log paths. Only detached worktrees
+and their temporary environments are cleaned up. The controller recognises
+complete registered contract-fixture directories using its own manifest
+validator; those fixture cases run through their public contract tests rather
+than being collected as outer pytest modules. Malformed or unregistered
+directories remain subject to ordinary collection.
 
 Possible branch arcs come from Coverage.py's analysis of bound Python source.
 JSON executed/missing arcs must partition those opportunities, and XML must
