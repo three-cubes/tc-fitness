@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -68,6 +70,79 @@ def test_parser() -> None:
     assert True
 """
 
+_CONDITIONAL_AUGMENTATION = """
+import pytest
+
+pytestmark = pytest.mark.unit
+if True:
+    pytestmark += [pytest.mark.integration]
+
+def test_parser() -> None:
+    assert True
+"""
+
+_UNPACKED_REASSIGNMENT = """
+import pytest
+
+pytestmark = pytest.mark.unit
+pytestmark, other = pytest.mark.unit, pytest.mark.integration
+
+def test_parser() -> None:
+    assert True
+"""
+
+_PYTESTMARK_MUTATION = """
+import pytest
+
+pytestmark = [pytest.mark.unit]
+pytestmark.append(pytest.mark.integration)
+
+def test_parser() -> None:
+    assert True
+"""
+
+_STARRED_TIER_EXPRESSION = """
+import pytest
+
+pytestmark = [pytest.mark.unit, *[pytest.mark.integration]]
+
+def test_parser() -> None:
+    assert True
+"""
+
+_ALIASED_TIER_EXPRESSION = """
+import pytest
+
+other = pytest.mark.integration
+pytestmark = [pytest.mark.unit, other]
+
+def test_parser() -> None:
+    assert True
+"""
+
+_CLASS_TIER_DECORATOR = """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+@pytest.mark.integration
+class TestParser:
+    def test_parser(self) -> None:
+        assert True
+"""
+
+_CLASS_TIER_DECLARATION = """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+class TestParser:
+    pytestmark = pytest.mark.integration
+
+    def test_parser(self) -> None:
+        assert True
+"""
+
 _NO_TESTS = """
 import pytest
 
@@ -84,6 +159,26 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return p
+
+
+def _assert_canonical_rule_and_collection_reject(
+    tmp_path: Path,
+    body: str,
+    *,
+    expected_collection_exit: int = 0,
+) -> None:
+    path = _seed(tmp_path, "tests/test_x.py", body)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+    assert rule.run() == 1
+    collection = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert collection.returncode == expected_collection_exit, collection.stdout + collection.stderr
 
 
 def test_untagged_is_violation(tmp_path: Path) -> None:
@@ -131,6 +226,36 @@ def test_canonical_mode_rejects_repeated_module_markers(tmp_path: Path) -> None:
         {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
     )
     assert rule.collect_violations() == {Path("tests/test_x.py")}
+
+
+def test_canonical_mode_rejects_conditional_augmentation(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(
+        tmp_path, _CONDITIONAL_AUGMENTATION, expected_collection_exit=2
+    )
+
+
+def test_canonical_mode_rejects_unpacked_reassignment(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _UNPACKED_REASSIGNMENT)
+
+
+def test_canonical_mode_rejects_pytestmark_mutation(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _PYTESTMARK_MUTATION)
+
+
+def test_canonical_mode_rejects_starred_tier_expression(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _STARRED_TIER_EXPRESSION)
+
+
+def test_canonical_mode_rejects_aliased_tier_expression(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _ALIASED_TIER_EXPRESSION)
+
+
+def test_canonical_mode_rejects_class_tier_decorator(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _CLASS_TIER_DECORATOR)
+
+
+def test_canonical_mode_rejects_class_tier_declaration(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _CLASS_TIER_DECLARATION)
 
 
 def test_file_without_tests_passes(tmp_path: Path) -> None:
