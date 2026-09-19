@@ -660,6 +660,22 @@ def test_runtime_rejects_invalid_deselected_items(tmp_path: Path, selection: str
     assert "test_subject.py::test_parser: ['integration', 'unit']" in collection.stderr
 
 
+def test_runtime_rejects_invalid_item_created_then_deselected_by_collection_hook(tmp_path: Path) -> None:
+    _seed(
+        tmp_path,
+        "conftest.py",
+        "import pytest\ndef pytest_collection_modifyitems(config, items):\n"
+        "    added = pytest.Function.from_parent(items[0].parent, name='test_hook_added', callobj=lambda: None)\n"
+        "    added.add_marker(pytest.mark.contract)\n"
+        "    items.append(added)\n"
+        "    items.remove(added)\n"
+        "    config.hook.pytest_deselected(items=[added])\n",
+    )
+    collection = _collect_tiers(tmp_path, _MODULE_MARKER)
+    assert collection.returncode == 4, collection.stdout + collection.stderr
+    assert "test_subject.py::test_hook_added: ['contract', 'unit']" in collection.stderr
+
+
 def test_runtime_checks_markers_added_by_collection_hooks(tmp_path: Path) -> None:
     _seed(
         tmp_path,

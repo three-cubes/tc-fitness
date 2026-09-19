@@ -12,7 +12,7 @@ a sandbox against a plugin that disables assurance or changes markers later.
 
 from __future__ import annotations
 
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Sequence
 
 import pytest
 
@@ -38,6 +38,12 @@ def effective_tier_violations(items: Iterable[pytest.Item]) -> tuple[str, ...]:
 def pytest_itemcollected(item: pytest.Item) -> None:
     """Keep item references before selection so deselection cannot hide debt."""
     item.session.stash.setdefault(_COLLECTED_ITEMS, []).append(item)
+
+
+def pytest_deselected(items: Sequence[pytest.Item]) -> None:
+    """Retain hook-created items when a collection hook deselects them."""
+    for item in items:
+        item.session.stash.setdefault(_COLLECTED_ITEMS, []).append(item)
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
