@@ -13,7 +13,9 @@ import pytest
 from tc_fitness.core_checks._runtime_contracts import (
     CONTRACT_SCHEMA,
     ContractDocuments,
+    RuntimeContractRule,
     load_contract_documents,
+    load_runtime_document,
     resolve_contract,
 )
 
@@ -72,6 +74,79 @@ def test_missing_configured_contract_is_a_finding(tmp_path: Path) -> None:
     )
     assert documents is None
     assert {finding.code for finding in findings} == {"missing-file"}
+
+
+@pytest.mark.parametrize(
+    ("name", "body", "code"),
+    [
+        ("contract.json", b"\xff", "invalid-utf8"),
+        ("contract.json", b"[]", "wrong-document-shape"),
+        ("contract.json", b'{"value": 1e999}', "invalid-number"),
+        ("contract.yaml", b"\xff", "invalid-utf8"),
+        ("contract.yaml", b"- item\n", "wrong-document-shape"),
+        ("contract.yaml", b"key: [unterminated\n", "invalid-yaml"),
+        ("contract.txt", b"{}", "unsupported-format"),
+    ],
+)
+def test_runtime_document_rejects_invalid_public_inputs(
+    tmp_path: Path, name: str, body: bytes, code: str
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(body)
+    value, findings, _raw = load_runtime_document(path, expected_schema=None)
+    assert value is None
+    assert code in {finding.code for finding in findings}
+
+
+def test_empty_contract_config_is_inactive(tmp_path: Path) -> None:
+    assert load_contract_documents({}, repo_root=tmp_path) == (None, ())
+
+
+def test_required_evidence_needs_a_configured_path(tmp_path: Path) -> None:
+    _write_json(tmp_path / "contract.json", _selected_contract())
+    documents, findings = load_contract_documents(
+        {"contract_file": "contract.json"}, repo_root=tmp_path, require_evidence=True
+    )
+    assert documents is None
+    assert {finding.code for finding in findings} == {"missing-config"}
+
+
+def test_symlinked_contract_cannot_escape_repository(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-contract.json"
+    _write_json(outside, _selected_contract())
+    (tmp_path / "contract.json").symlink_to(outside)
+    try:
+        documents, findings = load_contract_documents({"contract_file": "contract.json"}, repo_root=tmp_path)
+    finally:
+        outside.unlink()
+    assert documents is None
+    assert {finding.code for finding in findings} == {"unsafe-config-path"}
+
+
+def test_runtime_contract_rule_public_base_behaviour(tmp_path: Path) -> None:
+    inactive = RuntimeContractRule.from_config({}, repo_root=tmp_path)
+    assert inactive.collect_findings() == ()
+    assert inactive.validate_configuration() == ()
+    assert (
+        inactive.validate_documents(
+            ContractDocuments(
+                contract_path=tmp_path / "contract.json",
+                contract=_selected_contract(),
+                contract_bytes=b"{}",
+                evidence_path=None,
+                evidence=None,
+                evidence_bytes=None,
+            )
+        )
+        == ()
+    )
+    assert inactive.run() == 0
+    with pytest.raises(ValueError, match="not configured"):
+        inactive.load_documents()
+
+    active = RuntimeContractRule.from_config({"contract_file": "missing.json"}, repo_root=tmp_path)
+    assert active.file_has_violation(tmp_path / "anything") is False
+    assert active.run() == 1
 
 
 def test_loader_preserves_exact_source_bytes(tmp_path: Path) -> None:
