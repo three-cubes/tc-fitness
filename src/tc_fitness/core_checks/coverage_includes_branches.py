@@ -6,12 +6,10 @@ half the logic. This rule asserts the coverage report carries non-zero branch
 coverage, so the floor it feeds (see :mod:`coverage_floor`) is measuring
 branches, not just lines.
 
-Shape note. This is a single-artifact assertion, not a per-file ratchet, so it
-overrides :meth:`enumerate_files` to yield the one coverage report and
-:meth:`is_in_scope` to admit it. The baseline machinery still applies (the
-report path can be grandfathered), but in practice the report is either
-branch-aware or it is not — there is nothing to grandfather, so the baseline
-stays empty and the gate FAILS the moment a real report reports zero branches.
+Shape note. This is a single-artifact assertion, so it overrides
+:meth:`enumerate_files` to yield the one coverage report and
+:meth:`is_in_scope` to admit it. The gate fails when the report records zero
+branches.
 
 Ported from tc-agent-zone ``scripts/checks/coverage_includes_branches.py``
 (FEAT-150 G4) — re-expressed as a configurable, repo-agnostic rule. The report

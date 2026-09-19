@@ -75,10 +75,10 @@ def test_excluded_segment_is_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
 
 
-def test_excluded_segments_overridable(tmp_path: Path) -> None:
+def test_excluded_segments_cannot_hide_a_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "src/vendor/bad.py", _BAD)
-    rule = build({"roots": ["src"], "excluded_segments": ["vendor"]}, repo_root=tmp_path)
-    assert rule.collect_violations() == set()
+    with pytest.raises(ValueError, match="excluded_segments"):
+        build({"roots": ["src"], "excluded_segments": ["vendor"]}, repo_root=tmp_path)
 
 
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:

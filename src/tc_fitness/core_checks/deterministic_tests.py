@@ -375,9 +375,8 @@ def format_failure(divergences: Sequence[Divergence]) -> str:
 class DeterministicTests(FitnessRule):
     """Gate that FAILS when a configured test suite is not run-to-run stable.
 
-    Unlike a file-scan rule this has no per-file baseline — non-determinism is
-    not a grandfatherable debt, it is a hard gate — so :meth:`run` is overridden
-    to drive the suite rather than compare a violation set against a baseline.
+    Unlike a file-scan rule this drives the configured suite directly, so
+    :meth:`run` is overridden to evaluate its process outcomes.
     """
 
     name = "deterministic-tests"

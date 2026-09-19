@@ -288,7 +288,6 @@ class EveryTestHasTierMarker(FitnessRule):
 
     #: Rule-specific knobs.
     tier_markers: tuple[str, ...] = DEFAULT_TIER_MARKERS
-    excluded_parts: tuple[str, ...] = DEFAULT_EXCLUDED_PARTS
     require_module_marker: bool = False
 
     @classmethod
@@ -302,8 +301,6 @@ class EveryTestHasTierMarker(FitnessRule):
         assert isinstance(rule, EveryTestHasTierMarker)  # noqa: S101  # narrowing for mypy
         markers = config.get("tier_markers")
         rule.tier_markers = tuple(markers) if markers is not None else DEFAULT_TIER_MARKERS
-        excluded = config.get("excluded_parts")
-        rule.excluded_parts = tuple(excluded) if excluded is not None else DEFAULT_EXCLUDED_PARTS
         rule.require_module_marker = bool(config.get("require_module_marker", False))
         return rule
 
@@ -312,7 +309,7 @@ class EveryTestHasTierMarker(FitnessRule):
         if not super().is_in_scope(rel):
             return False
         parts = Path(rel).parts
-        if any(part in self.excluded_parts for part in parts):
+        if any(part in DEFAULT_EXCLUDED_PARTS for part in parts):
             return False
         return Path(rel).name.startswith("test_")
 

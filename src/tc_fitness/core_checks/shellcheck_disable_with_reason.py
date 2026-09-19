@@ -7,10 +7,10 @@ has become a real bug. An inline rationale (or one on the immediately preceding
 to the Python suppression-rationale rule.
 
 Ported from kairix ``scripts/checks/check_shellcheck_disable_with_reason.py``
-(F33) and re-expressed as a configurable, repo-agnostic, baseline-gated rule.
+(F33) and re-expressed as a configurable, repo-agnostic rule.
 The disable-directive shape, the rationale markers, and the minimum rationale
 length are the rule's own shape (``DEFAULT_*``), overridable via config; the
-consumer supplies ``roots`` / ``exempt_files``. No repo paths are baked in.
+consumer supplies ``roots``. No repo paths are baked in.
 """
 
 from __future__ import annotations

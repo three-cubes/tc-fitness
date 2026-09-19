@@ -296,7 +296,7 @@ These three arguments are required together and cannot be combined with ordinary
 gate options. The fixture is copied into a temporary repository; its declared
 config and a single catalogue entry are passed to the existing runner. Fixtures
 must be contained beneath the manifest and cannot contain symlinks.
-Configuration must use fixture-relative paths and cannot select an external
+Configuration uses fixture-relative paths and cannot select an external
 rule name. Manifest bytes, parsed configuration, fixture digest and
 candidate identity are captured before dispatch. A changed manifest, original
 fixture or candidate source invalidates the run before a ledger can be published.
@@ -304,10 +304,9 @@ Every finding is a hard failure in contract and ordinary consumer execution;
 there is no baseline or adoption mode.
 Contract configuration also uses the reviewed per-CORE option inventory in
 `tc_fitness.check_contract_policy`. Unknown options fail closed: new aliases
-must be classified before assurance can use them. Adoption flags must be false,
-exclusion lists must be empty, and cutover, informational-job and test-filename
-exemption overrides are forbidden. OSV requires explicit `required: true`;
-mutation-report contracts require explicit `allow_missing_current: false`.
+must be classified before assurance can use them. Suppression and adoption
+options are rejected when present, including false or empty values. OSV
+requires explicit `required: true`.
 Tier-marker contracts require explicit `require_module_marker: true` so
 contract assurance cannot fall back to generic function-level classification.
 Mutation `baseline_report` is a bound input report, not a suppression list.

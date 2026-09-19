@@ -26,9 +26,7 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
 
 
 def _flags(p: Path) -> bool:
-    return file_mocks_internal_ts(
-        p, internal_packages=_INTERNAL, exempt_exact=_EXEMPT_EXACT, exempt_prefixes=_EXEMPT_PREFIXES
-    )
+    return file_mocks_internal_ts(p, internal_packages=_INTERNAL)
 
 
 def test_flags_relative_mock(tmp_path: Path) -> None:

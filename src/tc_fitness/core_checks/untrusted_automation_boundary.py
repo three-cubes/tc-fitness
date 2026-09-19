@@ -258,13 +258,7 @@ class UntrustedAutomationBoundary(FitnessRule):
         )
 
     def run(self) -> int:
-        """Hard gate: a credential boundary violation is never grandfathered.
-
-        A workflow may change without changing its filename, so a per-file
-        baseline would hide a fresh credential path added to a previously known
-        workflow. This check therefore evaluates the current workflow state on
-        every run and deliberately does not consult a baseline.
-        """
+        """Evaluate every configured workflow's current credential boundary."""
         violations = sorted(self.collect_violations(), key=lambda path: str(path))
         if not violations:
             print(f"ok [arch:{self._name}] — autonomous workflows are isolated from credentials.")

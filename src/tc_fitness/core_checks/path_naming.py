@@ -3,23 +3,20 @@
 Consistent path naming is a discoverability contract: a reader who knows the
 convention can predict where a file lives and what it is called. This rule flags
 a path whose NAME violates the convention configured for the root it sits under —
-``kebab-case`` for docs/dirs, ``snake_case`` for importable Python — while a
-ratcheted baseline grandfathers pre-existing offenders so adoption never breaks.
+``kebab-case`` for docs/dirs and ``snake_case`` for importable Python.
 
 The check inspects path NAMES, never file content. It enumerates every in-scope
 path and flags the ones whose stem/name fails the convention regex for its root,
-unless the name is on the always-allowed list (``README.md``, ``LICENSE``, …) or
-the path matches an exempt-segment.
+unless the name is a fixed conventional repository filename (``README.md``,
+``LICENSE``, …) or the path is generated dependency/cache output.
 
 Ported from tc-agent-zone ``scripts/checks/path_naming.py`` and re-expressed as a
 configurable, repo-agnostic rule. The donor hardcoded ``docs/``, ``scripts/checks``,
-the ADR pattern and a fixed allow-list; here EVERY convention is config:
+the ADR pattern and a fixed allow-list; here the governed roots are config:
 
 * ``kebab_roots`` — repo-relative prefixes whose ``.md`` files must be kebab-case.
 * ``snake_roots`` — repo-relative prefixes whose ``.py`` files must be snake_case
   (an importable module name).
-* ``allowed_names`` — exact filenames exempt from any convention.
-* ``exempt_segments`` — path segments (cache/build dirs) that drop a path.
 
 A consumer with no roots configured flags nothing.
 """
@@ -42,7 +39,7 @@ KEBAB_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SNAKE_RE = re.compile(r"^(__init__|_?[a-z0-9][a-z0-9_]*)\.py$")
 
 #: Filenames that are conventionally upper-case / fixed and exempt from the
-#: kebab/snake rules. Domain-intrinsic default, overridable via config.
+#: kebab/snake rules. This is part of the rule definition, not consumer config.
 DEFAULT_ALLOWED_NAMES: frozenset[str] = frozenset(
     {
         "README.md",
@@ -57,7 +54,7 @@ DEFAULT_ALLOWED_NAMES: frozenset[str] = frozenset(
     }
 )
 
-#: Cache/build segments that drop a path from scope. Overridable via config.
+#: Generated dependency/cache segments outside the authored-path domain.
 DEFAULT_EXEMPT_SEGMENTS: tuple[str, ...] = (
     ".git",
     ".github",
@@ -70,11 +67,7 @@ DEFAULT_EXEMPT_SEGMENTS: tuple[str, ...] = (
 )
 
 REMEDIATION = _remediation(
-    fix=(
-        "rename the path to lowercase kebab-case for docs/dirs or snake_case "
-        "for importable Python; or, if the offender pre-dates the rule, add a "
-        "justified entry to the baseline (it may only shrink)."
-    ),
+    fix=("rename the path to lowercase kebab-case for docs/dirs or snake_case for importable Python."),
     nxt="re-run this check to confirm the rename cleared the violation.",
     run="python -m tc_fitness.core_checks.path_naming",
     passing="docs/my-design-note.md   scripts/checks/my_check.py",
@@ -87,7 +80,6 @@ def name_violates_convention(
     *,
     kebab_roots: tuple[str, ...],
     snake_roots: tuple[str, ...],
-    allowed_names: frozenset[str],
 ) -> bool:
     """True iff repo-relative ``rel`` breaks the convention for its root.
 
@@ -97,7 +89,7 @@ def name_violates_convention(
     filenames are never flagged. A path under no configured root is clean.
     """
     name = rel.rsplit("/", 1)[-1]
-    if name in allowed_names:
+    if name in DEFAULT_ALLOWED_NAMES:
         return False
     if rel.endswith(".md") and rel.startswith(kebab_roots):
         stem = name[: -len(".md")]
@@ -118,8 +110,6 @@ class PathNaming(FitnessRule):
 
     kebab_roots: tuple[str, ...] = ()
     snake_roots: tuple[str, ...] = ()
-    allowed_names: frozenset[str] = DEFAULT_ALLOWED_NAMES
-    exempt_segments: tuple[str, ...] = DEFAULT_EXEMPT_SEGMENTS
 
     @classmethod
     def from_config(
@@ -136,16 +126,10 @@ class PathNaming(FitnessRule):
         snake = config.get("snake_roots")
         if snake is not None:
             rule.snake_roots = tuple(snake)
-        allowed = config.get("allowed_names")
-        if allowed is not None:
-            rule.allowed_names = frozenset(allowed)
-        segments = config.get("exempt_segments")
-        if segments is not None:
-            rule.exempt_segments = tuple(segments)
         return rule
 
     def is_in_scope(self, rel: str) -> bool:
-        if any(seg in self.exempt_segments for seg in rel.split("/")):
+        if any(seg in DEFAULT_EXEMPT_SEGMENTS for seg in rel.split("/")):
             return False
         # Scope is governed by the per-root conventions, not by ``roots``;
         # a path under no convention-root is simply never a violation.
@@ -157,7 +141,6 @@ class PathNaming(FitnessRule):
             rel,
             kebab_roots=self.kebab_roots,
             snake_roots=self.snake_roots,
-            allowed_names=self.allowed_names,
         )
 
     def enumerate_files(self) -> list[Path]:

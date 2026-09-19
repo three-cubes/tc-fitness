@@ -70,21 +70,20 @@ def test_missing_baseline_is_violation(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-def test_allow_missing_current_passes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("value", [True, False, []])
+def test_allow_missing_current_option_is_rejected(tmp_path: Path, value: object) -> None:
     _seed(tmp_path, "base.json", _VALID)
-    rule = build(
-        {"baseline_report": "base.json", "current_report": "cur.json", "allow_missing_current": True},
-        repo_root=tmp_path,
-    )
-    # baseline valid, current absent + tolerated → clean.
-    assert rule.collect_violations() == set()
-    assert rule.run() == 0
+    with pytest.raises(ValueError, match="allow_missing_current"):
+        build(
+            {"baseline_report": "base.json", "current_report": "cur.json", "allow_missing_current": value},
+            repo_root=tmp_path,
+        )
 
 
-def test_missing_current_when_required_is_violation(tmp_path: Path) -> None:
+def test_missing_current_is_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "base.json", _VALID)
     rule = build(
-        {"baseline_report": "base.json", "current_report": "cur.json", "allow_missing_current": False},
+        {"baseline_report": "base.json", "current_report": "cur.json"},
         repo_root=tmp_path,
     )
     assert rule.run() == 1

@@ -49,18 +49,18 @@ _RUNTIME_OPTIONS = frozenset(
 )
 
 # Exact options read by current CORE configuration paths. Suppressive options
-# stay visible in the inventory but must satisfy the strict policy below.
+# are absent so their presence is rejected as an unreviewed option.
 _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "actionable_feedback": frozenset({"markers"}),
     "adr_number_unique": frozenset({"record_dir", "record_pattern"}),
     "behavioural_evidence": frozenset({"behaviour_markers", "surface_globs", "claims"}),
     "bicep_arm_lint": frozenset(),
     "canonical_commit_identity": frozenset(
-        {"allowed_emails", "allowed_name_patterns", "base_ref", "head_ref", "cutover_ref"}
+        {"allowed_emails", "allowed_name_patterns", "base_ref", "head_ref"}
     ),
     "checkov_iac_security": frozenset({"scan_dir", "framework", "timeout"}),
     "ci_consumes_shared_gate": frozenset({"workflows_dir", "reusable_pattern", "engine_pattern"}),
-    "ci_fanin_parity": frozenset({"workflow", "aggregator_name", "informational_marker"}),
+    "ci_fanin_parity": frozenset({"workflow", "aggregator_name"}),
     "ci_silencers_have_rationale": frozenset(
         {"rationale_tokens", "silencer_patterns", "window", "workflows_dir", "scan_files"}
     ),
@@ -74,43 +74,43 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     ),
     "empty_body_intent": frozenset({"marker"}),
     "engine_version_floor": frozenset({"floor", "package"}),
-    "every_test_has_tier_marker": frozenset({"tier_markers", "excluded_parts", "require_module_marker"}),
+    "every_test_has_tier_marker": frozenset({"tier_markers", "require_module_marker"}),
     "harness_canon_reference": frozenset(
         {"repo_type", "required_files", "banner_marker", "standards_ref_pattern", "banner_path"}
     ),
     "integrity_state_predicate": frozenset({"state_tables"}),
     "license_present": frozenset({"markers", "header_lines"}),
-    "mutation_survival_ratchet": frozenset({"baseline_report", "current_report", "allow_missing_current"}),
+    "mutation_survival_ratchet": frozenset({"baseline_report", "current_report"}),
     "new_code_coverage": frozenset({"floor_pct", "coverage_report", "base_ref"}) | _COVERAGE_EVIDENCE_OPTIONS,
     "no_commented_out_code": frozenset({"min_run"}),
     "no_duplicate_string": frozenset({"min_length", "min_occurrences"}),
     "no_env_monkeypatch": frozenset({"env_prefixes"}),
-    "no_hardcoded_repo_paths": frozenset({"needles", "exempt_extensions", "exempt_prefixes"}),
-    "no_internal_monkeypatch": frozenset({"internal_packages", "exempt_roots"}),
-    "no_internal_patches": frozenset({"internal_roots", "exempt_roots"}),
-    "no_internal_patches_ts": frozenset({"internal_packages", "exempt_specifiers", "exempt_prefixes"}),
+    "no_hardcoded_repo_paths": frozenset({"needles"}),
+    "no_internal_monkeypatch": frozenset({"internal_packages"}),
+    "no_internal_patches": frozenset({"internal_roots"}),
+    "no_internal_patches_ts": frozenset({"internal_packages"}),
     "no_language_suffix_in_package_names": frozenset(
         {"boundary_roots", "marker_roots", "marker_file", "forbidden_suffixes"}
     ),
     "no_llm_attribution": frozenset(),
     "no_logging_secrets": frozenset({"secret_patterns", "log_methods", "direct_sinks"}),
     "no_noop_test_scripts": frozenset(
-        {"prod_package_prefixes", "skip_parts", "placeholder_pattern", "real_runner_pattern"}
+        {"prod_package_prefixes", "placeholder_pattern", "real_runner_pattern"}
     ),
-    "no_production_suppressions": frozenset({"suppression_patterns", "exempt_prefixes", "test_file_regex"}),
+    "no_production_suppressions": frozenset({"suppression_patterns"}),
     "no_real_names": frozenset({"tokens", "substitutions", "scope_segments"}),
     "no_test_doubles_in_runtime_tiers": frozenset({"runtime_markers", "forbidden_keyword_arguments"}),
     "no_test_imports_in_prod": frozenset({"forbidden_import_roots"}),
-    "no_test_only_kwargs": frozenset({"seam_suffixes", "exempt_keys"}),
+    "no_test_only_kwargs": frozenset({"seam_suffixes"}),
     "osv_scanner_sca": frozenset({"scanner_version", "lockfiles", "required", "timeout"}),
-    "path_naming": frozenset({"kebab_roots", "snake_roots", "allowed_names", "exempt_segments"}),
+    "path_naming": frozenset({"kebab_roots", "snake_roots"}),
     "pattern_chokepoint": frozenset({"patterns", "chokepoint_files"}),
-    "posix_path_serialisation": frozenset({"excluded_segments"}),
-    "readme_resolver_coverage": frozenset({"resolver_file", "exempt_dirs"}),
+    "posix_path_serialisation": frozenset(),
+    "readme_resolver_coverage": frozenset({"resolver_file"}),
     "runtime_evidence_contract": _RUNTIME_OPTIONS,
     "runtime_filesystem_contract": _RUNTIME_OPTIONS,
     "schema_conformance": frozenset({"required_keys"}),
-    "script_help_smoke": frozenset({"skip_dir_segments", "help_timeout_seconds", "python_executable"}),
+    "script_help_smoke": frozenset({"help_timeout_seconds", "python_executable"}),
     "shellcheck_disable_with_reason": frozenset({"rationale_markers", "min_rationale_len"}),
     "sonar_ignore_rationale": frozenset({"sonar_file", "rule_key_pattern"}),
     "suppressions_have_rationale": frozenset({"bare_patterns"}),
@@ -138,23 +138,6 @@ _CUSTOM_CONFIGURATION = frozenset(
         "runtime_filesystem_contract",
     }
 )
-_EXCLUSIONS = frozenset(
-    {
-        "exempt_files",
-        "exempt_roots",
-        "exempt_specifiers",
-        "exempt_prefixes",
-        "exempt_segments",
-        "exempt_keys",
-        "exempt_dirs",
-        "exempt_extensions",
-        "excluded_segments",
-        "excluded_parts",
-        "skip_parts",
-        "skip_dir_segments",
-        "allowed_names",
-    }
-)
 
 
 def validate_contract_configuration(check: str, config: Mapping[str, object]) -> None:
@@ -168,13 +151,6 @@ def validate_contract_configuration(check: str, config: Mapping[str, object]) ->
     unknown = set(config) - allowed
     if unknown:
         raise CheckContractError(f"unreviewed contract configuration option(s): {', '.join(sorted(unknown))}")
-    for key, value in config.items():
-        if key in _EXCLUSIONS and value != []:
-            raise CheckContractError(f"contract configuration {key} must be an empty exclusion list")
-        if key in {"cutover_ref", "informational_marker", "test_file_regex"}:
-            raise CheckContractError(f"contract configuration cannot use adoption option {key}")
-    if name == "mutation_survival_ratchet" and config.get("allow_missing_current") is not False:
-        raise CheckContractError("mutation contract requires allow_missing_current=false")
     if name == "osv_scanner_sca" and config.get("required") is not True:
         raise CheckContractError("OSV contract requires required=true")
     if name == "every_test_has_tier_marker" and config.get("require_module_marker") is not True:

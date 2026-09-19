@@ -46,14 +46,14 @@ def test_empty_patterns_and_unreadable_sources_are_clean(tmp_path: Path) -> None
     assert file_contains_suppression(binary, ("# noqa:",)) is False
 
 
-def test_exempt_prefix_skips_file(tmp_path: Path) -> None:
+def test_exempt_prefix_cannot_hide_a_suppression(tmp_path: Path) -> None:
     _seed(tmp_path, "src/app.py", _SUPPRESSED)
     _seed(tmp_path, "scripts/tool.py", _SUPPRESSED)
-    rule = NoProductionSuppressions.from_config(
-        {"roots": ["src", "scripts"], "exempt_prefixes": ["scripts/"]},
-        repo_root=tmp_path,
-    )
-    assert {str(p) for p in rule.collect_violations()} == {"src/app.py"}
+    with pytest.raises(ValueError, match="exempt_prefixes"):
+        NoProductionSuppressions.from_config(
+            {"roots": ["src", "scripts"], "exempt_prefixes": ["scripts/"]},
+            repo_root=tmp_path,
+        )
 
 
 def test_test_file_basename_is_exempt(tmp_path: Path) -> None:

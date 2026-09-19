@@ -108,13 +108,13 @@ def test_suffixes_are_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in custom.collect_violations()} == {"scripts/m.py"}
 
 
-def test_exempt_keys_allow_documented_seam(tmp_path: Path) -> None:
+def test_exempt_keys_cannot_hide_a_test_only_seam(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/router.py", _SEAM)
-    rule = NoTestOnlyKwargs.from_config(
-        {"roots": ["scripts"], "exempt_keys": ["scripts/router.py::route::clock_fn"]},
-        repo_root=tmp_path,
-    )
-    assert rule.collect_violations() == set()
+    with pytest.raises(ValueError, match="exempt_keys"):
+        NoTestOnlyKwargs.from_config(
+            {"roots": ["scripts"], "exempt_keys": ["scripts/router.py::route::clock_fn"]},
+            repo_root=tmp_path,
+        )
 
 
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:

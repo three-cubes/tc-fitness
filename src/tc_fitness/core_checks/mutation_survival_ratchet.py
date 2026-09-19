@@ -2,19 +2,14 @@
 
 A mutation report records, per package, how many injected mutants the suite
 KILLED versus how many SURVIVED. A rising survival rate means the suite is
-getting weaker. The full ratchet compares a current report against a frozen
-baseline with commit-message overrides — but that comparison is git-coupled and
-override-grammar-coupled, so the engine ports only the SCOPE the task names:
-the file-shape contract plus the ``--allow-missing-current`` adoption pass.
+getting weaker. This check binds both the accepted comparison report and the
+current-run report as required evidence inputs.
 
 What this CORE rule enforces:
 
 * the baseline report exists and obeys the contract (``schema_version == 1`` and
   a ``packages`` object) — a malformed baseline is a violation;
-* the current report, WHEN PRESENT, obeys the same contract;
-* the current report being ABSENT is tolerated (the adoption pass): a consumer
-  wiring the ratchet before any mutation run has produced a report still passes
-  the shape gate.
+* the current report exists and obeys the same contract.
 
 The git-diff comparison + override grammar are deliberately NOT ported (they are
 repo-coupled); a consumer that wants enforcement runs its own comparison on the
@@ -60,8 +55,7 @@ REMEDIATION = _remediation(
 def report_is_malformed(path: Path) -> bool:
     """True iff the report at ``path`` violates the shape contract.
 
-    A non-existent file is NOT judged here (the caller decides whether a missing
-    report is tolerated). A present file must be valid JSON declaring
+    A non-existent file is reported by the caller. A present file must be valid JSON declaring
     ``schema_version == REQUIRED_SCHEMA_VERSION`` with a ``packages`` mapping;
     anything else is malformed.
     """
@@ -88,9 +82,6 @@ class MutationSurvivalRatchet(FitnessRule):
     #: Rule-specific knobs — instance attrs so ``from_config`` overrides them.
     baseline_report: str = DEFAULT_BASELINE_REPORT
     current_report: str = DEFAULT_CURRENT_REPORT
-    #: When True, an absent current report passes (the adoption pass). The
-    #: baseline must always exist and validate.
-    allow_missing_current: bool = True
 
     @classmethod
     def from_config(
@@ -99,12 +90,11 @@ class MutationSurvivalRatchet(FitnessRule):
         *,
         repo_root: Path | None = None,
     ) -> MutationSurvivalRatchet:
-        """Build from config, reading the report paths + the adoption flag."""
+        """Build from config, reading both required report paths."""
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, MutationSurvivalRatchet)  # noqa: S101  # narrowing for mypy
         rule.baseline_report = str(config.get("baseline_report", DEFAULT_BASELINE_REPORT))
         rule.current_report = str(config.get("current_report", DEFAULT_CURRENT_REPORT))
-        rule.allow_missing_current = bool(config.get("allow_missing_current", True))
         return rule
 
     def _abs(self, rel: str) -> Path:
@@ -114,25 +104,16 @@ class MutationSurvivalRatchet(FitnessRule):
     def enumerate_files(self) -> list[Path]:
         """The two report artifacts this rule judges: baseline + current.
 
-        The baseline is always enumerated (its absence is itself a violation, so
-        ``file_has_violation`` can flag it). The current report is enumerated
-        only when it exists OR when the adoption flag is off — when the flag is
-        on and the file is absent, it is dropped so nothing flags it.
+        Both are always enumerated because either absence is a violation.
         """
-        out = [self._abs(self.baseline_report)]
-        current = self._abs(self.current_report)
-        if current.exists() or not self.allow_missing_current:
-            out.append(current)
-        return out
+        return [self._abs(self.baseline_report), self._abs(self.current_report)]
 
     def is_in_scope(self, rel: str) -> bool:
         """Admit the configured report paths regardless of location."""
         return True
 
     def file_has_violation(self, path: Path) -> bool:
-        # Any report that reaches this point is REQUIRED to exist (the adoption
-        # pass drops a tolerated-absent current from enumeration). An absent
-        # required report is a violation; a present one must validate.
+        # Both configured reports are required; a present one must validate.
         if not path.exists():
             return True
         return report_is_malformed(path)

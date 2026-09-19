@@ -26,7 +26,6 @@ def test_detection_bad_kebab_md() -> None:
             "docs/MyNote.md",
             kebab_roots=("docs/",),
             snake_roots=(),
-            allowed_names=frozenset(),
         )
         is True
     )
@@ -38,7 +37,6 @@ def test_detection_good_kebab_md() -> None:
             "docs/my-note.md",
             kebab_roots=("docs/",),
             snake_roots=(),
-            allowed_names=frozenset(),
         )
         is False
     )
@@ -50,7 +48,6 @@ def test_detection_bad_snake_py() -> None:
             "scripts/My-Check.py",
             kebab_roots=(),
             snake_roots=("scripts/",),
-            allowed_names=frozenset(),
         )
         is True
     )
@@ -62,7 +59,6 @@ def test_detection_good_snake_py() -> None:
             "scripts/my_check.py",
             kebab_roots=(),
             snake_roots=("scripts/",),
-            allowed_names=frozenset(),
         )
         is False
     )
@@ -74,7 +70,6 @@ def test_allowed_name_exempt() -> None:
             "docs/README.md",
             kebab_roots=("docs/",),
             snake_roots=(),
-            allowed_names=frozenset({"README.md"}),
         )
         is False
     )
@@ -86,7 +81,6 @@ def test_path_under_no_root_is_clean() -> None:
             "vendor/BadName.md",
             kebab_roots=("docs/",),
             snake_roots=(),
-            allowed_names=frozenset(),
         )
         is False
     )
