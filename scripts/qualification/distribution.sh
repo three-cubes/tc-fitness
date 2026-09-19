@@ -109,6 +109,7 @@ qualify() {
   uv pip install --python "$environment/bin/python" --require-hashes -r "$runtime_requirements"
   uv pip install --no-deps --no-index --python "$environment/bin/python" "$wheel"
 
+  "$environment/bin/python" -c 'import coverage'
   "$environment/bin/tc-fitness" --help >/dev/null
   "$environment/bin/tc-fitness" run --repo-root "$fixture_dir"
   "$environment/bin/tc-fitness-runtime-contract" --help >/dev/null

@@ -1,6 +1,6 @@
 """Exact-source coverage evidence shared by the existing CORE admission checks.
 
-Strict measurement requires Coverage.py (available in the development extra).
+Strict measurement requires Coverage.py (a direct runtime dependency).
 It uses Coverage.py's executable-statement analysis, not an approximate Python
 interpreter or report-line intersection that could omit executable source.
 """
