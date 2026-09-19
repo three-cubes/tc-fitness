@@ -26,14 +26,26 @@ enforce this metadata contract.
 
 ## Run the gate before every push
 
-Run `uv run tc-fitness run` and get it green. Local matches CI by construction —
-both run this same catalogue. Run the repo's own pytest where the gate does not:
+Use the Make targets that CI composes from the same repository configuration:
 
 ```bash
-uv sync --locked --all-extras --all-groups
-uv run tc-fitness run
-uv run pytest tests/ -q
+make prepare
+# Commit every preparation change and every candidate byte before evaluation.
+make check
 ```
+
+`make prepare` syncs the lock and applies deterministic ruff fixes and
+formatting. `make check` withholds evaluation from a dirty or uncommitted tree,
+runs the static catalogue, then measures and admits the exact merge base and
+candidate commit in isolated checkouts. Set `TC_FITNESS_BASE_COMMIT` when the
+caller already has an exact trusted base SHA. The evidence directory is created
+outside the checkout; set absolute `TC_FITNESS_EVIDENCE_DIR` to retain it at a
+specific location.
+
+Use `make smoke` for the under-60-second staged feedback loop. Smoke evidence is
+never accepted as coverage-assurance evidence. `make check-static` runs only
+ruff, format verification, mypy and branch naming; CI runs that target across
+the Python matrix and runs the full coverage transaction once.
 
 ## Open the PR and merge
 
