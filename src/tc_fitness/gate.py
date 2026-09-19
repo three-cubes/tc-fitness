@@ -63,7 +63,7 @@ from tc_fitness.gate_config import (
     load_core_check_configs,
     plan_stages,
 )
-from tc_fitness.runner import Colours, main_cli, paths_from_file
+from tc_fitness.runner import Colours, dispatches_in_process, main_cli, paths_from_file
 
 _RED = Colours.RED
 _GREEN = Colours.GREEN
@@ -297,8 +297,8 @@ def _run_catalogue_step(
     if establish_baseline:
         argv.append("--establish-baseline")
     core_check_configs = load_core_check_configs(repo_root)
-    if step.baseline_free and any(str(getattr(rule, "script", "")).endswith(".sh") for rule in rules):
-        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance cannot dispatch shell checks")
+    if step.baseline_free and any(not dispatches_in_process(rule) for rule in rules):
+        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance requires in-process checks")
         return StepResult(step.id, "fail")
     with baseline_free_execution() if step.baseline_free else nullcontext():
         rc = main_cli(

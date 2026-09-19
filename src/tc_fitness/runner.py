@@ -444,7 +444,7 @@ def resolve_script(entry: RuleEntry) -> str:
     return f"check_{entry.check}.py"
 
 
-def _dispatches_in_process(entry: RuleEntry) -> bool:
+def dispatches_in_process(entry: RuleEntry) -> bool:
     """True iff ``entry``'s check runs in-process (pure-python, no runtime
     arg). A ``.sh`` script or a check declaring a ``subprocess_arg_env`` runs
     as a guarded subprocess instead. An engine CORE check is always pure-python
@@ -467,12 +467,12 @@ def _runs_in_process(entry: RuleEntry, cfg: RunnerConfig) -> bool:
 
     ``dispatch="subprocess"`` otherwise forces EVERY check — python included —
     onto the guarded subprocess path (taz's pure-consumer mode). Otherwise the
-    v0.3.0 per-entry rule (:func:`_dispatches_in_process`) applies."""
+    v0.3.0 per-entry rule (:func:`dispatches_in_process`) applies."""
     if is_core_check(entry):
         return True
     if cfg.dispatch == "subprocess":
         return False
-    return _dispatches_in_process(entry)
+    return dispatches_in_process(entry)
 
 
 def _conditional_arg_path(entry: RuleEntry, cfg: RunnerConfig) -> Path | None:
@@ -1387,6 +1387,7 @@ __all__ = [
     "SkipLineFn",
     "make_env_path_conditional_check",
     "resolve_script",
+    "dispatches_in_process",
     "is_core_check",
     "core_module_name",
     "staged_paths",
