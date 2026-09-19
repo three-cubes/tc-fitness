@@ -54,7 +54,9 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     ),
     "cognitive_complexity": frozenset({"threshold"}),
     "contract_change_has_test": frozenset({"contract_surface", "test_globs", "base_ref"}),
-    "coverage_floor": frozenset({"floor_pct", "coverage_report"}),
+    "coverage_floor": frozenset(
+        {"floor_pct", "coverage_report", "branch_floor_pct", "critical_branch_files"}
+    ),
     "coverage_includes_branches": frozenset({"coverage_report"}),
     "deterministic_tests": frozenset(
         {"seed", "repeats", "order_seeds", "test_command", "use_randomly", "timeout_seconds"}
