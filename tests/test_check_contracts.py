@@ -552,6 +552,36 @@ dependencies: []
         load_check_contract(manifest)
 
 
+def test_rejects_an_unhashable_yaml_mapping_key_as_a_contract_error(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path / "example_check" / "contract.yaml",
+        """
+? [a]
+: ignored
+schema: tc.fitness/check-contract/v1
+check: core:example_check
+config: {}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: example-check
+          path: src/broken.py
+          message_contains: required behaviour is missing
+dependencies: []
+""",
+    )
+
+    with pytest.raises(CheckContractError, match=r"(?s)invalid YAML.*unhashable YAML mapping key"):
+        load_check_contract(manifest)
+
+
 @pytest.mark.parametrize(
     ("core_checks", "contracts_root", "match"),
     [
