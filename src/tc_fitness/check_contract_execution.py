@@ -41,7 +41,7 @@ def payload_digest(value: object) -> str:
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def tree_digest(root: Path, *, ignore_caches: bool = False) -> str:
+def tree_digest(root: Path, *, ignore_caches: bool = False, ignore_native_results: bool = False) -> str:
     """Bind names, bytes, file permissions and empty directory presence."""
     files = {
         path.relative_to(root).as_posix(): {
@@ -50,6 +50,12 @@ def tree_digest(root: Path, *, ignore_caches: bool = False) -> str:
         }
         for path in sorted(root.rglob("*"))
         if not (ignore_caches and "__pycache__" in path.relative_to(root).parts)
+        if not (
+            ignore_native_results
+            and path.name.endswith(".py.meta")
+            and path.is_file()
+            and path.with_suffix("").is_file()
+        )
     }
     return payload_digest(files)
 
@@ -58,7 +64,8 @@ def candidate_identity() -> dict[str, str]:
     """Identity of the executing package, including uncommitted source changes."""
     return {
         "package_version": version("three-cubes-fitness"),
-        "source_digest": tree_digest(Path(__file__).parent, ignore_caches=True),
+        # Native worker result sidecars change during execution, not candidate inputs.
+        "source_digest": tree_digest(Path(__file__).parent, ignore_caches=True, ignore_native_results=True),
     }
 
 

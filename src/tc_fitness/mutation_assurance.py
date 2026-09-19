@@ -292,6 +292,14 @@ def execute_mutation(
     return receipt
 
 
+def _validate_execution_timestamps(receipt: dict[str, Any], now: datetime) -> None:
+    """Check the closed freshness interval against the admission clock reading."""
+    started = datetime.fromisoformat(receipt["started_at"])
+    finished = datetime.fromisoformat(receipt["finished_at"])
+    if not started <= finished <= now or (now - finished).total_seconds() > 86400:
+        raise MutationError("stale or reversed mutation execution timestamps")
+
+
 def validate_mutation_receipt(
     root: Path, base: str, head: str, output: Path, *, run_id: str, attempt: int, broad: bool = False
 ) -> dict[str, Any]:
@@ -308,11 +316,7 @@ def validate_mutation_receipt(
             raise MutationError(f"mutation receipt {key} mismatch")
     try:
         UUID(receipt["execution_id"])
-        started = datetime.fromisoformat(receipt["started_at"])
-        finished = datetime.fromisoformat(receipt["finished_at"])
-        now = datetime.now(UTC)
-        if not started <= finished <= now or (now - finished).total_seconds() > 86400:
-            raise MutationError("stale or reversed mutation execution timestamps")
+        _validate_execution_timestamps(receipt, datetime.now(UTC))
     except (KeyError, TypeError, ValueError) as exc:
         raise MutationError("invalid mutation execution identity or timestamps") from exc
     artifacts = _artifacts(output)

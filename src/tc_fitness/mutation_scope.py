@@ -104,7 +104,7 @@ def archive_executables(archive: bytes) -> list[str]:
 
 def read_policy(files: dict[str, bytes]) -> dict[str, Any]:
     try:
-        value = tomllib.loads(files["mutation.toml"].decode("utf-8"))
+        value = tomllib.loads(files["mutation.toml"].decode())
     except (KeyError, ValueError) as exc:
         raise MutationError("tracked mutation.toml policy is required") from exc
     if set(value) != {"schema", "source_roots", "tests", "timeout_seconds", "max_mutants"}:
@@ -133,8 +133,8 @@ def read_policy(files: dict[str, bytes]) -> dict[str, Any]:
             raise MutationError(f"{key} must be bounded between 1 and {ceiling}")
     if any(
         root == test or root.startswith(test + "/") or test.startswith(root + "/")
-        for root in value["source_roots"]
-        for test in value["tests"]
+        for root in (path.rstrip("/") for path in value["source_roots"])
+        for test in (path.rstrip("/") for path in value["tests"])
     ):
         raise MutationError("production roots and test paths must be disjoint")
     return value
