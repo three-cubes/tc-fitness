@@ -1,0 +1,5 @@
+schema = "tc.fitness/mutation-policy/v1"
+source_roots = ["src"]
+tests = ["tests"]
+timeout_seconds = 180
+max_mutants = 100000

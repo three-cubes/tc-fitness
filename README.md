@@ -90,6 +90,52 @@ The full branch / commit / PR / merge procedure is canon in
 [tc-pipelines `governance/standards/development-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/development-workflow.md);
 this repo's contributor specifics live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Changed-code mutation assurance
+
+Install the locked dev extra to obtain the pinned native mutation tool. The same
+public command runs locally and in the blocking `changed-mutation` CI worker:
+
+```bash
+uv run --no-sync tc-fitness mutation check \
+  --base FULL_BASE_COMMIT --head FULL_TESTED_COMMIT \
+  --output .mutation/changed --run-id LOCAL_OR_WORKFLOW_RUN --attempt 1
+```
+
+Both commits must exist locally, the base must be an ancestor of the tested
+commit, and the tracked checkout must exactly match that commit. The tracked
+`mutation.toml` declares production roots, real test paths, a hard process
+deadline and a post-execution mutant-count admission ceiling. No exclusions,
+survivor acknowledgements, coverage-only selection or mutation suppressions are
+accepted. Each attempt needs a fresh output directory; failed evidence is kept.
+
+Selection compares production function definitions and includes their dependency
+closure. Module-level changes select the module's functions; unresolved dynamic
+dispatch expands conservatively. Native mutmut generates function-body mutants,
+not arbitrary module-initialisation edits. A required scope with no generated
+mutants fails closed. Documentation-only changes record `not-required` in
+`selection.json`; they do not manufacture a mutation-pass receipt.
+
+Every selected native mutant must have a real test association and terminal
+killed result. Survivors, untested mutants, timeouts, missing native records and
+tool errors block admission. The receipt binds both commits, Git archive digests,
+selected definitions, policy, engine, pinned tool, run and attempt. It retains
+native generated sources, result maps, test associations and diagnostic logs.
+The validator checks these artifacts rather than parsing console summaries:
+
+```bash
+uv run --no-sync tc-fitness mutation verify \
+  --base FULL_BASE_COMMIT --head FULL_TESTED_COMMIT \
+  --output .mutation/changed/run --run-id LOCAL_OR_WORKFLOW_RUN --attempt 1
+```
+
+`plan` writes selection without execution; `run` requires nonempty mutation scope.
+`check --broad` selects the whole package, also used by the scheduled broad lane.
+For broad receipt verification, pass `--broad` to `verify` too. Receipts expire
+after 24 hours. Release admission must obtain artifacts from an authorised exact
+workflow run, supply the expected identities independently, and require broad
+proof when mutation execution or test-selection logic changes. Artifact digests
+are integrity bindings, not a substitute for trusted workflow provenance.
+
 ## What to expect
 
 - **Green auto-merges — except here.** The platform default is auto-merge on a

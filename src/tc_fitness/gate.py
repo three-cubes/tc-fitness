@@ -660,11 +660,17 @@ def main(argv: list[str] | None = None) -> int:
       ``--changed-files-from PATH`` runs the same smoke tier against a CI
       supplied PR-diff file list.
     """
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "mutation":
+        from tc_fitness.mutation_assurance import main as mutation_main
+
+        return mutation_main(arguments[1:])
     parser = argparse.ArgumentParser(
         prog="tc-fitness",
         description="The single runnable quality gate — local == CI by construction.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("mutation", help="produce or verify exact-candidate native mutation assurance")
     run_p = sub.add_parser("run", help="run the repo's declared [tool.tc_fitness] gate")
     run_p.add_argument("--contract", type=Path, help="execute a check-contract manifest case")
     run_p.add_argument("--case", help="case id within --contract")
