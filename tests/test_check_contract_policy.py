@@ -106,6 +106,78 @@ def test_osv_contract_requires_explicit_strict_scanning(tmp_path: Path) -> None:
     assert not ledger.exists()
 
 
+def tier_contract(root: Path, config: dict[str, object]) -> Path:
+    manifest = contract_for(root, "core:every_test_has_tier_marker", {"roots": ["tests"], **config})
+    for case, declaration in (
+        ("compliant", "pytestmark = pytest.mark.unit\n\n"),
+        ("violation", "@pytest.mark.unit\n"),
+    ):
+        tests = root / case / "tests"
+        tests.mkdir()
+        (tests / "test_subject.py").write_text(
+            "import pytest\n" + declaration + "def test_subject():\n    assert True\n"
+        )
+    data = yaml.safe_load(manifest.read_text())
+    data["cases"][1]["expected"]["findings"] = [
+        {"rule": "every-test-has-tier-marker", "path": "tests/test_subject.py", "message_contains": "fix:"}
+    ]
+    manifest.write_text(yaml.safe_dump(data))
+    return manifest
+
+
+@pytest.mark.parametrize("mode", [False, None, "true", 1])
+def test_tier_contract_requires_explicit_canonical_mode(tmp_path: Path, mode: object) -> None:
+    config = {} if mode is None else {"require_module_marker": mode}
+    manifest = tier_contract(tmp_path, config)
+    ledger = tmp_path / "ledger.json"
+    result = invoke(manifest, "compliant", ledger, timeout=10)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "tier contract requires require_module_marker=true" in result.stderr
+    assert not ledger.exists()
+    with pytest.raises(CheckContractError, match="tier contract requires require_module_marker=true"):
+        validate_contract_ledger(
+            manifest, "compliant", ledger, process_exit=2, started_after=datetime.now(UTC)
+        )
+
+
+def test_canonical_tier_contract_accepts_true_and_keeps_real_violation(tmp_path: Path) -> None:
+    manifest = tier_contract(tmp_path, {"require_module_marker": True})
+    for case, expected_exit in (("compliant", 0), ("violation", 1)):
+        ledger = tmp_path / f"{case}.json"
+        started = datetime.now(UTC)
+        result = invoke(manifest, case, ledger, timeout=10)
+        assert result.returncode == expected_exit, result.stdout + result.stderr
+        validate_contract_ledger(manifest, case, ledger, process_exit=expected_exit, started_after=started)
+
+
+@pytest.mark.parametrize("mode", [False, None])
+def test_ordinary_consumer_keeps_generic_function_tiers(tmp_path: Path, mode: bool | None) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_subject.py").write_text(
+        "import pytest\n@pytest.mark.unit\ndef test_subject():\n    assert True\n"
+    )
+    (tmp_path / "consumer_checks.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "ENTRIES = (RuleEntry(id='tiers', gate='tiers', check='core:every_test_has_tier_marker'),)\n"
+    )
+    config = (
+        "[[steps]]\nid = 'tiers'\ncatalogue = 'consumer_checks:ENTRIES'\n"
+        "[core_checks.every_test_has_tier_marker]\nroots = ['tests']\n"
+    )
+    if mode is False:
+        config += "require_module_marker = false\n"
+    (tmp_path / ".tc-fitness.toml").write_text(config)
+    result = subprocess.run(
+        [str(Path(sys.executable).with_name("tc-fitness")), "run", "--repo-root", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_validator_rejects_a_check_without_reviewed_configuration(tmp_path: Path) -> None:
     manifest = contract_for(tmp_path, "core:unreviewed_check", {})
     with pytest.raises(CheckContractError, match="no reviewed contract configuration"):

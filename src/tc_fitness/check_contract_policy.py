@@ -61,7 +61,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     ),
     "empty_body_intent": frozenset({"marker"}),
     "engine_version_floor": frozenset({"floor", "package"}),
-    "every_test_has_tier_marker": frozenset({"tier_markers", "excluded_parts"}),
+    "every_test_has_tier_marker": frozenset({"tier_markers", "excluded_parts", "require_module_marker"}),
     "harness_canon_reference": frozenset(
         {"repo_type", "required_files", "banner_marker", "standards_ref_pattern", "banner_path"}
     ),
@@ -166,3 +166,5 @@ def validate_contract_configuration(check: str, config: Mapping[str, object]) ->
         raise CheckContractError("mutation contract requires allow_missing_current=false")
     if name == "osv_scanner_sca" and config.get("required") is not True:
         raise CheckContractError("OSV contract requires required=true")
+    if name == "every_test_has_tier_marker" and config.get("require_module_marker") is not True:
+        raise CheckContractError("tier contract requires require_module_marker=true")
