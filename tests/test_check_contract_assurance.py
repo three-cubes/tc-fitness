@@ -58,6 +58,63 @@ def test_only_unavailable_case_may_change_the_process_search_path(tmp_path: Path
         load_check_contract(manifest)
 
 
+def test_versioned_git_environment_accepts_bound_fast_import_history(tmp_path: Path) -> None:
+    from tc_fitness.check_contracts import load_check_contract
+
+    manifest = make_contract(tmp_path)
+    data = yaml.safe_load(manifest.read_text())
+    data["cases"][0]["environment"] = {
+        "schema": "tc.fitness/check-environment/v2",
+        "path": "inherit",
+        "git": {
+            "schema": "tc.fitness/git-fixture/v1",
+            "history": ".contract/git.fast-import",
+            "checkout": "refs/heads/candidate",
+        },
+    }
+    manifest.write_text(yaml.safe_dump(data))
+
+    environment = load_check_contract(manifest).cases[0].environment
+    assert environment.schema == "tc.fitness/check-environment/v2"
+    assert environment.git is not None
+    assert environment.git.history == ".contract/git.fast-import"
+    assert environment.git.checkout == "refs/heads/candidate"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("history", "/tmp/history", "portable path"),
+        ("history", "../history", "portable path"),
+        ("history", "history.fast-import", ".contract"),
+        ("checkout", "HEAD", "refs/heads"),
+        ("checkout", "refs/heads/candidate;echo", "refs/heads"),
+    ],
+)
+def test_versioned_git_environment_rejects_unsafe_materialisation(
+    tmp_path: Path, field: str, value: str, message: str
+) -> None:
+    from tc_fitness.check_contracts import CheckContractError, load_check_contract
+
+    manifest = make_contract(tmp_path)
+    data = yaml.safe_load(manifest.read_text())
+    git = {
+        "schema": "tc.fitness/git-fixture/v1",
+        "history": ".contract/git.fast-import",
+        "checkout": "refs/heads/candidate",
+    }
+    git[field] = value
+    data["cases"][0]["environment"] = {
+        "schema": "tc.fitness/check-environment/v2",
+        "path": "inherit",
+        "git": git,
+    }
+    manifest.write_text(yaml.safe_dump(data))
+
+    with pytest.raises(CheckContractError, match=message):
+        load_check_contract(manifest)
+
+
 @pytest.mark.parametrize("root", ["/outside", "../outside"])
 def test_configured_scan_root_cannot_escape_the_bound_fixture(tmp_path: Path, root: str) -> None:
     manifest = make_contract(tmp_path)
