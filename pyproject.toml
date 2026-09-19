@@ -37,6 +37,13 @@ dev = [
   "checkov==3.2.531",
 ]
 
+[tool.uv]
+# Checkov 3.2.531 (and the current 3.3.19 release) declares asteval==1.0.6,
+# which is affected by GHSA-89v8-rhwq-hf77 and GHSA-9w56-46f6-3qhx.  The fixed
+# 1.0.9 release is API-compatible with Checkov's use and is exercised by the
+# real Checkov contract tests and the repository OSV scan.
+override-dependencies = ["asteval==1.0.9"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/tc_fitness"]
 
