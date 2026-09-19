@@ -12,14 +12,12 @@ Because both shell out to the SAME command reading the SAME ``[tool.tc_fitness]`
 declaration, the gate has exactly one definition. There is no hand-copied pytest
 block to drift between ``scripts/ci/check.sh`` and ``ci.yml``.
 
-What it does NOT do
--------------------
-The engine orchestrates STEPS; it never owns a repo's specifics. The pytest
-scope, the ``--cov`` roots, the ruff/bandit targets, the detect-secrets baseline,
-and the consumer's fitness-check catalogue are all CONFIG (each a declared step),
-never baked into this module. Adding a step is a config edit in the consumer,
-not an engine change — that is the whole point (a reusable workflow that took
-these as *inputs* would just relocate the per-repo coupling into YAML).
+Configuration ownership
+-----------------------
+The engine owns step orchestration. Each consumer config declares its pytest
+scope, coverage roots, ruff and bandit targets, detect-secrets inputs, and
+fitness-check catalogue. Adding a repository-specific step changes that
+consumer config; shared orchestration remains in this module.
 
 Step kinds
 ----------
