@@ -295,6 +295,14 @@ During dispatch, a context-local policy disables suppression reads in the shared
 file/key gates and custom CORE baseline loaders. Even a transient baseline
 removed before dispatch finishes cannot grandfather a detector finding. Ordinary
 consumer runs outside contract mode retain their existing baseline behaviour.
+Contract configuration also uses the reviewed per-CORE option inventory in
+`tc_fitness.check_contract_policy`. Unknown options fail closed: new aliases
+must be classified before assurance can use them. Adoption flags must be false,
+exclusion lists must be empty, and cutover, informational-job and test-filename
+exemption overrides are forbidden. OSV requires explicit `required: true`;
+mutation-report contracts require explicit `allow_missing_current: false`.
+Mutation `baseline_report` is a bound input report, not a suppression list.
+Normal scope, thresholds and expected identities remain detector policy inputs.
 The output directory must exist, and the ledger must be a new path outside the
 fixture. Retries retain the previous ledger and use a new output path.
 

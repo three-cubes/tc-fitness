@@ -19,6 +19,7 @@ from uuid import UUID, uuid4
 
 from tc_fitness.baseline import baseline_free_execution
 from tc_fitness.catalogue import RuleEntry
+from tc_fitness.check_contract_policy import validate_contract_configuration
 from tc_fitness.check_contracts import CheckContractError, FindingExpectation, load_check_contract
 from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks import CORE_CHECKS
@@ -62,6 +63,7 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
     _portable_configuration(contract.config)
     if contract.check not in CORE_CHECKS:
         raise CheckContractError(f"unregistered CORE check: {contract.check}")
+    validate_contract_configuration(contract.check, contract.config)
     case = next((case for case in contract.cases if case.id == case_id), None)
     if case is None:
         raise CheckContractError(f"unknown contract case: {case_id}")
@@ -131,7 +133,7 @@ def _portable_configuration(value: object) -> None:
     """Keep configured inputs inside the fixture and forbid baseline overrides."""
     if isinstance(value, dict):
         for key, item in value.items():
-            if "baseline" in key or (key == "name" and not re.fullmatch(r"[a-zA-Z0-9_-]+", str(item))):
+            if key == "name" and not re.fullmatch(r"[a-zA-Z0-9_-]+", str(item)):
                 raise CheckContractError(
                     "contract configuration cannot select a baseline or external rule name"
                 )
@@ -223,6 +225,7 @@ def validate_contract_ledger(
     except OSError as exc:
         raise CheckContractError(f"cannot read contract snapshot: {exc}") from exc
     contract = load_check_contract(manifest, source=manifest_bytes)
+    validate_contract_configuration(contract.check, contract.config)
     case = next((case for case in contract.cases if case.id == case_id), None)
     if case is None:
         raise CheckContractError(f"unknown contract case: {case_id}")
