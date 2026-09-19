@@ -24,6 +24,10 @@ jobs:
   check:
     name: Quality gate
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -33,7 +37,7 @@ jobs:
       - name: Locked uv install (org composite)
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           sync-args: "--all-extras"
 
       # The single runnable gate. Reads [tool.tc_fitness] and runs ruff / format
@@ -41,6 +45,30 @@ jobs:
       # the env is already synced from the LOCKED lockfile above.
       - name: Self gate (tc-fitness run)
         run: uv run --no-sync --no-build tc-fitness run
+
+  distribution-qualification:
+    name: Distribution qualification (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Locked uv install (org composite)
+        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Qualify direct and rebuilt distributions
+        run: bash scripts/qualification/distribution.sh --python "${{ matrix.python-version }}"
 
   # no-attribution — the dedicated required context (Autonomous Delivery
   # decision D1): reject AI/LLM self-attribution residue in the PR's commits +
