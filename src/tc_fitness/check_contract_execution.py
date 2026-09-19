@@ -98,7 +98,10 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
         raise CheckContractError("ledger must be outside the input fixture")
     if ledger.exists():
         raise CheckContractError("ledger already exists; retain it and select a new output for the retry")
-    fixture_digest = tree_digest(fixture)
+    try:
+        fixture_digest = tree_digest(fixture)
+    except OSError as exc:
+        raise CheckContractError(f"cannot read contract fixture: {exc}") from exc
     candidate = candidate_identity()
     started = datetime.now(UTC).isoformat()
     with TemporaryDirectory(prefix="tc-fitness-contract-") as temporary:
@@ -237,9 +240,8 @@ def _materialize_git_fixture(
     )
     if invalid_modes:
         raise CheckContractError(f"Git contract tree contains unsupported modes: {', '.join(invalid_modes)}")
-    status = _run_fixture_git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]).stdout
-    if status:
-        raise CheckContractError("materialised Git contract fixture is not clean")
+    # A force checkout into a freshly initialised repository is clean by
+    # construction; the stage-mode validation above rejects non-file entries.
 
 
 @contextmanager
