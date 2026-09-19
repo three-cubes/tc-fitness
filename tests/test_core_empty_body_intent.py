@@ -14,6 +14,8 @@ from tc_fitness.core_checks.empty_body_intent import (
     module_has_undocumented_empty_body,
 )
 
+pytestmark = pytest.mark.integration
+
 _BARE = """
 def on_event(self, event):
     pass
@@ -47,31 +49,26 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_core_flags_bare_pass(tmp_path: Path) -> None:
     p = _seed(tmp_path, "b.py", _BARE)
     assert module_has_undocumented_empty_body(p, marker="Intentionally empty") is True
 
 
-@pytest.mark.integration
 def test_docstring_satisfies(tmp_path: Path) -> None:
     p = _seed(tmp_path, "d.py", _DOCSTRING)
     assert module_has_undocumented_empty_body(p, marker="Intentionally empty") is False
 
 
-@pytest.mark.integration
 def test_intent_comment_satisfies(tmp_path: Path) -> None:
     p = _seed(tmp_path, "i.py", _INTENT_COMMENT)
     assert module_has_undocumented_empty_body(p, marker="Intentionally empty") is False
 
 
-@pytest.mark.integration
 def test_abstractmethod_is_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.py", _ABSTRACT)
     assert module_has_undocumented_empty_body(p, marker="Intentionally empty") is False
 
 
-@pytest.mark.integration
 def test_marker_is_config_driven(tmp_path: Path) -> None:
     body = "def f(self):\n    # DELIBERATE NO-OP for the adapter contract.\n    pass\n"
     p = _seed(tmp_path, "m.py", body)
@@ -82,7 +79,6 @@ def test_marker_is_config_driven(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is False
 
 
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/b.py", _BARE)
     _seed(tmp_path, "vendor/b.py", _BARE)
@@ -90,7 +86,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/b.py"}
 
 
-@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/b.py", _BARE)
     rule = EmptyBodyIntent.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -99,7 +94,6 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "b.py", _BARE)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -107,7 +101,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "empty-body-intent-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.empty_body_intent as mod
 

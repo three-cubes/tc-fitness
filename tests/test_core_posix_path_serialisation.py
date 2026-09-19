@@ -14,6 +14,8 @@ from tc_fitness.core_checks.posix_path_serialisation import (
     module_has_os_native_serialisation,
 )
 
+pytestmark = pytest.mark.integration
+
 _BAD = "rel = str(path.relative_to(root))\n"
 _OK_AS_POSIX = "rel = path.relative_to(root).as_posix()\n"
 _OK_REDUNDANT = "rel = str(path.relative_to(root).as_posix())\n"
@@ -27,37 +29,31 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_flags_os_native(tmp_path: Path) -> None:
     p = _seed(tmp_path, "bad.py", _BAD)
     assert module_has_os_native_serialisation(p) is True
 
 
-@pytest.mark.integration
 def test_detection_clean_as_posix(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ok.py", _OK_AS_POSIX)
     assert module_has_os_native_serialisation(p) is False
 
 
-@pytest.mark.integration
 def test_detection_clean_redundant_as_posix(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ok2.py", _OK_REDUNDANT)
     assert module_has_os_native_serialisation(p) is False
 
 
-@pytest.mark.integration
 def test_detection_clean_str_without_relative_to(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ok3.py", _OK_NO_RELATIVE)
     assert module_has_os_native_serialisation(p) is False
 
 
-@pytest.mark.integration
 def test_syntax_error_is_not_a_violation(tmp_path: Path) -> None:
     p = _seed(tmp_path, "broken.py", "def (:\n")
     assert module_has_os_native_serialisation(p) is False
 
 
-@pytest.mark.integration
 def test_excluded_segment_is_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", _BAD)
     _seed(tmp_path, "src/tests/bad.py", _BAD)
@@ -66,14 +62,12 @@ def test_excluded_segment_is_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
 
 
-@pytest.mark.integration
 def test_excluded_segments_overridable(tmp_path: Path) -> None:
     _seed(tmp_path, "src/vendor/bad.py", _BAD)
     rule = build({"roots": ["src"], "excluded_segments": ["vendor"]}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", _BAD)
     _seed(tmp_path, "vendor/bad.py", _BAD)
@@ -81,7 +75,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", _BAD)
     rule = PosixPathSerialisation.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -90,7 +83,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "bad.py", _BAD)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -98,7 +90,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "posix-path-serialisation-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.posix_path_serialisation as mod
 

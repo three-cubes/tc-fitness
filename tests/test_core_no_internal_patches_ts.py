@@ -13,6 +13,8 @@ from tc_fitness.core_checks.no_internal_patches_ts import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 _INTERNAL = frozenset({"mcp-x", "mcp-kairix"})
 _EXEMPT_EXACT = frozenset({"fs", "axios", "console"})
 _EXEMPT_PREFIXES = ("node:", "@azure/")
@@ -31,44 +33,37 @@ def _flags(p: Path) -> bool:
     )
 
 
-@pytest.mark.integration
 def test_flags_relative_mock(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.test.ts", "vi.mock('../../src/client.js', () => ({}));\n")
     assert _flags(p) is True
 
 
-@pytest.mark.integration
 def test_flags_internal_workspace_package_mock(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.test.ts", "jest.mock('mcp-kairix/dist/x.js');\n")
     assert _flags(p) is True
 
 
-@pytest.mark.integration
 def test_external_mock_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.test.ts", "vi.mock('node:fs/promises');\nvi.mock('axios');\n")
     assert _flags(p) is False
 
 
-@pytest.mark.integration
 def test_spyon_internal_namespace_flagged(tmp_path: Path) -> None:
     body = "import * as client from '../src/client.js';\nvi.spyOn(client, 'graphGet');\n"
     p = _seed(tmp_path, "a.test.ts", body)
     assert _flags(p) is True
 
 
-@pytest.mark.integration
 def test_spyon_console_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.test.ts", "vi.spyOn(console, 'log');\n")
     assert _flags(p) is False
 
 
-@pytest.mark.integration
 def test_mock_in_comment_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.test.ts", "// vi.mock('../src/x.js')\n/* vi.mock('../src/y.js') */\n")
     assert _flags(p) is False
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "pkg/a.test.ts", "vi.mock('../../src/client.js');\n")
     rule = NoInternalPatchesTs.from_config(
@@ -79,7 +74,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "a.test.ts", "vi.mock('../../src/client.js');\n")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -87,7 +81,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-internal-patches-ts-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_non_test_ts_out_of_scope(tmp_path: Path) -> None:
     rule = build({"roots": ["."], "internal_packages": ["mcp-x"]}, repo_root=tmp_path)
     _seed(tmp_path, "src/x.ts", "vi.mock('../../src/client.js');\n")

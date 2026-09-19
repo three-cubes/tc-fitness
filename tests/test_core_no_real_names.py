@@ -8,6 +8,8 @@ import pytest
 
 from tc_fitness.core_checks.no_real_names import NoRealNames, build, file_has_real_name, main
 
+pytestmark = pytest.mark.integration
+
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     p = tmp_path / rel
@@ -16,7 +18,6 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_flags_banned_token(tmp_path: Path) -> None:
     p = _seed(tmp_path, "examples/case.md", "client is AcmeCorp here")
     assert (
@@ -25,7 +26,6 @@ def test_detection_flags_banned_token(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.integration
 def test_word_boundary_no_false_positive(tmp_path: Path) -> None:
     p = _seed(tmp_path, "examples/case.md", "AcmeCorporation is fine")
     assert (
@@ -34,7 +34,6 @@ def test_word_boundary_no_false_positive(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.integration
 def test_digit_bearing_token_matches(tmp_path: Path) -> None:
     p = _seed(tmp_path, "examples/case.md", "engaged by 3CV last year")
     assert (
@@ -43,7 +42,6 @@ def test_digit_bearing_token_matches(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.integration
 def test_scope_segments_narrow_scan(tmp_path: Path) -> None:
     rule = build({"roots": ["."], "tokens": ["AcmeCorp"], "scope_segments": ["examples"]}, repo_root=tmp_path)
     in_scope = _seed(tmp_path, "examples/a.md", "AcmeCorp")
@@ -52,7 +50,6 @@ def test_scope_segments_narrow_scan(tmp_path: Path) -> None:
     assert rule.file_has_violation(out_scope) is False
 
 
-@pytest.mark.integration
 def test_substitutions_map_supplies_tokens(tmp_path: Path) -> None:
     # A {token: substitute} map is accepted; the detector keys on the token set.
     rule = build(
@@ -62,14 +59,12 @@ def test_substitutions_map_supplies_tokens(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is True
 
 
-@pytest.mark.integration
 def test_empty_tokens_is_noop(tmp_path: Path) -> None:
     rule = build({"roots": ["."]}, repo_root=tmp_path)
     p = _seed(tmp_path, "examples/a.md", "anything at all")
     assert rule.file_has_violation(p) is False
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "examples/a.md", "AcmeCorp")
     rule = NoRealNames.from_config(
@@ -80,7 +75,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "examples/a.md", "AcmeCorp")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])

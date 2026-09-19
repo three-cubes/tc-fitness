@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 _MODULES = (
     "tc_fitness.core_checks.no_real_names",
     "tc_fitness.core_checks.no_logging_secrets",
@@ -38,7 +40,6 @@ def _docstring_node_ids(tree: ast.AST) -> set[int]:
     return out
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize("module_name", _MODULES)
 def test_no_repo_strings_in_executable_code(module_name: str) -> None:
     mod = importlib.import_module(module_name)
@@ -54,7 +55,6 @@ def test_no_repo_strings_in_executable_code(module_name: str) -> None:
                 assert tok not in lowered, f"{module_name}: repo identity leaked in a code literal: {tok}"
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize("module_name", _MODULES)
 def test_module_exposes_build_and_main(module_name: str) -> None:
     mod = importlib.import_module(module_name)

@@ -14,6 +14,8 @@ from tc_fitness.core_checks.cognitive_complexity import (
     module_over_threshold,
 )
 
+pytestmark = pytest.mark.integration
+
 # A deeply nested function: nested ifs inside a loop push the score well past 15.
 _COMPLEX = """
 def f(items):
@@ -43,19 +45,16 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_core_flags_complex(tmp_path: Path) -> None:
     p = _seed(tmp_path, "c.py", _COMPLEX)
     assert module_over_threshold(p, threshold=15) is True
 
 
-@pytest.mark.integration
 def test_detection_core_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "s.py", _SIMPLE)
     assert module_over_threshold(p, threshold=15) is False
 
 
-@pytest.mark.integration
 def test_threshold_is_config_driven(tmp_path: Path) -> None:
     # A moderately-branchy function: clean at 15, flagged when the ceiling is 1.
     body = "def f(x):\n    if x:\n        return 1\n    return 0\n"
@@ -65,13 +64,11 @@ def test_threshold_is_config_driven(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is True
 
 
-@pytest.mark.integration
 def test_syntax_error_is_not_a_violation(tmp_path: Path) -> None:
     p = _seed(tmp_path, "bad.py", "def f(:\n")
     assert module_over_threshold(p, threshold=15) is False
 
 
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/c.py", _COMPLEX)
     _seed(tmp_path, "vendor/c.py", _COMPLEX)
@@ -79,7 +76,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/c.py"}
 
 
-@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/c.py", _COMPLEX)
     rule = CognitiveComplexity.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -88,7 +84,6 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "c.py", _COMPLEX)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -96,7 +91,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "cognitive-complexity-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.cognitive_complexity as mod
 

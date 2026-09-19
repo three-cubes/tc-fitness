@@ -29,6 +29,8 @@ import pytest
 from tc_fitness.gate import main, run_gate
 from tc_fitness.gate_config import load_config
 
+pytestmark = pytest.mark.integration
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -64,7 +66,6 @@ def _clean_sys_modules() -> object:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_run_step_passes_on_zero_exit(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(repo, '[[steps]]\nid = "ok"\nsummary = "true step"\nrun = ["true"]\n')
     outcome = run_gate(load_config(repo), repo)
@@ -76,7 +77,6 @@ def test_run_step_passes_on_zero_exit(repo: Path, capsys: pytest.CaptureFixture[
     assert ": PASS ===" in out
 
 
-@pytest.mark.integration
 def test_run_step_fails_on_nonzero_exit_and_prints_fix_next(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -94,7 +94,6 @@ def test_run_step_fails_on_nonzero_exit_and_prints_fix_next(
     assert "next: re-run tc-fitness run" in out
 
 
-@pytest.mark.integration
 def test_step_env_is_passed_to_child(repo: Path) -> None:
     # The child exits 0 IFF it sees the step-declared env var.
     _write_config(
@@ -104,7 +103,6 @@ def test_step_env_is_passed_to_child(repo: Path) -> None:
     assert run_gate(load_config(repo), repo).ok
 
 
-@pytest.mark.integration
 def test_step_cwd_is_relative_to_repo_root(repo: Path) -> None:
     sub = repo / "subdir"
     sub.mkdir()
@@ -118,7 +116,6 @@ def test_step_cwd_is_relative_to_repo_root(repo: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_shell_step_runs_through_shell(repo: Path) -> None:
     # A pipeline only works through the shell.
     _write_config(repo, '[[steps]]\nid = "pipe"\nshell = "echo hi | grep -q hi"\n')
@@ -130,7 +127,6 @@ def test_shell_step_runs_through_shell(repo: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_missing_program_fails_by_default(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(repo, '[[steps]]\nid = "gone"\nrun = ["definitely-not-a-real-prog-xyz"]\n')
     outcome = run_gate(load_config(repo), repo)
@@ -139,7 +135,6 @@ def test_missing_program_fails_by_default(repo: Path, capsys: pytest.CaptureFixt
     assert "not on PATH" in out
 
 
-@pytest.mark.integration
 def test_missing_program_skips_when_allow_missing(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -157,7 +152,6 @@ def test_missing_program_skips_when_allow_missing(repo: Path, capsys: pytest.Cap
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_continue_on_error_fail_does_not_gate(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -178,7 +172,6 @@ def test_continue_on_error_fail_does_not_gate(repo: Path, capsys: pytest.Capture
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_steps_run_in_config_order(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -191,7 +184,6 @@ def test_steps_run_in_config_order(repo: Path, capsys: pytest.CaptureFixture[str
     assert out.index("run [first]") < out.index("run [second]") < out.index("run [third]")
 
 
-@pytest.mark.integration
 def test_only_restricts_to_named_steps(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -204,7 +196,6 @@ def test_only_restricts_to_named_steps(repo: Path, capsys: pytest.CaptureFixture
     assert "run [b]" not in out
 
 
-@pytest.mark.integration
 def test_fail_fast_stops_at_first_gating_failure(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -240,7 +231,6 @@ def _write_synthetic_catalogue(repo: Path) -> None:
     )
 
 
-@pytest.mark.integration
 def test_catalogue_step_dispatches_rules(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_synthetic_catalogue(repo)
     _write_config(
@@ -260,7 +250,6 @@ def test_catalogue_step_dispatches_rules(repo: Path, capsys: pytest.CaptureFixtu
     assert "PASS [fitness]" in out
 
 
-@pytest.mark.integration
 def test_catalogue_step_fails_when_a_rule_fails(repo: Path) -> None:
     checks = repo / "scripts" / "checks"
     checks.mkdir(parents=True)
@@ -278,7 +267,6 @@ def test_catalogue_step_fails_when_a_rule_fails(repo: Path) -> None:
     assert not run_gate(load_config(repo), repo).ok
 
 
-@pytest.mark.integration
 def test_catalogue_step_gate_id_targets_one_rule(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_synthetic_catalogue(repo)
     _write_config(
@@ -292,7 +280,6 @@ def test_catalogue_step_gate_id_targets_one_rule(repo: Path, capsys: pytest.Capt
     assert "run [B1]" not in out  # only A1 targeted
 
 
-@pytest.mark.integration
 def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -309,7 +296,6 @@ def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.Ca
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_staged_catalogue_step_uses_staged_selection(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # With --staged and NO staged paths, the runner's staged selection runs
     # every rule (fail-safe), printing its staged banner — proving the catalogue
@@ -327,7 +313,6 @@ def test_staged_catalogue_step_uses_staged_selection(repo: Path, capsys: pytest.
     assert "staged selection:" in out  # the runner's --staged ledger footer
 
 
-@pytest.mark.integration
 def test_staged_skips_steps_flagged_skip_when_staged(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # An expensive full-tree leg flagged skip_when_staged is dropped from the
     # smoke with a transparent SKIP; the cheap leg still runs.
@@ -345,7 +330,6 @@ def test_staged_skips_steps_flagged_skip_when_staged(repo: Path, capsys: pytest.
     assert "PASS [cheap]" in out
 
 
-@pytest.mark.integration
 def test_non_staged_run_still_runs_skip_when_staged_steps(repo: Path) -> None:
     # skip_when_staged ONLY affects --staged; a normal full run still executes
     # the flagged step (so it gates as before).
@@ -356,7 +340,6 @@ def test_non_staged_run_still_runs_skip_when_staged_steps(repo: Path) -> None:
     assert not run_gate(load_config(repo), repo, staged=False).ok
 
 
-@pytest.mark.integration
 def test_staged_gate_id_wins_over_staged(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # An explicit --gate target is the narrower intent and wins over --staged.
     _write_synthetic_catalogue(repo)
@@ -371,7 +354,6 @@ def test_staged_gate_id_wins_over_staged(repo: Path, capsys: pytest.CaptureFixtu
     assert "run [B1]" not in out  # gate_id narrowed, not staged-selected
 
 
-@pytest.mark.integration
 def test_main_staged_flag_threads_through(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -407,7 +389,6 @@ def _shard_probe_config(repo: Path, *, with_shard_args: bool) -> Path:
     return marker
 
 
-@pytest.mark.integration
 def test_shard_appends_shard_args_and_sets_coverage_file(repo: Path) -> None:
     marker = _shard_probe_config(repo, with_shard_args=True)
     assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
@@ -415,7 +396,6 @@ def test_shard_appends_shard_args_and_sets_coverage_file(repo: Path) -> None:
     assert marker.read_text() == "--splits 4 --group 2|.coverage.2"
 
 
-@pytest.mark.integration
 def test_no_shard_leaves_command_untouched(repo: Path) -> None:
     marker = _shard_probe_config(repo, with_shard_args=True)
     assert run_gate(load_config(repo), repo, shard=None).ok
@@ -423,7 +403,6 @@ def test_no_shard_leaves_command_untouched(repo: Path) -> None:
     assert marker.read_text() == "|"
 
 
-@pytest.mark.integration
 def test_shard_ignores_step_without_shard_args(repo: Path) -> None:
     marker = _shard_probe_config(repo, with_shard_args=False)
     assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
@@ -431,7 +410,6 @@ def test_shard_ignores_step_without_shard_args(repo: Path) -> None:
     assert marker.read_text() == "|"
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize("spec", ["5/4", "0/4", "abc", "2/0", "2"])
 def test_main_invalid_shard_returns_two(repo: Path, capsys: pytest.CaptureFixture[str], spec: str) -> None:
     _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
@@ -439,13 +417,11 @@ def test_main_invalid_shard_returns_two(repo: Path, capsys: pytest.CaptureFixtur
     assert "FAIL --shard" in _plain(capsys.readouterr().err)
 
 
-@pytest.mark.integration
 def test_main_shard_flag_threads_through(repo: Path) -> None:
     _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
     assert main(["run", "--repo-root", str(repo), "--shard", "1/2"]) == 0
 
 
-@pytest.mark.integration
 def test_main_changed_files_from_threads_diff_scope_through_catalogue(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -481,7 +457,6 @@ def test_main_changed_files_from_threads_diff_scope_through_catalogue(
     assert "SKIP [expensive]" in out
 
 
-@pytest.mark.integration
 def test_main_changed_files_from_missing_file_fails_closed(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -503,19 +478,16 @@ def test_main_changed_files_from_missing_file_fails_closed(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_main_run_returns_zero_on_pass(repo: Path) -> None:
     _write_config(repo, '[[steps]]\nid = "ok"\nrun = ["true"]\n')
     assert main(["run", "--repo-root", str(repo)]) == 0
 
 
-@pytest.mark.integration
 def test_main_run_returns_one_on_failure(repo: Path) -> None:
     _write_config(repo, '[[steps]]\nid = "bad"\nrun = ["false"]\n')
     assert main(["run", "--repo-root", str(repo)]) == 1
 
 
-@pytest.mark.integration
 def test_main_missing_config_returns_two(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["run", "--repo-root", str(repo)])
     err = _plain(capsys.readouterr().err)
@@ -523,7 +495,6 @@ def test_main_missing_config_returns_two(repo: Path, capsys: pytest.CaptureFixtu
     assert "fix:" in err
 
 
-@pytest.mark.integration
 def test_main_run_reads_pyproject_tool_block(repo: Path) -> None:
     # The end-to-end path through a real [tool.tc_fitness] block in pyproject.toml
     # (not the dedicated file) — the canonical consumer shape.
@@ -538,7 +509,6 @@ def test_main_run_reads_pyproject_tool_block(repo: Path) -> None:
     assert main(["run", "--repo-root", str(repo)]) == 0
 
 
-@pytest.mark.integration
 def test_main_only_flag_threads_through(repo: Path) -> None:
     _write_config(
         repo,
@@ -553,7 +523,6 @@ def test_main_only_flag_threads_through(repo: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_same_stage_members_run_concurrently(repo: Path) -> None:
     # Two shells in one stage rendezvous: each touches its marker then polls for
     # the sibling's. They pass ONLY if run concurrently (sequential execution
@@ -567,7 +536,6 @@ def test_same_stage_members_run_concurrently(repo: Path) -> None:
     assert run_gate(load_config(repo), repo).ok
 
 
-@pytest.mark.integration
 def test_depends_on_is_a_barrier(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -580,7 +548,6 @@ def test_depends_on_is_a_barrier(repo: Path, capsys: pytest.CaptureFixture[str])
     assert out.index("run [one]") < out.index("run [two]")
 
 
-@pytest.mark.integration
 def test_failing_stage_member_gates_and_siblings_still_run(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -596,7 +563,6 @@ def test_failing_stage_member_gates_and_siblings_still_run(
     assert "PASS [good]" in out  # the concurrent sibling ran despite the failure
 
 
-@pytest.mark.integration
 def test_all_singleton_stages_match_sequential_output(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     seq = '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["true"]\n[[steps]]\nid = "c"\nrun = ["true"]\n'
     _write_config(repo, seq)
@@ -614,7 +580,6 @@ def test_all_singleton_stages_match_sequential_output(repo: Path, capsys: pytest
     assert scheduled == sequential
 
 
-@pytest.mark.integration
 def test_tier_selects_tagged_steps(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -631,7 +596,6 @@ def test_tier_selects_tagged_steps(repo: Path, capsys: pytest.CaptureFixture[str
     assert "run [plain]" not in out
 
 
-@pytest.mark.integration
 def test_catalogue_step_runs_concurrently_with_subprocess_step(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

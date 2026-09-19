@@ -6,14 +6,14 @@ import pytest
 
 from tc_fitness.catalogue import RuleEntry, is_dispatchable
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_rule_entry_accepts_fnumber_id() -> None:
     e = RuleEntry(id="F26", gate="f26", check="provider_layer_imports")
     assert e.id == "F26"
 
 
-@pytest.mark.unit
 def test_rule_entry_accepts_descriptive_id() -> None:
     # The schema is id-agnostic — kairix's "F26" and taz's descriptive style
     # are equally valid.
@@ -21,7 +21,6 @@ def test_rule_entry_accepts_descriptive_id() -> None:
     assert e.id == "no-duplicate-string"
 
 
-@pytest.mark.unit
 def test_defaults_are_conservative() -> None:
     e = RuleEntry(id="X", gate="x", check="x")
     assert e.status == "shipped"
@@ -36,22 +35,18 @@ def test_defaults_are_conservative() -> None:
     assert e.env_gated_extra_args == ()
 
 
-@pytest.mark.unit
 def test_is_dispatchable_true_for_shipped() -> None:
     assert is_dispatchable(RuleEntry(id="X", gate="x", check="x")) is True
 
 
-@pytest.mark.unit
 def test_is_dispatchable_false_for_proposed_status() -> None:
     assert is_dispatchable(RuleEntry(id="X", gate="x", check="x", status="proposed")) is False
 
 
-@pytest.mark.unit
 def test_is_dispatchable_false_for_proposed_check_placeholder() -> None:
     assert is_dispatchable(RuleEntry(id="X", gate="x", check="(proposed)")) is False
 
 
-@pytest.mark.unit
 def test_rule_entry_is_frozen() -> None:
     e = RuleEntry(id="X", gate="x", check="x")
     try:

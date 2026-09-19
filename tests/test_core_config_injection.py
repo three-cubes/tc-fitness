@@ -37,6 +37,8 @@ import pytest
 from tc_fitness.gate import main, run_gate
 from tc_fitness.gate_config import load_config
 
+pytestmark = pytest.mark.integration
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 # A module with one string literal (>= 10 chars) repeated 3 times — a Sonar-S1192
@@ -164,7 +166,6 @@ def _baseline_file(repo: Path) -> Path:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_configured_core_check_flags_real_duplicate(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _scaffold(repo, src_body=_DUP_BODY, core_block=_CORE_BLOCK)
 
@@ -178,13 +179,11 @@ def test_configured_core_check_flags_real_duplicate(repo: Path, capsys: pytest.C
     assert "dup.py" in out  # the offending file is named in the rule's emit
 
 
-@pytest.mark.integration
 def test_configured_core_check_passes_on_clean_tree(repo: Path) -> None:
     _scaffold(repo, src_body=_CLEAN_BODY, core_block=_CORE_BLOCK)
     assert run_gate(load_config(repo), repo).ok
 
 
-@pytest.mark.integration
 def test_core_check_with_no_config_is_vacuous(repo: Path) -> None:
     # No [tool.tc_fitness.core_checks.*] block → roots=() → zero files enumerated
     # → vacuous pass even with the duplicate present. This is the pre-v0.6.1
@@ -199,7 +198,6 @@ def test_core_check_with_no_config_is_vacuous(repo: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_core_check_dispatches_in_process_under_subprocess_mode(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -221,7 +219,6 @@ def test_core_check_dispatches_in_process_under_subprocess_mode(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_establish_baseline_then_run_passes(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _scaffold(repo, src_body=_DUP_BODY, core_block=_CORE_BLOCK)
 
@@ -241,7 +238,6 @@ def test_establish_baseline_then_run_passes(repo: Path, capsys: pytest.CaptureFi
     assert rc_run == 0, "after establishing, the run gates only on NET-NEW offenders"
 
 
-@pytest.mark.integration
 def test_net_new_offender_fails_after_baseline(repo: Path) -> None:
     # Freeze src/dup.py as the baseline, then add a SECOND duplicate file: the
     # grandfathered file is tolerated but the net-new one FAILs — proving the

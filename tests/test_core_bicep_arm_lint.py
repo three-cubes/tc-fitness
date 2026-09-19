@@ -14,6 +14,8 @@ from tc_fitness.core_checks.bicep_arm_lint import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 # A resource with `tags` declared BEFORE `sku` — out of the canonical order
 # (S6975) — plus an empty-literal `properties: {}` (S6954).
 _DIRTY = """resource store 'Microsoft.Storage/storageAccounts@2021-01-01' = {
@@ -53,14 +55,12 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_core_flags_empty_literal(tmp_path: Path) -> None:
     p = _seed(tmp_path, "empty.bicep", _DIRTY)
     rules = {rule for _line, rule, _msg in bicep_findings(p)}
     assert "S6954" in rules  # properties: {}
 
 
-@pytest.mark.integration
 def test_detection_core_flags_property_order(tmp_path: Path) -> None:
     p = _seed(tmp_path, "order.bicep", _DIRTY)
     findings = bicep_findings(p)
@@ -70,13 +70,11 @@ def test_detection_core_flags_property_order(tmp_path: Path) -> None:
     assert any("sku" in msg for _line, msg in order)
 
 
-@pytest.mark.integration
 def test_detection_core_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "clean.bicep", _CLEAN)
     assert bicep_findings(p) == []
 
 
-@pytest.mark.integration
 def test_non_bicep_and_unreadable_are_ignored(tmp_path: Path) -> None:
     # A .bicep that is not valid UTF-8 yields no findings (another concern owns
     # unreadable files); a missing file likewise.
@@ -86,7 +84,6 @@ def test_non_bicep_and_unreadable_are_ignored(tmp_path: Path) -> None:
     assert bicep_findings(tmp_path / "absent.bicep") == []
 
 
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "infra/dirty.bicep", _DIRTY)
     _seed(tmp_path, "vendor/dirty.bicep", _DIRTY)
@@ -94,7 +91,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"infra/dirty.bicep"}
 
 
-@pytest.mark.integration
 def test_extension_default_ignores_non_bicep(tmp_path: Path) -> None:
     # A .txt with bicep-shaped content is out of scope (extension gate).
     _seed(tmp_path, "infra/notbicep.txt", _DIRTY)
@@ -102,7 +98,6 @@ def test_extension_default_ignores_non_bicep(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_run_fails_on_new_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "infra/dirty.bicep", _DIRTY)
     rule = BicepArmLint.from_config({"roots": ["infra"]}, repo_root=tmp_path)
@@ -111,7 +106,6 @@ def test_run_fails_on_new_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_net_new_offender_fails_after_baseline(tmp_path: Path) -> None:
     _seed(tmp_path, "infra/dirty.bicep", _DIRTY)
     rule = BicepArmLint.from_config({"roots": ["infra"]}, repo_root=tmp_path)
@@ -121,13 +115,11 @@ def test_net_new_offender_fails_after_baseline(tmp_path: Path) -> None:
     assert rule.run() == 1, "a net-new offending .bicep must gate"
 
 
-@pytest.mark.integration
 def test_build_factory_returns_configured_rule(tmp_path: Path) -> None:
     rule = build({"roots": ["infra"], "extensions": [".bicep"]}, repo_root=tmp_path)
     assert isinstance(rule, BicepArmLint)
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "dirty.bicep", _DIRTY)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -135,7 +127,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "bicep-arm-lint-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     # DESIGN LAW: a CORE module's LOGIC carries no repo identity. Provenance
     # docstrings may name the donor repo, so strip docstrings via AST and scan

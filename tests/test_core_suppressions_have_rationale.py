@@ -16,6 +16,8 @@ from tc_fitness.core_checks.suppressions_have_rationale import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 _BARE = "x = 1  # NOSONAR\n"
 _WITH_REASON = "x = 1  # NOSONAR - internal log path; not user-controlled\n"
 _BARE_NOQA = "y = call()  # noqa: BLE001\n"
@@ -30,25 +32,21 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_core_flags_bare(tmp_path: Path) -> None:
     p = _seed(tmp_path, "b.py", _BARE)
     assert file_has_bare_suppression(p, _COMPILED) is True
 
 
-@pytest.mark.integration
 def test_bare_noqa_with_code_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "n.py", _BARE_NOQA)
     assert file_has_bare_suppression(p, _COMPILED) is True
 
 
-@pytest.mark.integration
 def test_rationale_satisfies(tmp_path: Path) -> None:
     p = _seed(tmp_path, "r.py", _WITH_REASON)
     assert file_has_bare_suppression(p, _COMPILED) is False
 
 
-@pytest.mark.integration
 def test_bare_patterns_config_driven(tmp_path: Path) -> None:
     # A consumer-specific bare token.
     p = _seed(tmp_path, "src/c.py", "z = 1  # SILENCE\n")
@@ -56,7 +54,6 @@ def test_bare_patterns_config_driven(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is True
 
 
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/b.py", _BARE)
     _seed(tmp_path, "vendor/b.py", _BARE)
@@ -64,7 +61,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/b.py"}
 
 
-@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/b.py", _BARE)
     rule = SuppressionsHaveRationale.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -73,7 +69,6 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "b.py", _BARE)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -81,7 +76,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "suppressions-have-rationale-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.suppressions_have_rationale as mod
 

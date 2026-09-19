@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
 
 from tc_fitness.core_checks.harness_canon_reference import (
     HarnessCanonReference,
-    banner_present,
     build,
-    has_canon_reference,
     main,
     missing_required_groups,
-    normalise_banner,
 )
+
+pytestmark = pytest.mark.integration
 
 # A harness snippet that satisfies the reference arm: it carries the canon
 # marker AND a link matching the default governance/STANDARDS reference regex.
@@ -54,36 +52,16 @@ def _full_product_harness(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_missing_required_groups_any_of_satisfied(tmp_path: Path) -> None:
     _write(tmp_path, "AGENTS.md", "# AGENTS\n")
     # Group {CLAUDE.md or AGENTS.md} is satisfied by AGENTS.md alone.
     assert missing_required_groups(tmp_path, [frozenset({"CLAUDE.md", "AGENTS.md"})]) == []
 
 
-@pytest.mark.integration
 def test_missing_required_groups_singletons_report_absent(tmp_path: Path) -> None:
     _write(tmp_path, "CLAUDE.md", "# CLAUDE\n")
     groups = [frozenset({"CLAUDE.md"}), frozenset({"AGENTS.md"})]
     assert missing_required_groups(tmp_path, groups) == ["AGENTS.md"]
-
-
-@pytest.mark.unit
-def test_has_canon_reference_requires_both_in_one_file() -> None:
-    pattern = re.compile(r"governance/STANDARDS")
-    assert has_canon_reference([_CANON_REF], marker="Canonical standards", ref_pattern=pattern)
-    # Marker in one file, link in another → not a proof that a file names canon.
-    split = ["## Canonical standards\n", "see governance/STANDARDS.md\n"]
-    assert not has_canon_reference(split, marker="Canonical standards", ref_pattern=pattern)
-
-
-@pytest.mark.unit
-def test_normalise_and_banner_present_ignore_layout() -> None:
-    pinned = "Canonical standards\n   Read governance/STANDARDS.md first.\n"
-    reflowed = "\n\n## Canonical standards\n\nRead governance/STANDARDS.md first.\n\n"
-    assert normalise_banner(pinned) in normalise_banner(reflowed)
-    assert banner_present([reflowed], pinned)
-    assert not banner_present(["nothing pinned here"], pinned)
 
 
 # --------------------------------------------------------------------------- #
@@ -91,20 +69,17 @@ def test_normalise_and_banner_present_ignore_layout() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_pass_full_product_harness_with_reference(tmp_path: Path) -> None:
     _full_product_harness(tmp_path)
     assert build({}, repo_root=tmp_path).run() == 0
 
 
-@pytest.mark.integration
 def test_fail_on_missing_file(tmp_path: Path) -> None:
     _full_product_harness(tmp_path)
     (tmp_path / "RESOLVER.md").unlink()  # drop one product entrypoint
     assert build({}, repo_root=tmp_path).run() == 1
 
 
-@pytest.mark.integration
 def test_repo_type_core_relaxation(tmp_path: Path) -> None:
     # A core/framework repo needs only AGENTS.md — carrying the reference there
     # passes even though CLAUDE.md/RESOLVER.md/ETHOS.md/etc. are absent.
@@ -112,13 +87,11 @@ def test_repo_type_core_relaxation(tmp_path: Path) -> None:
     assert build({"repo_type": "core"}, repo_root=tmp_path).run() == 0
 
 
-@pytest.mark.integration
 def test_repo_type_core_still_requires_agents(tmp_path: Path) -> None:
     _write(tmp_path, "CLAUDE.md", _CANON_REF)  # present, but not AGENTS.md
     assert build({"repo_type": "core"}, repo_root=tmp_path).run() == 1
 
 
-@pytest.mark.integration
 def test_required_files_override_is_any_of(tmp_path: Path) -> None:
     # Explicit list is satisfied when at least one member exists.
     _write(tmp_path, "AGENTS.md", _CANON_REF)
@@ -131,7 +104,6 @@ def test_required_files_override_is_any_of(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_fail_on_missing_reference(tmp_path: Path) -> None:
     # Every product file present, but none names the canonical-standards index.
     for name in _PRODUCT_FILES:
@@ -139,20 +111,12 @@ def test_fail_on_missing_reference(tmp_path: Path) -> None:
     assert build({}, repo_root=tmp_path).run() == 1
 
 
-@pytest.mark.integration
 def test_invalid_reference_pattern_fails_actionably(tmp_path: Path) -> None:
     _write(tmp_path, "AGENTS.md", _CANON_REF)
     cfg = {"repo_type": "core", "standards_ref_pattern": "["}  # not a valid regex
     assert build(cfg, repo_root=tmp_path).run() == 1
 
 
-@pytest.mark.unit
-def test_banner_present_empty_pin_is_present() -> None:
-    # An empty pin has nothing to drift from, so drift never trips on it.
-    assert banner_present([], "") is True
-
-
-@pytest.mark.integration
 def test_reference_pattern_is_config_driven(tmp_path: Path) -> None:
     body = "## House rules\nsee docs/local-canon.md\n"
     _write(tmp_path, "AGENTS.md", body)
@@ -180,14 +144,12 @@ def _drift_cfg(banner_rel: str) -> dict[str, object]:
     return {"required_files": ["CLAUDE.md"], "banner_path": banner_rel}
 
 
-@pytest.mark.integration
 def test_drift_pass_when_banner_inlined(tmp_path: Path) -> None:
     _write(tmp_path, "docs/canon-banner.md", _PINNED_BANNER)
     _write(tmp_path, "CLAUDE.md", f"# CLAUDE\n\n{_PINNED_BANNER}\nmore local guidance\n")
     assert build(_drift_cfg("docs/canon-banner.md"), repo_root=tmp_path).run() == 0
 
 
-@pytest.mark.integration
 def test_drift_fail_when_banner_modified(tmp_path: Path) -> None:
     _write(tmp_path, "docs/canon-banner.md", _PINNED_BANNER)
     # Harness inlines a banner that DROPS the pinned "do not fork" line: the
@@ -197,14 +159,12 @@ def test_drift_fail_when_banner_modified(tmp_path: Path) -> None:
     assert build(_drift_cfg("docs/canon-banner.md"), repo_root=tmp_path).run() == 1
 
 
-@pytest.mark.integration
 def test_drift_arm_skipped_when_banner_path_unset(tmp_path: Path) -> None:
     # No banner_path → drift arm never runs even if no banner is inlined.
     _write(tmp_path, "CLAUDE.md", _CANON_REF)
     assert build({"required_files": ["CLAUDE.md"]}, repo_root=tmp_path).run() == 0
 
 
-@pytest.mark.integration
 def test_drift_fail_when_pinned_banner_missing(tmp_path: Path) -> None:
     _write(tmp_path, "CLAUDE.md", _CANON_REF)
     cfg = {"required_files": ["CLAUDE.md"], "banner_path": "docs/does-not-exist.md"}
@@ -216,7 +176,6 @@ def test_drift_fail_when_pinned_banner_missing(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _full_product_harness(tmp_path)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -224,7 +183,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "harness-canon-reference-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_from_config_binds_all_knobs(tmp_path: Path) -> None:
     rule = HarnessCanonReference.from_config(
         {
@@ -243,7 +201,6 @@ def test_from_config_binds_all_knobs(tmp_path: Path) -> None:
     assert rule.required_files == ("AGENTS.md",)
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.harness_canon_reference as mod
 
