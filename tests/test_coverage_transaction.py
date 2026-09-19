@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -170,6 +171,54 @@ def test_public_transaction_freshly_measures_both_commits_with_fixed_profile(tmp
     assert git(root, "worktree", "list", "--porcelain") == before
 
 
+def test_public_transaction_starts_exact_base_and_candidate_measurements_together(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    barrier = tmp_path / "measurement-started"
+    barrier.mkdir()
+
+    git(root, "checkout", "--detach", base)
+    test = root / "tests/test_subject.py"
+    test.write_text(
+        test.read_text()
+        + "\nimport os, time\nfrom pathlib import Path\n"
+        + "def test_both_exact_sides_are_running():\n"
+        + "    shared = Path(os.environ['TC_FITNESS_TEST_OVERLAP_DIR'])\n"
+        + "    side = Path.cwd().name\n"
+        + "    assert side in {'base', 'candidate'}\n"
+        + "    (shared / (side + '.started')).touch()\n"
+        + "    deadline = time.monotonic() + 8\n"
+        + "    while time.monotonic() < deadline:\n"
+        + "        if all((shared / (name + '.started')).exists() for name in ('base', 'candidate')):\n"
+        + "            return\n"
+        + "        time.sleep(0.01)\n"
+        + "    raise AssertionError('the other exact-commit measurement did not overlap this test')\n"
+    )
+    base = commit(root)
+    for name in ("subject", "gate", "runner", "gate_config", "runtime_contract"):
+        (root / f"src/tc_fitness/{name}.py").write_text(
+            "def choose(flag):\n    if flag:\n        return 2\n    return 1\n"
+        )
+    test.write_text(
+        test.read_text().replace(
+            "    assert choose(False)==1\n", "    assert choose(False)==1\n    assert choose(True)==2\n"
+        )
+    )
+    candidate = commit(root)
+    evidence = tmp_path / "overlap.evidence"
+    environment = {**os.environ, "TC_FITNESS_TEST_OVERLAP_DIR": str(barrier)}
+
+    code, result = invoke(root, base, candidate, tmp_path / "overlap.json", environment=environment)
+
+    assert code == 0, result
+    assert result["status"] == "pass"
+    assert (barrier / "base.started").is_file()
+    assert (barrier / "candidate.started").is_file()
+    assert result["base"]["commit"] == base
+    assert result["candidate"]["commit"] == candidate
+    assert json.loads((evidence / "transaction.json").read_text()) == result
+
+
 def test_public_transaction_rejects_uncovered_changed_and_critical_branches(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, candidate = repository(root, covered=False)
@@ -306,7 +355,136 @@ def test_failed_base_is_not_replaced_by_a_passing_candidate_measurement(tmp_path
     retained = tmp_path / "result.evidence"
     assert "test_failure" in (retained / result["stdout_log"]).read_text()
     assert (retained / result["stderr_log"]).is_file()
+    # The independent candidate still completes, and its fresh reports remain
+    # available even though the transaction reports the deterministic base error.
+    assert (retained / "candidate/measurement/receipt.json").is_file()
+    assert (retained / "candidate/measurement/coverage.xml").is_file()
     assert json.loads((retained / "transaction.json").read_text()) == result
+    assert git(root, "worktree", "list", "--porcelain") == before
+
+
+@pytest.mark.parametrize(
+    ("failing_sides", "expected_error_side"),
+    [("candidate", "candidate"), ("base,candidate", "base")],
+)
+def test_parallel_measurement_retains_side_failures_and_selects_base_first(
+    tmp_path: Path, failing_sides: str, expected_error_side: str
+) -> None:
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    git(root, "checkout", "--detach", base)
+    test = root / "tests/test_subject.py"
+    test.write_text(
+        test.read_text()
+        + "\nimport os\nfrom pathlib import Path\n"
+        + "def test_selected_measurement_failure():\n"
+        + "    failing = os.environ['TC_FITNESS_TEST_FAIL_SIDES'].split(',')\n"
+        + "    if Path.cwd().name in failing:\n"
+        + "        raise AssertionError('failure requested for ' + Path.cwd().name)\n"
+    )
+    base = commit(root)
+    for name in ("subject", "gate", "runner", "gate_config", "runtime_contract"):
+        (root / f"src/tc_fitness/{name}.py").write_text(
+            "def choose(flag):\n    if flag:\n        return 2\n    return 1\n"
+        )
+    test.write_text(
+        test.read_text().replace(
+            "    assert choose(False)==1\n", "    assert choose(False)==1\n    assert choose(True)==2\n"
+        )
+    )
+    candidate = commit(root)
+    result_path = tmp_path / "result.json"
+    environment = {**os.environ, "TC_FITNESS_TEST_FAIL_SIDES": failing_sides}
+
+    code, result = invoke(root, base, candidate, result_path, environment=environment)
+
+    retained = result_path.with_suffix(".evidence")
+    assert code == 2, result
+    assert result["status"] == "error"
+    assert result["side"] == expected_error_side
+    assert result["phase"] == "run"
+    assert "failure requested" in (retained / result["stdout_log"]).read_text()
+    failed = set(failing_sides.split(","))
+    for side in ("base", "candidate"):
+        run_log = retained / side / "measurement/run.stdout.log"
+        assert run_log.is_file()
+        if side in failed:
+            assert "failure requested" in run_log.read_text()
+            assert not (retained / side / "measurement/receipt.json").exists()
+        else:
+            assert (retained / side / "measurement/receipt.json").is_file()
+    assert json.loads((retained / "transaction.json").read_text()) == result
+    assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
+
+
+def test_interrupted_parallel_measurement_waits_for_children_and_cleans_worktrees(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    git(root, "checkout", "--detach", base)
+    marker_dir = tmp_path / "interruption-markers"
+    marker_dir.mkdir()
+    test = root / "tests/test_subject.py"
+    test.write_text(
+        test.read_text()
+        + "\nimport os, time\nfrom pathlib import Path\n"
+        + "def test_running_marker_is_external_and_isolated():\n"
+        + "    markers = Path(os.environ['TC_FITNESS_TEST_INTERRUPT_DIR'])\n"
+        + "    side = Path.cwd().name\n"
+        + "    (markers / (side + '.started')).touch()\n"
+        + "    time.sleep(2)\n"
+        + "    (markers / (side + '.finished')).touch()\n"
+    )
+    base = commit(root)
+    for name in ("subject", "gate", "runner", "gate_config", "runtime_contract"):
+        (root / f"src/tc_fitness/{name}.py").write_text(
+            "def choose(flag):\n    if flag:\n        return 2\n    return 1\n"
+        )
+    test.write_text(
+        test.read_text().replace(
+            "    assert choose(False)==1\n", "    assert choose(False)==1\n    assert choose(True)==2\n"
+        )
+    )
+    candidate = commit(root)
+    before = git(root, "worktree", "list", "--porcelain")
+    evidence = tmp_path / "interrupted.evidence"
+    environment = {**os.environ, "TC_FITNESS_TEST_INTERRUPT_DIR": str(marker_dir)}
+    process = subprocess.Popen(
+        [
+            str(Path(sys.executable).with_name("tc-fitness")),
+            "assure-coverage",
+            "--repo-root",
+            str(root),
+            "--base-commit",
+            base,
+            "--candidate-commit",
+            candidate,
+            "--evidence-dir",
+            str(evidence),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if all((marker_dir / f"{side}.started").exists() for side in ("base", "candidate")):
+                break
+            if process.poll() is not None:
+                pytest.fail("coverage transaction exited before both measurements started")
+            time.sleep(0.02)
+        else:
+            pytest.fail("both exact worktree measurements did not start")
+        process.send_signal(signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=20)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=5)
+
+    assert process.returncode != 0, (stdout, stderr)
+    assert all((marker_dir / f"{side}.finished").is_file() for side in ("base", "candidate"))
     assert git(root, "worktree", "list", "--porcelain") == before
 
 
