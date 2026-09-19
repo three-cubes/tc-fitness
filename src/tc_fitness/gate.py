@@ -48,10 +48,12 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 
+from tc_fitness.baseline import baseline_free_execution
 from tc_fitness.gate_config import (
     GateConfig,
     GateConfigError,
@@ -263,6 +265,9 @@ def _run_catalogue_step(
     print(f"{_YELLOW}run [{step.id}]{_RESET} {label}")
 
     repo_root_for_step = repo_root
+    if step.baseline_free and establish_baseline:
+        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance cannot establish baselines")
+        return StepResult(step.id, "fail")
     checks_dir = (repo_root / step.checks_dir).resolve() if step.checks_dir is not None else None
 
     # Make the catalogue module importable from the repo root (the consumer's
@@ -272,8 +277,9 @@ def _run_catalogue_step(
     if added:
         sys.path.insert(0, repo_root_str)
     try:
-        rules = _resolve_catalogue(catalogue_ref)
-    except (ImportError, AttributeError) as exc:
+        with baseline_free_execution() if step.baseline_free else nullcontext():
+            rules = _resolve_catalogue(catalogue_ref)
+    except (ImportError, AttributeError, ValueError) as exc:
         print(f"{_RED}FAIL [{step.id}]{_RESET} could not load catalogue {catalogue_ref!r}: {exc}")
         print(f'   fix: confirm the `catalogue = "module:attr"` ref resolves from {repo_root}')
         _print_fix_next(step)
@@ -291,16 +297,20 @@ def _run_catalogue_step(
     if establish_baseline:
         argv.append("--establish-baseline")
     core_check_configs = load_core_check_configs(repo_root)
-    rc = main_cli(
-        rules,  # type: ignore[arg-type]
-        argv,
-        repo_root=repo_root_for_step,
-        checks_dir=checks_dir,
-        dispatch=step.dispatch,
-        parallel_subprocess=step.parallel,
-        core_check_configs=core_check_configs,
-        staged_files=changed_files,
-    )
+    if step.baseline_free and any(str(getattr(rule, "script", "")).endswith(".sh") for rule in rules):
+        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance cannot dispatch shell checks")
+        return StepResult(step.id, "fail")
+    with baseline_free_execution() if step.baseline_free else nullcontext():
+        rc = main_cli(
+            rules,  # type: ignore[arg-type]
+            argv,
+            repo_root=repo_root_for_step,
+            checks_dir=checks_dir,
+            dispatch=step.dispatch,
+            parallel_subprocess=step.parallel,
+            core_check_configs=core_check_configs,
+            staged_files=changed_files,
+        )
     if rc == 0:
         print(f"{_GREEN}PASS [{step.id}]{_RESET} {label}")
         return StepResult(step.id, "pass")

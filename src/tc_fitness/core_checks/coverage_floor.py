@@ -173,6 +173,7 @@ class CoverageFloor(FitnessRule):
     coverage_report: str = DEFAULT_COVERAGE_REPORT
     branch_floor_pct: float | None = None
     critical_branch_files: frozenset[str] = frozenset()
+    receipt_config: dict[str, Any] | None = None
 
     @classmethod
     def from_config(
@@ -186,6 +187,10 @@ class CoverageFloor(FitnessRule):
         assert isinstance(rule, CoverageFloor)  # noqa: S101  # narrowing for mypy
         rule.floor_pct = float(config.get("floor_pct", DEFAULT_FLOOR_PCT))
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
+        if "coverage_receipt" in config:
+            if config.get("branch_floor_pct") is None:
+                raise ValueError("coverage receipt admission requires independent branch coverage")
+            rule.receipt_config = dict(config)
         branch_floor = config.get("branch_floor_pct")
         critical = config.get("critical_branch_files", [])
         if not isinstance(critical, list) or any(not isinstance(path, str) for path in critical):
@@ -237,7 +242,12 @@ class CoverageFloor(FitnessRule):
         return rule
 
     def _report_path(self) -> Path:
-        report = Path(self.coverage_report)
+        if self.receipt_config is not None:
+            from tc_fitness.coverage_admission import configured
+
+            report = Path(configured(self.coverage_report))
+        else:
+            report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
     @cached_property
@@ -317,10 +327,20 @@ class CoverageFloor(FitnessRule):
         """Strict independent floors never consult a suppressible baseline."""
         if self.branch_floor_pct is None:
             return super().run()
-        for relative, message in self._strict_failures.items():
+        failures = dict(self._strict_failures)
+        if self.receipt_config is not None:
+            from tc_fitness.coverage_admission import receipt_failures
+
+            failures.update(receipt_failures(self._repo_root, self.receipt_config))
+        for relative, message in failures.items():
             report_finding(self.name, relative, message)
             print(f"FAIL [{self.name}] {relative}: {message}")
-        return int(bool(self._strict_failures))
+        return int(bool(failures))
+
+    def establish_baseline(self) -> Path:
+        if self.branch_floor_pct is not None:
+            raise ValueError("strict coverage cannot establish a baseline")
+        return super().establish_baseline()
 
 
 def build(

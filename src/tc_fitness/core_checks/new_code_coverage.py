@@ -18,6 +18,13 @@ a non-zero hit (``covered_changed``), and FAILS the file when
 lines are all non-coverable (blank lines, comments, lines the report never
 recorded) contributes no measurable new code and is not a violation.
 
+That is the backwards-compatible consumer mode. Configuring
+``exact_base_commit`` / ``candidate_commit`` instead uses strict immutable
+coverage admission: complete source-derived executable detail, clean Git
+identity, no exemptions and 100 percent changed lines. ``coverage_receipt``
+additionally binds the fresh execution and accepted-base monotonic evidence.
+Strict-mode missing inputs raise; they never enter the legacy soft-pass path.
+
 Hard floor, by design. Unlike :mod:`coverage_floor`, this rule is baseline-free:
 new code is inherently non-grandfatherable (see :meth:`NewCodeCoverage.establish_baseline`).
 
@@ -253,6 +260,7 @@ class NewCodeCoverage(FitnessRule):
     #: The git command runner (DI seam) — set by ``from_config`` / ``build`` so a
     #: test can inject canned diff output without a real repo or monkeypatching.
     git_runner: GitRunner
+    exact_config: dict[str, Any] | None = None
 
     @classmethod
     def from_config(
@@ -268,6 +276,8 @@ class NewCodeCoverage(FitnessRule):
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
         rule.base_ref = str(config.get("base_ref", DEFAULT_BASE_REF))
         rule.git_runner = _default_git_runner
+        if any(key in config for key in ("exact_base_commit", "candidate_commit", "coverage_receipt")):
+            rule.exact_config = dict(config)
         return rule
 
     def _report_path(self) -> Path:
@@ -419,6 +429,14 @@ class NewCodeCoverage(FitnessRule):
         merge condition. Returns ``0`` when the changed lines clear the floor (or
         there is no measurable new code), ``1`` otherwise.
         """
+        if self.exact_config is not None:
+            from tc_fitness.coverage_admission import changed_line_failures
+
+            failures = changed_line_failures(self._repo_root, self.exact_config)
+            for relative, message in failures.items():
+                report_finding(self.name, relative, message)
+                print(f"FAIL [{self.name}] {relative}: {message}")
+            return int(bool(failures))
         violations = sorted(self.collect_violations(), key=lambda path: str(path))
         if not violations:
             print(f"ok [arch:{self._name}] — new code clears the {self.floor_pct:g}% coverage floor.")
@@ -444,6 +462,8 @@ class NewCodeCoverage(FitnessRule):
         writes a coherent (empty) file; the hard floor is enforced by
         :meth:`run`, which consults no baseline at all.
         """
+        if self.exact_config is not None:
+            raise ValueError("exact-base coverage cannot establish a baseline")
         return _establish_baseline(self._name, set(), self._repo_root)
 
 

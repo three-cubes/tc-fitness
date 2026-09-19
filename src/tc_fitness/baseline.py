@@ -171,6 +171,8 @@ def establish_baseline(
     written so callers can report it. Overwrites any existing baseline (the
     operator is deliberately re-freezing).
     """
+    if _BASELINE_FREE.get():
+        raise ValueError("baseline-free assurance cannot write a baseline")
     path = baseline_path(name, repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_baseline(name, entries), encoding="utf-8")

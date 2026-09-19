@@ -110,7 +110,12 @@ class CoverageIncludesBranches(FitnessRule):
         return rule
 
     def _report_path(self) -> Path:
-        report = Path(self.coverage_report)
+        if self.coverage_report.startswith("env:"):
+            from tc_fitness.coverage_admission import configured
+
+            report = Path(configured(self.coverage_report))
+        else:
+            report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
     def enumerate_files(self) -> list[Path]:
