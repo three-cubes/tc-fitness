@@ -1,0 +1,36 @@
+schema: tc.fitness/check-contract/v1
+check: core:untrusted_automation_boundary
+config:
+  workflows:
+  - .github/workflows/analysis.yml
+  untrusted_action_prefixes:
+  - example/analyse@
+  privileged_action_prefixes:
+  - azure/login@
+  privileged_permissions:
+  - id-token
+  credential_env_names:
+  - PUBLISH_TOKEN
+  credential_command_markers:
+  - npm publish
+  runtime_contract_roots:
+  - runtime/contracts
+  contract_keys:
+  - contract
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: untrusted-automation-boundary
+      path: .github/workflows/analysis.yml
+      message_contains: credential boundary
+dependencies: []

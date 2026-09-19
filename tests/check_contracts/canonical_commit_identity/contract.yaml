@@ -1,0 +1,57 @@
+schema: tc.fitness/check-contract/v1
+check: core:canonical_commit_identity
+config:
+  allowed_emails:
+  - maintainer@example.test
+  allowed_name_patterns:
+  - ^Fixture Maintainer$
+  base_ref: refs/heads/base
+  head_ref: refs/heads/candidate
+cases:
+- id: compliant
+  fixture: compliant
+  environment:
+    schema: tc.fitness/check-environment/v2
+    path: inherit
+    git:
+      schema: tc.fitness/git-fixture/v1
+      history: .contract/git.fast-import
+      checkout: refs/heads/candidate
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  environment:
+    schema: tc.fitness/check-environment/v2
+    path: inherit
+    git:
+      schema: tc.fitness/git-fixture/v1
+      history: .contract/git.fast-import
+      checkout: refs/heads/candidate
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: canonical-commit-identity
+      path: d28c4bfedc0e author Outside Contributor <outside@example.test>
+      message_contains: allowlisted identity
+- id: unavailable
+  fixture: unavailable
+  environment:
+    schema: tc.fitness/check-environment/v2
+    path: empty
+    git:
+      schema: tc.fitness/git-fixture/v1
+      history: .contract/git.fast-import
+      checkout: refs/heads/candidate
+  expected:
+    status: error
+    exit: nonzero
+    findings:
+    - rule: check-execution-error
+      path: .
+      message_contains: FileNotFoundError
+dependencies:
+- git

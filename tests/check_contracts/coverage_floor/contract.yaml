@@ -1,0 +1,24 @@
+schema: tc.fitness/check-contract/v1
+check: core:coverage_floor
+config:
+  roots:
+  - src
+  floor_pct: 90
+  coverage_report: reports/line-coverage.xml
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: coverage-floor
+      path: src/example.py
+      message_contains: coverage gap
+dependencies: []

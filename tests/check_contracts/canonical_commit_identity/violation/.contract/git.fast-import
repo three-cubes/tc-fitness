@@ -1,0 +1,22 @@
+commit refs/heads/base
+mark :1
+author Fixture Maintainer <maintainer@example.test> 1700000000 +0000
+committer Fixture Maintainer <maintainer@example.test> 1700000000 +0000
+data 5
+base
+M 100644 inline src/example.py
+data 10
+value = 1
+
+commit refs/heads/candidate
+mark :2
+author Outside Contributor <outside@example.test> 1700000001 +0000
+committer Fixture Maintainer <maintainer@example.test> 1700000001 +0000
+data 10
+candidate
+from :1
+M 100644 inline src/example.py
+data 10
+value = 2
+
+done

@@ -1,0 +1,23 @@
+schema: tc.fitness/check-contract/v1
+check: core:mutation_survival_ratchet
+config:
+  baseline_report: reports/prior.json
+  current_report: reports/current.json
+  allow_missing_current: false
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: mutation-survival-ratchet
+      path: reports/current.json
+      message_contains: make the mutation report obey its contract
+dependencies: []

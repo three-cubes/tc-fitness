@@ -1,0 +1,21 @@
+schema: tc.fitness/check-contract/v1
+check: core:harness_canon_reference
+config:
+  repo_type: core
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: harness-canon-reference
+      path: .
+      message_contains: no harness file carries the canonical-standards reference
+dependencies: []
