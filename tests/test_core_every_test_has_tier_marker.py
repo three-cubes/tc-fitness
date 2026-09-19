@@ -310,19 +310,28 @@ def test_parser() -> None:
 """,
 }
 
-_RUNTIME_TIER_PROOF = """
-import pytest
+_REUSED_OR_ALIASED_MARKERS = {
+    "bare-decorator": "@pytestmark\ndef test_parser(): pass\n",
+    "parameter-marker": (
+        '@pytest.mark.parametrize("value", [pytest.param(1, marks=pytestmark)])\n'
+        "def test_parser(value): pass\n"
+    ),
+    "import-mark": "from pytest import mark\n@mark.integration\ndef test_parser(): pass\n",
+    "import-pytest-alias": "import pytest as pt\n@pt.mark.integration\ndef test_parser(): pass\n",
+    "copy-mark": "mark = pytest.mark\n@mark.integration\ndef test_parser(): pass\n",
+    "copy-pytest": "pt = pytest\n@pt.mark.integration\ndef test_parser(): pass\n",
+    "getattr-mark": 'mark = getattr(pytest, "mark")\n@mark.integration\ndef test_parser(): pass\n',
+    "post-definition-alias": (
+        "from pytest import mark\ndef test_parser(): pass\ntest_parser = mark.integration(test_parser)\n"
+    ),
+}
 
-TIER_MARKERS = {"unit", "contract", "integration", "e2e"}
-
-def pytest_collection_finish(session: pytest.Session) -> None:
-    offenders = []
-    for item in session.items:
-        effective_tiers = [marker.name for marker in item.iter_markers() if marker.name in TIER_MARKERS]
-        if len(effective_tiers) != 1:
-            offenders.append(f"{item.nodeid}: {effective_tiers}")
-    if offenders:
-        raise pytest.UsageError("items must have exactly one effective tier: " + "; ".join(offenders))
+_PYTEST_CONFIG = """[pytest]
+markers =
+    unit: unit tier
+    contract: contract tier
+    integration: integration tier
+    e2e: e2e tier
 """
 
 _NO_TESTS = """
@@ -343,6 +352,31 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+def _collect_tiers(tmp_path: Path, body: str, *args: str) -> subprocess.CompletedProcess[str]:
+    """Exercise the shipped plugin in real pytest, never a synthetic item."""
+    _seed(tmp_path, "pytest.ini", _PYTEST_CONFIG)
+    _seed(tmp_path, "test_subject.py", body)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "--strict-markers",
+            "-q",
+            "-p",
+            "tc_fitness.pytest_tiers",
+            *args,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=os.environ | {"PYTEST_ADDOPTS": "", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        timeout=30,
+    )
+
+
 def _assert_canonical_rule_and_collection_reject(
     tmp_path: Path,
     body: str,
@@ -350,15 +384,19 @@ def _assert_canonical_rule_and_collection_reject(
     expected_collection_exit: int = 0,
 ) -> None:
     path = _seed(tmp_path, "tests/test_x.py", body)
+    _seed(tmp_path, "pytest.ini", _PYTEST_CONFIG)
     rule = EveryTestHasTierMarker.from_config(
         {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
     )
     assert rule.run() == 1
     collection = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", str(path)],
+        [sys.executable, "-m", "pytest", "--collect-only", "--strict-markers", "-q", str(path)],
         check=False,
         capture_output=True,
         text=True,
+        cwd=tmp_path,
+        env=os.environ | {"PYTEST_ADDOPTS": "", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        timeout=30,
     )
     assert collection.returncode == expected_collection_exit, collection.stdout + collection.stderr
 
@@ -489,6 +527,23 @@ def test_tier_vocabulary_is_config_driven(tmp_path: Path) -> None:
     assert custom.collect_violations() == set()
 
 
+@pytest.mark.parametrize(
+    "body,markers",
+    [
+        (_MODULE_AND_FUNCTION_MARKER, ["unit"]),
+        (_MODULE_MARKER.replace("pytest.mark.unit", "pytest.mark.fast"), ["fast"]),
+    ],
+)
+def test_generic_vocabulary_cannot_weaken_canonical_mode(
+    tmp_path: Path, body: str, markers: list[str]
+) -> None:
+    path = _seed(tmp_path, "tests/test_x.py", body)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "tier_markers": markers, "require_module_marker": True}, repo_root=tmp_path
+    )
+    assert rule.collect_violations() == {path.relative_to(tmp_path)}
+
+
 def test_scope_skips_non_test_files_and_excluded_parts(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/helpers.py", _UNTAGGED)  # not test_*
     _seed(tmp_path, "tests/fixtures/test_x.py", _UNTAGGED)  # excluded part
@@ -525,32 +580,111 @@ def test_repository_tests_are_all_classified_by_tier() -> None:
         },
         repo_root=Path(__file__).parent.parent,
     )
+    # Self-assurance admits no baseline; ordinary consumer adoption still can.
+    assert rule.collect_violations() == set()
     assert rule.run() == 0
 
 
-def test_repository_items_have_one_effective_tier(tmp_path: Path) -> None:
-    plugin = _seed(tmp_path, "tier_runtime_self_proof.py", _RUNTIME_TIER_PROOF)
-    environment = os.environ | {
-        "PYTHONPATH": str(plugin.parent) + os.pathsep + os.environ.get("PYTHONPATH", ""),
-    }
-    collection = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "--collect-only",
-            "-q",
-            "-p",
-            "tier_runtime_self_proof",
-            "tests",
-        ],
-        check=False,
-        capture_output=True,
-        cwd=Path(__file__).parent.parent,
-        env=environment,
-        text=True,
+@pytest.mark.parametrize("suffix", _REUSED_OR_ALIASED_MARKERS.values(), ids=_REUSED_OR_ALIASED_MARKERS)
+def test_canonical_source_rejects_reused_markers_and_namespaces(tmp_path: Path, suffix: str) -> None:
+    body = "import pytest\npytestmark = pytest.mark.unit\n" + suffix
+    path = _seed(tmp_path, "tests/test_subject.py", body)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
     )
+    assert rule.collect_violations() == {path.relative_to(tmp_path)}
+
+
+def test_canonical_source_preserves_real_code_attributes(tmp_path: Path) -> None:
+    body = """
+from types import SimpleNamespace
+import pytest
+pytestmark = pytest.mark.unit
+documents = SimpleNamespace(contract=lambda: 1)
+@pytest.mark.parametrize("value", [pytest.param(1, marks=pytest.mark.xfail)])
+def test_parser(value):
+    assert documents.contract() == value
+"""
+    path = _seed(tmp_path, "test_subject.py", body)
+    assert not file_missing_tier_marker(path, tiers=_TIERS, require_module_marker=True)
+    collection = _collect_tiers(tmp_path, body)
     assert collection.returncode == 0, collection.stdout + collection.stderr
+
+
+@pytest.mark.parametrize("suffix", _REUSED_OR_ALIASED_MARKERS.values(), ids=_REUSED_OR_ALIASED_MARKERS)
+def test_runtime_rejects_reused_markers_and_namespaces(tmp_path: Path, suffix: str) -> None:
+    collection = _collect_tiers(tmp_path, "import pytest\npytestmark = pytest.mark.unit\n" + suffix)
+    assert collection.returncode == 4, collection.stdout + collection.stderr
+    assert "test_subject.py::test_parser" in collection.stderr
+    assert "exactly one effective tier" in collection.stderr
+    expected = "['unit', 'unit']" if "pytestmark" in suffix else "['integration', 'unit']"
+    assert expected in collection.stderr
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _MODULE_AND_FUNCTION_MARKER,
+        _REASSIGNED_MODULE_MARKER,
+        _UNPACKED_REASSIGNMENT.replace(
+            "pytest.mark.unit, pytest.mark.integration", "[pytest.mark.unit, pytest.mark.integration], None"
+        ),
+        _PYTESTMARK_MUTATION,
+        _STARRED_TIER_EXPRESSION,
+        _ALIASED_TIER_EXPRESSION,
+        _CLASS_TIER_DECORATOR,
+        _CLASS_TIER_DECLARATION,
+        _TIER_ALIAS_DECORATOR,
+        _PYTEST_PARAM_TIER_MARK,
+        _FUNCTION_PYTESTMARK_MUTATION,
+        _POST_DEFINITION_DECORATION,
+    ],
+)
+def test_runtime_rejects_previous_multiple_tier_controls(tmp_path: Path, body: str) -> None:
+    collection = _collect_tiers(tmp_path, body)
+    assert collection.returncode == 4, collection.stdout + collection.stderr
+    assert "exactly one effective tier" in collection.stderr
+    assert "unit" in collection.stderr and "integration" in collection.stderr
+
+
+def test_runtime_rejects_missing_tier(tmp_path: Path) -> None:
+    collection = _collect_tiers(tmp_path, _UNTAGGED)
+    assert collection.returncode == 4, collection.stdout + collection.stderr
+    assert "test_subject.py::test_parser: []" in collection.stderr
+
+
+@pytest.mark.parametrize("selection", ["-m", "-k"])
+def test_runtime_rejects_invalid_deselected_items(tmp_path: Path, selection: str) -> None:
+    collection = _collect_tiers(tmp_path, _MODULE_AND_FUNCTION_MARKER, selection, "contract")
+    assert collection.returncode == 4, collection.stdout + collection.stderr
+    assert "test_subject.py::test_parser: ['integration', 'unit']" in collection.stderr
+
+
+def test_runtime_checks_markers_added_by_collection_hooks(tmp_path: Path) -> None:
+    _seed(
+        tmp_path,
+        "conftest.py",
+        "import pytest\ndef pytest_collection_modifyitems(items):\n"
+        "    for item in items:\n        item.add_marker(pytest.mark.contract)\n",
+    )
+    collection = _collect_tiers(tmp_path, _MODULE_MARKER)
+    assert collection.returncode == 4, collection.stdout + collection.stderr
+    assert "test_subject.py::test_parser: ['contract', 'unit']" in collection.stderr
+
+
+def test_runtime_catches_indirect_marking_beyond_source_grammar(tmp_path: Path) -> None:
+    _seed(tmp_path, "helpers.py", "from pytest import mark\ndecorate = mark.integration\n")
+    body = "import pytest\nfrom helpers import decorate\npytestmark = pytest.mark.unit\n@decorate\ndef test_parser(): pass\n"
+    path = _seed(tmp_path, "test_subject.py", body)
+    assert not file_missing_tier_marker(path, tiers=_TIERS, require_module_marker=True)
+    collection = _collect_tiers(tmp_path, body)
+    assert collection.returncode == 4, collection.stdout + collection.stderr
+    assert "test_subject.py::test_parser: ['integration', 'unit']" in collection.stderr
+
+
+def test_runtime_plugin_does_not_convert_empty_collection_to_pass(tmp_path: Path) -> None:
+    collection = _collect_tiers(tmp_path, "import pytest\npytestmark = pytest.mark.unit\n")
+    assert collection.returncode == 5, collection.stdout + collection.stderr
 
 
 def test_no_repo_strings_in_executable_code() -> None:

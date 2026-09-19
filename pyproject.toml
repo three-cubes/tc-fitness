@@ -41,6 +41,7 @@ packages = ["src/tc_fitness"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--strict-markers", "-p", "tc_fitness.pytest_tiers"]
 markers = [
   "unit: in-process transformation or predicate with no process boundary",
   "contract: public input/output or protocol contract using controlled local collaborators",
@@ -161,7 +162,7 @@ ruff format --check \
   tests/test_gate.py tests/test_gate_config.py \
   src/tc_fitness/baseline.py src/tc_fitness/fitness_rule.py \
   src/tc_fitness/keystone.py src/tc_fitness/core_checks/ \
-  src/tc_fitness/runtime_contract.py \
+  src/tc_fitness/runtime_contract.py src/tc_fitness/pytest_tiers.py \
   src/tc_fitness/check_contracts.py src/tc_fitness/check_contract_policy.py \
   src/tc_fitness/check_contract_execution.py src/tc_fitness/check_evidence.py \
   tests/test_baseline.py tests/test_fitness_rule.py \
