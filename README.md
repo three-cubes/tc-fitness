@@ -305,6 +305,8 @@ must be classified before assurance can use them. Adoption flags must be false,
 exclusion lists must be empty, and cutover, informational-job and test-filename
 exemption overrides are forbidden. OSV requires explicit `required: true`;
 mutation-report contracts require explicit `allow_missing_current: false`.
+Tier-marker contracts require explicit `require_module_marker: true` so
+contract assurance cannot fall back to generic function-level classification.
 Mutation `baseline_report` is a bound input report, not a suppression list.
 Normal scope, thresholds and expected identities remain detector policy inputs.
 The output directory must exist, and the ledger must be a new path outside the
