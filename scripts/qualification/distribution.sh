@@ -33,13 +33,10 @@ dist_dir="$workdir/dist"
 rebuilt_dir="$workdir/rebuilt"
 fixture_dir="$workdir/fixture"
 runtime_requirements="$workdir/runtime-requirements.txt"
-assurance_requirements="$workdir/assurance-requirements.txt"
 
 mkdir -p "$dist_dir" "$rebuilt_dir" "$fixture_dir"
 uv export --project "$repo_root" --locked --no-dev --no-emit-project \
   --format requirements.txt --output-file "$runtime_requirements" >/dev/null
-uv export --project "$repo_root" --locked --no-dev --all-extras --no-emit-project \
-  --format requirements.txt --output-file "$assurance_requirements" >/dev/null
 uv build --python "$python_bin" --out-dir "$dist_dir" "$repo_root"
 
 wheels=("$dist_dir"/*.whl)
@@ -140,8 +137,27 @@ qualify() {
     --max-age-seconds 300 \
     --output "$verification"
 
-  # Coverage parsing is an assurance extra, not a default-install dependency.
-  uv pip install --python "$environment/bin/python" --require-hashes -r "$assurance_requirements"
+  # Install assurance tools through the locked project resolver so dependency
+  # overrides (including the reviewed asteval security override) remain in
+  # force. An exported requirements file loses those resolver semantics and
+  # cannot represent Checkov's overridden dependency metadata. --inexact keeps
+  # the candidate wheel installed above; --no-install-project prevents a source
+  # checkout from replacing the artifact under qualification.
+  UV_PROJECT_ENVIRONMENT="$environment" uv sync \
+    --project "$repo_root" \
+    --locked \
+    --all-extras \
+    --all-groups \
+    --no-install-project \
+    --inexact
+  "$environment/bin/python" - <<'PY'
+from importlib.metadata import version
+
+assert version("asteval") == "1.0.9"
+assert version("checkov") == "3.2.531"
+PY
+  "$environment/bin/checkov" --version >/dev/null
+  echo "qualified $label locked assurance tools"
   "$environment/bin/python" - "$workdir/$label-coverage" <<'PY'
 import json
 import subprocess
