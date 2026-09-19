@@ -4,6 +4,10 @@
 run `tc-fitness run` and it runs your linters, type-check, tests, coverage,
 security scan, and architecture rules, then gives you one pass or fail.
 
+Supported platform evidence covers Linux on Python 3.12 and 3.13, plus macOS
+CLI, Git and filesystem qualification on Python 3.12. Windows is unsupported
+until it has an equivalent installed-distribution qualification lane.
+
 **The tool knows HOW to run the checks. Your repo says WHAT to check** — you list
 the checks in a `[tool.tc_fitness]` block in your `pyproject.toml`, and
 tc-fitness runs them in order and gives you a single verdict.
