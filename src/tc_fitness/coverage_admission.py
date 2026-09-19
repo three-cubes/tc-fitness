@@ -301,6 +301,17 @@ def receipt_failures(root: Path, config: dict[str, Any]) -> dict[str, str]:
     return {".": "; ".join(messages)} if messages else {}
 
 
+class CoverageExecutionError(ValueError):
+    """A terminal native measurement failure with retained structured diagnostics."""
+
+    def __init__(self, phase: str, code: int, output: Path) -> None:
+        super().__init__(f"coverage producer {phase} command failed (exit {code}); no receipt emitted")
+        self.phase = phase
+        self.exit_code = code
+        self.stdout_log = output / (phase + ".stdout.log")
+        self.stderr_log = output / (phase + ".stderr.log")
+
+
 def produce_coverage(
     *,
     root: Path,
@@ -338,6 +349,7 @@ def produce_coverage(
     interpreter = python_executable if python_executable is not None else Path(sys.executable)
     if not interpreter.is_absolute() or not interpreter.is_file():
         raise ValueError("coverage producer requires an absolute installed Python interpreter")
+    output.mkdir(parents=True, exist_ok=False)
     runtime = run_bounded_process(
         [
             str(interpreter),
@@ -350,8 +362,10 @@ def produce_coverage(
         env=environment,
         timeout=30,
     )
+    (output / "identity.stdout.log").write_bytes(runtime.stdout)
+    (output / "identity.stderr.log").write_bytes(runtime.stderr)
     if runtime.returncode:
-        raise ValueError("coverage interpreter lacks the required measurement toolchain")
+        raise CoverageExecutionError("identity", runtime.returncode, output)
     versions = json.loads(runtime.stdout)
     if digest_output is not None and (
         not digest_output.is_absolute()
@@ -359,7 +373,6 @@ def produce_coverage(
         or digest_output.exists()
     ):
         raise ValueError("coverage digest output must be a new external handoff file")
-    output.mkdir(parents=True, exist_ok=False)
     settings = output / "coverage.ini"
     settings.write_text(
         "[run]\nbranch = true\nsource =\n"
@@ -383,7 +396,7 @@ def produce_coverage(
             stderr_path=output / (args[0] + ".stderr.log"),
         )
         if result.returncode:
-            raise ValueError("coverage producer command failed; no receipt emitted")
+            raise CoverageExecutionError(args[0], result.returncode, output)
     exact_checkout(root, base, candidate)
     if source_hash != digest(
         {name: bytes_digest(path.read_bytes()) for name, path in sorted(source_files(root, roots).items())}
