@@ -16,10 +16,7 @@ the repo runs CI yet forked its own quality gate off the shared standard. It
 PASSES a repo whose CI does at least one of the two, and it SKIPS (vacuous pass)
 a repo with no CI workflows at all, because there is nothing to enforce.
 
-Non-grandfatherable: a forked gate is a hard repo-level gate, not a per-file
-debt, so :meth:`run` drives the two arms directly rather than ratcheting a
-violation set against a baseline (the same posture as the harness_canon_reference
-and deterministic_tests CORE checks).
+The rule is a repo-level gate, so :meth:`run` drives both proof arms directly.
 
 Repo-agnostic: every knob (the workflows directory, the reusable-reference
 regex, and the engine-invocation regex) arrives through the
@@ -121,7 +118,7 @@ class CiConsumesSharedGate(FitnessRule):
 
     Drives the two arms (reusable-reference, engine-invocation) directly in
     :meth:`run`; the per-file scan hooks are inert because a forked gate is a
-    hard repo-level gate, not a grandfatherable per-file debt.
+    hard repo-level gate.
     """
 
     name = "ci-consumes-shared-gate"

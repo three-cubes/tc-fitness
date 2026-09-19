@@ -121,10 +121,6 @@ class PosixPathSerialisation(FitnessRule):
     remediation = REMEDIATION
     extensions = (".py",)
 
-    #: Path segments that exclude a file from scope. Instance attribute so
-    #: ``from_config`` can override; class default is the rule's own shape.
-    excluded_segments: tuple[str, ...] = DEFAULT_EXCLUDED_SEGMENTS
-
     @classmethod
     def from_config(
         cls,
@@ -134,13 +130,10 @@ class PosixPathSerialisation(FitnessRule):
     ) -> PosixPathSerialisation:
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, PosixPathSerialisation)  # noqa: S101  # narrowing for mypy
-        segments = config.get("excluded_segments")
-        if segments is not None:
-            rule.excluded_segments = tuple(segments)
         return rule
 
     def is_in_scope(self, rel: str) -> bool:
-        if any(seg in self.excluded_segments for seg in rel.split("/")):
+        if any(seg in DEFAULT_EXCLUDED_SEGMENTS for seg in rel.split("/")):
             return False
         return super().is_in_scope(rel)
 

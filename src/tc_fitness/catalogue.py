@@ -83,9 +83,8 @@ class RuleEntry:
     -----------------
     * ``id`` — the human-facing label (``"F26"`` OR ``"no-duplicate-string"``).
       Opaque to the runner; used in the ledger and as the ``--gate`` selector.
-    * ``gate`` — the baseline-filename root (``"f26"`` →
-      ``.architecture/baseline/f26-files.txt``), passed to
-      :func:`tc_fitness.gate` / :func:`~tc_fitness.gate_keys`.
+    * ``gate`` — the stable machine-facing gate label (for example ``"f26"``),
+      passed to :func:`tc_fitness.gate` / :func:`~tc_fitness.gate_keys`.
     * ``check`` — the python check module name minus the ``check_`` prefix and
       ``.py`` suffix (``"provider_layer_imports"`` →
       ``check_provider_layer_imports.py``). Set to the documented

@@ -29,7 +29,7 @@ from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
 #: Doc extensions that describe paths rather than execute them. Domain-intrinsic
-#: default, overridable via config.
+#: default and part of the rule definition, not consumer config.
 DEFAULT_EXEMPT_EXTENSIONS: tuple[str, ...] = (".md",)
 
 #: Any text extension is a candidate — a consumer scopes via ``extensions``.
@@ -40,9 +40,7 @@ REMEDIATION = _remediation(
     fix=(
         "replace the hardcoded absolute checkout path with a path resolved "
         "relative to the script (Path(__file__).resolve().parents[N]) or an "
-        "environment variable. If the file ships to and runs on a host at that "
-        "absolute path, add its directory prefix to the rule's exempt_prefixes "
-        "config with a one-line rationale."
+        "environment variable or explicit runtime input."
     ),
     nxt="re-run this check to confirm the hardcode is gone.",
     run="python -m tc_fitness.core_checks.no_hardcoded_repo_paths",
@@ -81,11 +79,6 @@ class NoHardcodedRepoPaths(FitnessRule):
     #: The banned absolute-path substrings — the consumer's OWN checkout
     #: literals. No default: a consumer with none configured flags nothing.
     needles: tuple[str, ...] = ()
-    #: Extensions exempt regardless of root (docs describe paths).
-    exempt_extensions: tuple[str, ...] = DEFAULT_EXEMPT_EXTENSIONS
-    #: Repo-relative prefixes whose files legitimately reference the absolute
-    #: path (they ship to and run on a host at that checkout). Consumer-supplied.
-    exempt_prefixes: tuple[str, ...] = ()
 
     @classmethod
     def from_config(
@@ -99,18 +92,10 @@ class NoHardcodedRepoPaths(FitnessRule):
         needles = config.get("needles")
         if needles is not None:
             rule.needles = tuple(needles)
-        exempt_ext = config.get("exempt_extensions")
-        if exempt_ext is not None:
-            rule.exempt_extensions = tuple(exempt_ext)
-        exempt_prefix = config.get("exempt_prefixes")
-        if exempt_prefix is not None:
-            rule.exempt_prefixes = tuple(exempt_prefix)
         return rule
 
     def is_in_scope(self, rel: str) -> bool:
-        if rel.endswith(self.exempt_extensions):
-            return False
-        if rel.startswith(self.exempt_prefixes):
+        if rel.endswith(DEFAULT_EXEMPT_EXTENSIONS):
             return False
         return super().is_in_scope(rel)
 

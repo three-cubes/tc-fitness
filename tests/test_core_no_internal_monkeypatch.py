@@ -60,22 +60,22 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
 
 def test_patch_decorator_on_internal_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _PATCH_DECORATOR)
-    assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
+    assert file_has_internal_patch(p, internal_packages=_PKGS) is True
 
 
 def test_patch_on_stdlib_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _PATCH_STDLIB)
-    assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(p, internal_packages=_PKGS) is False
 
 
 def test_monkeypatch_setattr_ref_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _MONKEYPATCH_REF)
-    assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
+    assert file_has_internal_patch(p, internal_packages=_PKGS) is True
 
 
 def test_assignment_in_pytest_raises_is_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _FROZEN_RAISES)
-    assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(p, internal_packages=_PKGS) is False
 
 
 def test_direct_internal_assignment_is_flagged_outside_raises(tmp_path: Path) -> None:
@@ -85,7 +85,7 @@ def test_direct_internal_assignment_is_flagged_outside_raises(tmp_path: Path) ->
         "import myapp.core.search\nmyapp.core.search.run = fake_run\n",
     )
 
-    assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
+    assert file_has_internal_patch(p, internal_packages=_PKGS) is True
 
 
 def test_patch_context_and_attribute_patch_decorator_are_detected(tmp_path: Path) -> None:
@@ -101,8 +101,8 @@ def test_patch_context_and_attribute_patch_decorator_are_detected(tmp_path: Path
         "import unittest.mock as mock\n\n@mock.patch('myapp.core.search.run')\ndef test_x():\n    pass\n",
     )
 
-    assert file_has_internal_patch(context, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
-    assert file_has_internal_patch(decorator, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
+    assert file_has_internal_patch(context, internal_packages=_PKGS) is True
+    assert file_has_internal_patch(decorator, internal_packages=_PKGS) is True
 
 
 def test_import_aliases_and_string_target_monkeypatch_are_detected(tmp_path: Path) -> None:
@@ -117,8 +117,8 @@ def test_import_aliases_and_string_target_monkeypatch_are_detected(tmp_path: Pat
         "def test_x(monkeypatch):\n    monkeypatch.setattr('myapp.paths.provider_name', fake_provider)\n",
     )
 
-    assert file_has_internal_patch(from_import, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
-    assert file_has_internal_patch(string_target, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
+    assert file_has_internal_patch(from_import, internal_packages=_PKGS) is True
+    assert file_has_internal_patch(string_target, internal_packages=_PKGS) is True
 
 
 def test_unreadable_sources_and_external_aliases_are_ignored(tmp_path: Path) -> None:
@@ -131,13 +131,10 @@ def test_unreadable_sources_and_external_aliases_are_ignored(tmp_path: Path) -> 
         "import httpx as client\nclient.post = fake_post\n",
     )
 
-    assert (
-        file_has_internal_patch(tmp_path / "missing.py", internal_packages=_PKGS, exempt_roots=_EXEMPT)
-        is False
-    )
-    assert file_has_internal_patch(syntax, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
-    assert file_has_internal_patch(binary, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
-    assert file_has_internal_patch(external, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(tmp_path / "missing.py", internal_packages=_PKGS) is False
+    assert file_has_internal_patch(syntax, internal_packages=_PKGS) is False
+    assert file_has_internal_patch(binary, internal_packages=_PKGS) is False
+    assert file_has_internal_patch(external, internal_packages=_PKGS) is False
 
 
 def test_package_root_and_imported_raises_context_are_recognised(tmp_path: Path) -> None:
@@ -153,8 +150,8 @@ def test_package_root_and_imported_raises_context_are_recognised(tmp_path: Path)
         "    with raises(RuntimeError):\n        myapp.client = 1\n",
     )
 
-    assert file_has_internal_patch(package_root, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
-    assert file_has_internal_patch(raises_context, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(package_root, internal_packages=_PKGS) is True
+    assert file_has_internal_patch(raises_context, internal_packages=_PKGS) is False
 
 
 def test_dynamic_and_exempt_monkeypatch_targets_are_not_classified_internal(tmp_path: Path) -> None:
@@ -175,10 +172,10 @@ def test_dynamic_and_exempt_monkeypatch_targets_are_not_classified_internal(tmp_
     )
     no_target = _seed(tmp_path, "no_target.py", "def test_x(monkeypatch):\n    monkeypatch.setattr()\n")
 
-    assert file_has_internal_patch(dynamic_attribute, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
-    assert file_has_internal_patch(dynamic_value, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
-    assert file_has_internal_patch(exempt, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
-    assert file_has_internal_patch(no_target, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(dynamic_attribute, internal_packages=_PKGS) is False
+    assert file_has_internal_patch(dynamic_value, internal_packages=_PKGS) is False
+    assert file_has_internal_patch(exempt, internal_packages=_PKGS) is False
+    assert file_has_internal_patch(no_target, internal_packages=_PKGS) is False
 
 
 def test_bare_patch_decorator_without_a_target_is_not_a_mock(tmp_path: Path) -> None:
@@ -188,7 +185,7 @@ def test_bare_patch_decorator_without_a_target_is_not_a_mock(tmp_path: Path) -> 
         "from unittest.mock import patch\n\n@patch\ndef test_x():\n    pass\n",
     )
 
-    assert file_has_internal_patch(p, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(p, internal_packages=_PKGS) is False
 
 
 def test_only_exception_assertion_context_exempts_internal_assignment(tmp_path: Path) -> None:
@@ -210,20 +207,20 @@ def test_only_exception_assertion_context_exempts_internal_assignment(tmp_path: 
         "def test_x():\n    with patch.object(os, 'environ'):\n        pass\n",
     )
 
-    assert file_has_internal_patch(direct_external, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
-    assert file_has_internal_patch(unrelated_context, internal_packages=_PKGS, exempt_roots=_EXEMPT) is True
-    assert file_has_internal_patch(patch_object, internal_packages=_PKGS, exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(direct_external, internal_packages=_PKGS) is False
+    assert file_has_internal_patch(unrelated_context, internal_packages=_PKGS) is True
+    assert file_has_internal_patch(patch_object, internal_packages=_PKGS) is False
 
 
 def test_no_internal_packages_matches_nothing(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _PATCH_DECORATOR)
-    assert file_has_internal_patch(p, internal_packages=(), exempt_roots=_EXEMPT) is False
+    assert file_has_internal_patch(p, internal_packages=()) is False
 
 
 def test_packages_are_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _PATCH_DECORATOR)
     rule = NoInternalMonkeypatch.from_config(
-        {"roots": ["tests"], "internal_packages": ["myapp"], "exempt_roots": ["os"]},
+        {"roots": ["tests"], "internal_packages": ["myapp"]},
         repo_root=tmp_path,
     )
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_x.py"}

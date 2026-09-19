@@ -294,14 +294,13 @@ def test_normal_scope_and_license_policy_still_detect_the_violation(tmp_path: Pa
         validate_contract_ledger(manifest, case, ledger, process_exit=code, started_after=started)
 
 
-@pytest.mark.parametrize("allow_missing", [True, None])
-def test_mutation_contract_requires_explicit_strict_missing_input_policy(
-    tmp_path: Path, allow_missing: bool | None
+@pytest.mark.parametrize("allow_missing", [True, False, []])
+def test_mutation_contract_rejects_removed_missing_input_override(
+    tmp_path: Path, allow_missing: object
 ) -> None:
-    config: dict[str, object] = {}
-    if allow_missing is not None:
-        config["allow_missing_current"] = allow_missing
-    manifest = contract_for(tmp_path, "core:mutation_survival_ratchet", config)
+    manifest = contract_for(
+        tmp_path, "core:mutation_survival_ratchet", {"allow_missing_current": allow_missing}
+    )
     ledger = tmp_path / "ledger.json"
     assert invoke(manifest, "compliant", ledger, timeout=10).returncode == 2
     assert not ledger.exists()
@@ -311,7 +310,7 @@ def test_mutation_baseline_report_is_bound_input_not_suppression(tmp_path: Path)
     manifest = contract_for(
         tmp_path,
         "core:mutation_survival_ratchet",
-        {"baseline_report": "before.json", "current_report": "after.json", "allow_missing_current": False},
+        {"baseline_report": "before.json", "current_report": "after.json"},
     )
     report = json.dumps({"schema_version": 1, "packages": {"app": {"survived": 0, "killed": 3}}})
     for name in ("before.json", "after.json"):

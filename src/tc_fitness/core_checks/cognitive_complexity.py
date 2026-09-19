@@ -5,7 +5,7 @@ it is to test. The score climbs with each branch (``if`` / ``elif`` / ``else``
 / ``for`` / ``while`` / ``try`` / ``except`` / ternary / boolean operator) and
 is amplified by nesting depth — a triple-nested ``if`` is harder to follow
 than three sequential ones. A function scoring above the threshold is flagged;
-the file is the unit baselined.
+the file is the unit reported.
 
 Ported from kairix ``scripts/checks/check_cognitive_complexity.py`` (F16) and
 re-expressed as a configurable, repo-agnostic rule: the only domain-intrinsic

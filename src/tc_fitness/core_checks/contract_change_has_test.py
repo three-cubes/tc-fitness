@@ -198,13 +198,9 @@ class ContractChangeHasTest(FitnessRule):
     def run(self) -> int:
         """Hard gate: a contract change with no companion test change FAILs.
 
-        Modelling note: the base ``run()`` gates the violation set against a
-        per-file baseline so a repo can freeze PRE-EXISTING offenders behind a
-        ratchet. A missing-test-for-a-contract-change is different in KIND — the
-        change set is recomputed against the merge-base on every branch, so there
-        is no stable offender to freeze, and a contract file touched on THIS
-        branch with no test is a fresh defect, never inherited debt. This
-        override consults NO baseline and gates the raw violation set. Returns
+        The change set is recomputed against the merge-base on every branch. A
+        contract file touched on this branch without a test is therefore a
+        current defect. This method gates the raw violation set and returns
         ``0`` when the change set is clean (or there is no contract change),
         ``1`` otherwise.
         """

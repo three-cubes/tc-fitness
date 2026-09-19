@@ -1,17 +1,16 @@
-"""CORE check: ci_fanin_parity — every CI job gates the merge or says it doesn't.
+"""CORE check: ci_fanin_parity — every CI job gates the merge.
 
 Branch protection typically requires exactly ONE status context from the CI
 workflow: the terminal aggregator job whose ``needs:`` fan-in aggregates every
 blocking stage. A green merge is only as safe as that fan-in is COMPLETE. A job
 defined in the workflow but NOT reachable from the aggregator's transitive
 ``needs:`` closure does not block the merge — it can run, fail, and the PR ships
-green. This rule proves the workflow is INTERNALLY HONEST: every non-gating job
-explicitly SAYS it is non-gating via an informational marker comment.
+green. This rule proves the workflow is INTERNALLY HONEST: every job is in the
+terminal gate's dependency closure.
 
 The check parses the configured workflow, finds the aggregator job (by its
 ``name:``), builds the transitive ``needs:`` closure, and flags the workflow when
-any job is NEITHER in that closure, NOR the aggregator itself, NOR carrying an
-``# fan-in: informational`` marker comment in the lines directly above its key.
+any job is neither in that closure nor the aggregator itself.
 
 Ported from kairix ``scripts/checks/check_f93_ci_fanin_parity.py`` (EPIC #499
 Phase 2) and re-expressed as a configurable, repo-agnostic rule. The donor
@@ -20,10 +19,8 @@ both are config:
 
 * ``workflow`` — repo-relative path to the CI workflow file.
 * ``aggregator_name`` — the ``name:`` of the job producing the required context.
-* ``informational_marker`` — the comment prefix that marks a job non-gating.
 
-Modelling note: the FitnessRule baseline is per-FILE, so a dishonest fan-in
-surfaces as one violation (the workflow path). The remediation names the class;
+The workflow path is the finding unit for a dishonest fan-in. The remediation names the class;
 the operator reads the workflow to find the specific dangling job(s).
 """
 
@@ -42,23 +39,19 @@ from tc_fitness.lib import remediation as _remediation
 #: The job ``name:`` whose status context branch protection requires. Overridable.
 DEFAULT_AGGREGATOR_NAME = "CI gate"
 
-#: The comment prefix declaring a job legitimately outside the gate fan-in.
-DEFAULT_INFORMATIONAL_MARKER = "# fan-in: informational"
-
 #: The CI workflow this rule governs. Overridable via config.
 DEFAULT_WORKFLOW = ".github/workflows/ci.yml"
 
 REMEDIATION = _remediation(
     fix=(
-        "decide whether the dangling job SHOULD gate the merge. If yes, add its "
-        "id to the aggregator job's needs: list (and its result-evaluation "
-        "loop). If no, add a marker comment on the lines directly above the "
-        "job's key: '# fan-in: informational - <why it is non-gating>'."
+        "add the dangling job id to the aggregator job's needs: list and its "
+        "result-evaluation loop. Move jobs that do not belong in merge CI to "
+        "a separate workflow with an explicit trigger."
     ),
     nxt="re-run this check to confirm the fan-in is honest.",
     run="python -m tc_fitness.core_checks.ci_fanin_parity",
     passing="check:\\n    name: CI gate\\n    needs: [unit, security, docker]",
-    forbidden="license-scan defined but absent from the CI-gate needs: and unmarked",
+    forbidden="license-scan defined but absent from the CI-gate needs:",
 )
 
 
@@ -145,43 +138,16 @@ def _closure(jobs: dict[str, Any], root: str) -> set[str]:
     return seen
 
 
-def _jobs_marked_informational(workflow_text: str, marker: str) -> set[str]:
-    """Job ids carrying the informational ``marker`` in the comment block above.
-
-    PyYAML discards comments, so this scans the raw text. A job key sits at
-    exactly two-space indent under ``jobs:`` and ends in a bare colon.
-    """
-    lines = workflow_text.splitlines()
-    marked: set[str] = set()
-    for idx, raw in enumerate(lines):
-        stripped = raw.strip()
-        if not (raw.startswith("  ") and raw[2:3] != " "):
-            continue
-        if not stripped.endswith(":"):
-            continue
-        job_id = stripped[:-1].strip()
-        for raw_above in reversed(lines[:idx]):
-            above = raw_above.strip()
-            if above.startswith("#"):
-                if marker in raw_above:
-                    marked.add(job_id)
-                    break
-                continue
-            break
-    return marked
-
-
 def workflow_fanin_is_dishonest(
     path: Path,
     *,
     aggregator_name: str,
-    informational_marker: str,
 ) -> bool:
-    """True iff the workflow at ``path`` has a dangling (un-gated, un-marked) job.
+    """True iff the workflow at ``path`` has a dangling job.
 
     Pure helper (the detection core) so tests can assert on it directly. Returns
     True when the aggregator is missing entirely, or when any non-aggregator job
-    is neither in the aggregator's needs-closure nor marked informational. An
+    is not in the aggregator's needs-closure. An
     unreadable, malformed, or otherwise unverifiable configured workflow
     returns True so the gate cannot pass without validating its input.
     """
@@ -198,9 +164,8 @@ def workflow_fanin_is_dishonest(
     if aggregator is None:
         return True
     gated = _closure(jobs, aggregator)
-    informational = _jobs_marked_informational(text, informational_marker)
     for job_id in jobs:
-        if job_id == aggregator or job_id in gated or job_id in informational:
+        if job_id == aggregator or job_id in gated:
             continue
         return True
     return False
@@ -215,7 +180,6 @@ class CiFaninParity(FitnessRule):
 
     workflow: str = DEFAULT_WORKFLOW
     aggregator_name: str = DEFAULT_AGGREGATOR_NAME
-    informational_marker: str = DEFAULT_INFORMATIONAL_MARKER
 
     @classmethod
     def from_config(
@@ -232,9 +196,6 @@ class CiFaninParity(FitnessRule):
         aggregator = config.get("aggregator_name")
         if aggregator is not None:
             rule.aggregator_name = str(aggregator)
-        marker = config.get("informational_marker")
-        if marker is not None:
-            rule.informational_marker = str(marker)
         return rule
 
     def is_in_scope(self, rel: str) -> bool:
@@ -250,7 +211,6 @@ class CiFaninParity(FitnessRule):
         return workflow_fanin_is_dishonest(
             path,
             aggregator_name=self.aggregator_name,
-            informational_marker=self.informational_marker,
         )
 
 

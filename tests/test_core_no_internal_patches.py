@@ -28,25 +28,25 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
 
 def test_flags_monkeypatch_string_target(tmp_path: Path) -> None:
     p = _seed(tmp_path, "t.py", "def test_x(monkeypatch):\n    monkeypatch.setattr('scripts.a.b', 1)\n")
-    assert file_patches_internal(p, internal_roots=_INTERNAL, exempt_roots=_EXEMPT) is True
+    assert file_patches_internal(p, internal_roots=_INTERNAL) is True
 
 
 def test_flags_patch_decorator(tmp_path: Path) -> None:
     p = _seed(
         tmp_path, "t.py", "from unittest.mock import patch\n@patch('tools.x.y')\ndef test_x():\n    pass\n"
     )
-    assert file_patches_internal(p, internal_roots=_INTERNAL, exempt_roots=_EXEMPT) is True
+    assert file_patches_internal(p, internal_roots=_INTERNAL) is True
 
 
 def test_stdlib_boundary_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "t.py", "def test_x(monkeypatch):\n    monkeypatch.setattr('os.environ', {})\n")
-    assert file_patches_internal(p, internal_roots=_INTERNAL, exempt_roots=_EXEMPT) is False
+    assert file_patches_internal(p, internal_roots=_INTERNAL) is False
 
 
 def test_pytest_raises_assign_not_flagged(tmp_path: Path) -> None:
     body = "import scripts\ndef test_x():\n    with pytest.raises(ValueError):\n        scripts.attr = 1\n"
     p = _seed(tmp_path, "t.py", body)
-    assert file_patches_internal(p, internal_roots=_INTERNAL, exempt_roots=_EXEMPT) is False
+    assert file_patches_internal(p, internal_roots=_INTERNAL) is False
 
 
 @pytest.mark.parametrize(
@@ -64,7 +64,6 @@ def test_flags_import_alias_dynamic_loader_and_context_patch_shapes(tmp_path: Pa
         file_patches_internal(
             _seed(tmp_path, "tests/test_boundary.py", body),
             internal_roots=_INTERNAL,
-            exempt_roots=_EXEMPT,
         )
         is True
     )
@@ -84,7 +83,6 @@ def test_allows_exempt_or_exception_assertion_shapes(tmp_path: Path, body: str) 
         file_patches_internal(
             _seed(tmp_path, "tests/test_boundary.py", body),
             internal_roots=_INTERNAL,
-            exempt_roots=_EXEMPT,
         )
         is False
     )
@@ -106,7 +104,6 @@ def test_unresolved_or_non_patch_shapes_remain_clean(tmp_path: Path, body: str) 
     assert not file_patches_internal(
         _seed(tmp_path, "tests/test_boundary.py", body),
         internal_roots=_INTERNAL,
-        exempt_roots=_EXEMPT,
     )
 
 
@@ -125,7 +122,6 @@ def test_flags_dynamic_module_load_attribute_patch_and_non_assertion_contexts(
     assert file_patches_internal(
         _seed(tmp_path, "tests/test_boundary.py", body),
         internal_roots=_INTERNAL,
-        exempt_roots=_EXEMPT,
     )
 
 
@@ -138,7 +134,6 @@ def test_assignments_from_unrecognised_call_and_non_patch_decorator_stay_clean(t
     assert not file_patches_internal(
         _seed(tmp_path, "tests/test_boundary.py", body),
         internal_roots=_INTERNAL,
-        exempt_roots=_EXEMPT,
     )
 
 
@@ -147,7 +142,6 @@ def test_non_callable_ast_decorator_factory_is_not_a_patch_call(tmp_path: Path) 
     assert not file_patches_internal(
         _seed(tmp_path, "tests/test_boundary.py", body),
         internal_roots=_INTERNAL,
-        exempt_roots=_EXEMPT,
     )
 
 
@@ -156,22 +150,21 @@ def test_tuple_assignment_from_dynamic_module_load_is_not_mistaken_for_a_module(
     assert not file_patches_internal(
         _seed(tmp_path, "tests/test_boundary.py", body),
         internal_roots=_INTERNAL,
-        exempt_roots=_EXEMPT,
     )
 
 
 def test_invalid_syntax_and_missing_candidate_are_not_substitution_findings(tmp_path: Path) -> None:
     invalid = _seed(tmp_path, "tests/invalid.py", "def test_x(:\n")
     missing = tmp_path / "tests" / "missing.py"
-    assert not file_patches_internal(invalid, internal_roots=_INTERNAL, exempt_roots=_EXEMPT)
-    assert not file_patches_internal(missing, internal_roots=_INTERNAL, exempt_roots=_EXEMPT)
+    assert not file_patches_internal(invalid, internal_roots=_INTERNAL)
+    assert not file_patches_internal(missing, internal_roots=_INTERNAL)
 
 
 def test_unreadable_candidate_is_not_a_substitution_finding(tmp_path: Path) -> None:
     path = tmp_path / "tests" / "invalid.py"
     path.parent.mkdir()
     path.write_bytes(b"\xff")
-    assert file_patches_internal(path, internal_roots=_INTERNAL, exempt_roots=_EXEMPT) is False
+    assert file_patches_internal(path, internal_roots=_INTERNAL) is False
 
 
 def test_empty_internal_roots_is_noop(tmp_path: Path) -> None:
@@ -181,9 +174,7 @@ def test_empty_internal_roots_is_noop(tmp_path: Path) -> None:
 
 
 def test_config_scopes_internal_roots(tmp_path: Path) -> None:
-    rule = build(
-        {"roots": ["tests"], "internal_roots": ["scripts"], "exempt_roots": ["os"]}, repo_root=tmp_path
-    )
+    rule = build({"roots": ["tests"], "internal_roots": ["scripts"]}, repo_root=tmp_path)
     _seed(tmp_path, "tests/t.py", "def test_x(monkeypatch):\n    monkeypatch.setattr('scripts.a.b', 1)\n")
     assert {str(x) for x in rule.collect_violations()} == {"tests/t.py"}
 

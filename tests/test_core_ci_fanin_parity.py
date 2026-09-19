@@ -86,35 +86,20 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
 
 def test_honest_fanin_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _HONEST)
-    assert (
-        workflow_fanin_is_dishonest(
-            p, aggregator_name="CI gate", informational_marker="# fan-in: informational"
-        )
-        is False
-    )
+    assert workflow_fanin_is_dishonest(p, aggregator_name="CI gate") is False
 
 
 def test_dangling_job_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _DANGLING)
-    assert (
-        workflow_fanin_is_dishonest(
-            p, aggregator_name="CI gate", informational_marker="# fan-in: informational"
-        )
-        is True
-    )
+    assert workflow_fanin_is_dishonest(p, aggregator_name="CI gate") is True
 
 
-def test_marked_informational_clean(tmp_path: Path) -> None:
+def test_comment_cannot_suppress_a_dangling_job(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _MARKED)
-    assert (
-        workflow_fanin_is_dishonest(
-            p, aggregator_name="CI gate", informational_marker="# fan-in: informational"
-        )
-        is False
-    )
+    assert workflow_fanin_is_dishonest(p, aggregator_name="CI gate") is True
 
 
-def test_marker_comment_group_applies_only_to_the_immediately_following_job(tmp_path: Path) -> None:
+def test_comment_position_cannot_suppress_a_dangling_job(tmp_path: Path) -> None:
     grouped = _seed(
         tmp_path,
         "grouped.yml",
@@ -132,18 +117,8 @@ def test_marker_comment_group_applies_only_to_the_immediately_following_job(tmp_
         ),
     )
 
-    assert (
-        workflow_fanin_is_dishonest(
-            grouped, aggregator_name="CI gate", informational_marker="# fan-in: informational"
-        )
-        is False
-    )
-    assert (
-        workflow_fanin_is_dishonest(
-            separated, aggregator_name="CI gate", informational_marker="# fan-in: informational"
-        )
-        is True
-    )
+    assert workflow_fanin_is_dishonest(grouped, aggregator_name="CI gate") is True
+    assert workflow_fanin_is_dishonest(separated, aggregator_name="CI gate") is True
 
 
 def test_needs_accept_scalar_and_string_list_items(tmp_path: Path) -> None:
@@ -159,12 +134,7 @@ def test_needs_accept_scalar_and_string_list_items(tmp_path: Path) -> None:
     )
 
     for path in (scalar, sequence):
-        assert (
-            workflow_fanin_is_dishonest(
-                path, aggregator_name="Merge gate", informational_marker="# informational"
-            )
-            is False
-        )
+        assert workflow_fanin_is_dishonest(path, aggregator_name="Merge gate") is False
 
 
 def test_transitive_valid_needs_are_in_the_gate_closure(tmp_path: Path) -> None:
@@ -175,12 +145,7 @@ def test_transitive_valid_needs_are_in_the_gate_closure(tmp_path: Path) -> None:
         "  gate:\n    name: Merge gate\n    needs: security\n",
     )
 
-    assert (
-        workflow_fanin_is_dishonest(
-            path, aggregator_name="Merge gate", informational_marker="# informational"
-        )
-        is False
-    )
+    assert workflow_fanin_is_dishonest(path, aggregator_name="Merge gate") is False
 
 
 def test_shared_transitive_dependency_is_processed_once(tmp_path: Path) -> None:
@@ -191,12 +156,7 @@ def test_shared_transitive_dependency_is_processed_once(tmp_path: Path) -> None:
         "  right:\n    needs: shared\n  gate:\n    name: Merge gate\n    needs: [left, right]\n",
     )
 
-    assert (
-        workflow_fanin_is_dishonest(
-            path, aggregator_name="Merge gate", informational_marker="# informational"
-        )
-        is False
-    )
+    assert workflow_fanin_is_dishonest(path, aggregator_name="Merge gate") is False
 
 
 @pytest.mark.parametrize(
@@ -206,12 +166,7 @@ def test_shared_transitive_dependency_is_processed_once(tmp_path: Path) -> None:
 def test_unverifiable_workflow_shapes_are_violations(tmp_path: Path, workflow: str) -> None:
     path = _seed(tmp_path, "workflow.yml", workflow)
 
-    assert (
-        workflow_fanin_is_dishonest(
-            path, aggregator_name="Merge gate", informational_marker="# informational"
-        )
-        is True
-    )
+    assert workflow_fanin_is_dishonest(path, aggregator_name="Merge gate") is True
 
 
 def test_invalid_dependency_graphs_are_violations(tmp_path: Path) -> None:
@@ -226,30 +181,15 @@ def test_invalid_dependency_graphs_are_violations(tmp_path: Path) -> None:
 
     for index, workflow in enumerate(invalid_workflows):
         path = _seed(tmp_path, f"invalid-{index}.yml", workflow)
-        assert (
-            workflow_fanin_is_dishonest(
-                path, aggregator_name="Merge gate", informational_marker="# informational"
-            )
-            is True
-        )
+        assert workflow_fanin_is_dishonest(path, aggregator_name="Merge gate") is True
 
 
 def test_unreadable_workflow_is_a_violation(tmp_path: Path) -> None:
     binary = tmp_path / "binary.yml"
     binary.write_bytes(b"jobs:\n  gate: \xff\n")
 
-    assert (
-        workflow_fanin_is_dishonest(
-            tmp_path / "missing.yml", aggregator_name="Merge gate", informational_marker="# informational"
-        )
-        is True
-    )
-    assert (
-        workflow_fanin_is_dishonest(
-            binary, aggregator_name="Merge gate", informational_marker="# informational"
-        )
-        is True
-    )
+    assert workflow_fanin_is_dishonest(tmp_path / "missing.yml", aggregator_name="Merge gate") is True
+    assert workflow_fanin_is_dishonest(binary, aggregator_name="Merge gate") is True
 
 
 def test_missing_required_yaml_parser_fails_import_in_a_clean_process(tmp_path: Path) -> None:
@@ -273,12 +213,7 @@ def test_missing_required_yaml_parser_fails_import_in_a_clean_process(tmp_path: 
 
 def test_missing_aggregator_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _NO_AGGREGATOR)
-    assert (
-        workflow_fanin_is_dishonest(
-            p, aggregator_name="CI gate", informational_marker="# fan-in: informational"
-        )
-        is True
-    )
+    assert workflow_fanin_is_dishonest(p, aggregator_name="CI gate") is True
 
 
 def test_aggregator_name_config_driven(tmp_path: Path) -> None:
@@ -288,18 +223,10 @@ def test_aggregator_name_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {".github/workflows/ci.yml"}
 
 
-def test_workflow_and_marker_are_config_driven(tmp_path: Path) -> None:
+def test_workflow_is_config_driven_but_marker_cannot_suppress_a_job(tmp_path: Path) -> None:
     _seed(tmp_path, "ci/custom.yml", _MARKED.replace("# fan-in: informational", "# merge: advisory"))
-    rule = build(
-        {
-            "workflow": "ci/custom.yml",
-            "aggregator_name": "CI gate",
-            "informational_marker": "# merge: advisory",
-        },
-        repo_root=tmp_path,
-    )
-
-    assert rule.collect_violations() == set()
+    rule = build({"workflow": "ci/custom.yml", "aggregator_name": "CI gate"}, repo_root=tmp_path)
+    assert rule.collect_violations() == {Path("ci/custom.yml")}
 
 
 def test_rule_clean_on_honest(tmp_path: Path) -> None:

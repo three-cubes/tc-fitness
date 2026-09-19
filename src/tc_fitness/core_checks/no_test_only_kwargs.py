@@ -13,15 +13,9 @@ because they ARE the canonical Deps-constructor shape): any
 positional-with-default or keyword-only parameter whose name ends in a
 configured seam suffix AND whose default is the ``None`` constant.
 
-A consumer documents legitimate seams (a real production caller passes a
-non-default, or a Protocol/Adapter wiring point at a true boundary) via the
-``exempt_keys`` config -- one entry per allowed seam in the format
-``<rel-path>::<function-name>::<param-name>``.
-
 Ported from tc-agent-zone ``scripts/checks/no_test_only_kwargs.py`` (itself
 kairix F6) and re-expressed as a configurable, repo-agnostic rule: scan roots
-and the per-seam allow-list arrive from config; the seam suffixes are the
-rule's own shape (overridable).
+arrive from config; the seam suffixes are the rule's own shape (overridable).
 """
 
 from __future__ import annotations
@@ -43,9 +37,7 @@ REMEDIATION = _remediation(
     fix=(
         "delete the *_fn=None parameter and move the collaborator onto a "
         "@dataclass Deps class with field(default_factory=...); tests "
-        "construct an overridden Deps and pass it as a single argument. If a "
-        "flagged parameter is a genuine boundary wiring point, document it in "
-        "the exempt_keys config as <rel-path>::<function-name>::<param-name>."
+        "construct an overridden Deps and pass it as a single argument."
     ),
     nxt="re-run this check to confirm it goes green.",
     run="python -m tc_fitness.core_checks.no_test_only_kwargs",
@@ -112,8 +104,6 @@ class NoTestOnlyKwargs(FitnessRule):
 
     #: Rule-specific knobs.
     seam_suffixes: tuple[str, ...] = DEFAULT_SEAM_SUFFIXES
-    #: Allowed seams: ``<rel-path>::<function-name>::<param-name>`` entries.
-    exempt_keys: frozenset[str] = frozenset()
 
     @classmethod
     def from_config(
@@ -126,17 +116,10 @@ class NoTestOnlyKwargs(FitnessRule):
         assert isinstance(rule, NoTestOnlyKwargs)  # noqa: S101  # narrowing for mypy
         suffixes = config.get("seam_suffixes")
         rule.seam_suffixes = tuple(suffixes) if suffixes is not None else DEFAULT_SEAM_SUFFIXES
-        keys = config.get("exempt_keys")
-        rule.exempt_keys = frozenset(keys) if keys is not None else frozenset()
         return rule
 
     def file_has_violation(self, path: Path) -> bool:
-        rel = self._repo_relative(path).as_posix()
-        for func_name, param, _lineno in find_test_only_kwargs_in_file(path, suffixes=self.seam_suffixes):
-            if f"{rel}::{func_name}::{param}" in self.exempt_keys:
-                continue
-            return True
-        return False
+        return bool(find_test_only_kwargs_in_file(path, suffixes=self.seam_suffixes))
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> NoTestOnlyKwargs:

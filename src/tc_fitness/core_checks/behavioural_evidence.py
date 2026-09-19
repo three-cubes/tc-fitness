@@ -7,7 +7,7 @@ This hard gate then requires a marked test to invoke that executable, check
 process success, and observe a produced artefact passed through the command.
 
 The check is deliberately opt-in and repo-neutral.  An empty configuration is
-a vacuous pass; once configured, findings cannot be baselined.
+a vacuous pass; once configured, every finding fails.
 """
 
 from __future__ import annotations

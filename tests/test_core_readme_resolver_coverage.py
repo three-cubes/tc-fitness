@@ -67,10 +67,10 @@ def test_resolver_file_config_driven(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-def test_exempt_dirs_config_driven(tmp_path: Path) -> None:
+def test_exempt_dirs_cannot_hide_a_missing_resolver(tmp_path: Path) -> None:
     _mkdir(tmp_path, "scratch")
-    rule = build({"exempt_dirs": ["scratch"]}, repo_root=tmp_path)
-    assert rule.collect_violations() == set()
+    with pytest.raises(ValueError, match="exempt_dirs"):
+        build({"exempt_dirs": ["scratch"]}, repo_root=tmp_path)
 
 
 def test_missing_scan_root_is_skipped_while_files_are_not_candidates(tmp_path: Path) -> None:

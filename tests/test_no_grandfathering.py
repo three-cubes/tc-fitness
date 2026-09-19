@@ -134,3 +134,33 @@ def test_package_does_not_export_baseline_adoption_api() -> None:
         "net_new_violations_forbidden",
     ):
         assert not hasattr(tc_fitness, name)
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "allowed_names",
+        "allow_missing_current",
+        "baseline_ok",
+        "cutover_ref",
+        "excluded_parts",
+        "excluded_segments",
+        "exempt_dirs",
+        "exempt_extensions",
+        "exempt_files",
+        "exempt_keys",
+        "exempt_prefixes",
+        "exempt_roots",
+        "exempt_segments",
+        "exempt_specifiers",
+        "informational_marker",
+        "skip_dir_segments",
+        "skip_parts",
+        "test_file_regex",
+        "warn_only",
+    ],
+)
+@pytest.mark.parametrize("value", [False, [], ["src/known-violation.py"]])
+def test_rule_configuration_cannot_suppress_a_finding(tmp_path: Path, option: str, value: object) -> None:
+    with pytest.raises(ValueError, match=option):
+        _AlwaysFails.from_config({option: value}, repo_root=tmp_path)

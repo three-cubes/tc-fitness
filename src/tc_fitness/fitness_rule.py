@@ -55,6 +55,30 @@ from tc_fitness.lib import REPO_ROOT, gate
 #: against a wedged git process, after which enumeration falls back to a walk.
 _GIT_LS_FILES_TIMEOUT_S = 30
 
+_REMOVED_SUPPRESSION_OPTIONS = frozenset(
+    {
+        "allowed_names",
+        "allow_missing_current",
+        "baseline_ok",
+        "cutover_ref",
+        "excluded_parts",
+        "excluded_segments",
+        "exempt_dirs",
+        "exempt_extensions",
+        "exempt_files",
+        "exempt_keys",
+        "exempt_prefixes",
+        "exempt_roots",
+        "exempt_segments",
+        "exempt_specifiers",
+        "informational_marker",
+        "skip_dir_segments",
+        "skip_parts",
+        "test_file_regex",
+        "warn_only",
+    }
+)
+
 
 class FitnessRule(ABC):
     """A repo-agnostic, config-driven fitness rule.
@@ -131,8 +155,9 @@ class FitnessRule(ABC):
         """
         roots = config.get("roots")
         extensions = config.get("extensions")
-        if "exempt_files" in config:
-            raise ValueError("exempt_files is not supported: fitness findings cannot be suppressed")
+        removed = sorted(_REMOVED_SUPPRESSION_OPTIONS & set(config))
+        if removed:
+            raise ValueError(f"{', '.join(removed)} is not supported: fitness findings cannot be suppressed")
         return cls(
             repo_root=repo_root,
             roots=tuple(roots) if roots is not None else None,
