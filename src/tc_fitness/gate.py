@@ -520,8 +520,7 @@ def _run_scheduled(
                 continue
             oc = outcomes[s.id]
             if not oc.printed:
-                if oc.out:
-                    sys.stdout.write(oc.out)
+                sys.stdout.write(oc.out)
                 if oc.err:
                     sys.stderr.write(oc.err)
             outcome.results.append(oc.result)

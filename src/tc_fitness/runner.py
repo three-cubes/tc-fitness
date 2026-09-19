@@ -434,18 +434,15 @@ def _runs_in_process(entry: RuleEntry, cfg: RunnerConfig) -> bool:
     return dispatches_in_process(entry)
 
 
-def _conditional_arg_path(entry: RuleEntry, cfg: RunnerConfig) -> Path | None:
+def _conditional_arg_path(env_var: str, default: str | None, repo_root: Path) -> Path | None:
     """The runtime-arg path for a conditional subprocess check, or ``None`` to
-    skip. Reads ``entry.subprocess_arg_env`` from the environment, falling back
-    to ``subprocess_arg_default`` resolved under the repo root; skips when the
-    resolved path does not exist."""
-    if entry.subprocess_arg_env is None:
-        return None
-    env_path = os.environ.get(entry.subprocess_arg_env)
+    skip. The caller supplies the required environment-variable name; a
+    declared default is resolved under the repo root, and absent files skip."""
+    env_path = os.environ.get(env_var)
     if env_path:
         candidate = Path(env_path)
-    elif entry.subprocess_arg_default:
-        candidate = cfg.repo_root / entry.subprocess_arg_default
+    elif default:
+        candidate = repo_root / default
     else:
         return None
     return candidate if candidate.exists() else None
@@ -455,13 +452,11 @@ def _conditional_arg_path(entry: RuleEntry, cfg: RunnerConfig) -> Path | None:
 
 
 def _module_name_for(entry: RuleEntry) -> str:
-    """The importable module name for ``entry``'s in-process check.
+    """The importable module name for a non-core in-process check.
 
-    An engine CORE check resolves to ``tc_fitness.core_checks.<module>``; a
-    local check resolves to the script filename stem (importable because the
+    The caller routes engine CORE entries through :func:`_load_core_check`;
+    local checks resolve to the script filename stem (importable because the
     consumer's checks dir is on ``sys.path``)."""
-    if is_core_check(entry):
-        return core_module_name(entry)
     return resolve_script(entry)[: -len(".py")]
 
 
@@ -600,7 +595,7 @@ class _Built:
     skip_lines: tuple[str, ...] = ()
 
 
-def _resolve_conditional(entry: RuleEntry, cfg: RunnerConfig) -> ConditionalResult:
+def _resolve_conditional(entry: RuleEntry, cfg: RunnerConfig, env_var: str) -> ConditionalResult:
     """The conditional decision for a ``subprocess_arg_env`` rule.
 
     Prefers the consumer's ``conditional_check`` hook (so its exact skip text is
@@ -610,7 +605,7 @@ def _resolve_conditional(entry: RuleEntry, cfg: RunnerConfig) -> ConditionalResu
         decided = cfg.conditional_check(entry)
         if decided is not None:
             return decided
-    arg_path = _conditional_arg_path(entry, cfg)
+    arg_path = _conditional_arg_path(env_var, entry.subprocess_arg_default, cfg.repo_root)
     if arg_path is None:
         return ConditionalResult(run=False, skip_lines=(_generic_skip_line(entry),))
     return ConditionalResult(run=True, extra_args=(str(arg_path),))
@@ -646,7 +641,7 @@ def _subprocess_argv(entry: RuleEntry, cfg: RunnerConfig) -> _Built:
 
     extra_args: list[str] = []
     if entry.subprocess_arg_env is not None:
-        decided = _resolve_conditional(entry, cfg)
+        decided = _resolve_conditional(entry, cfg, entry.subprocess_arg_env)
         if not decided.run:
             return _Built(skip_lines=decided.skip_lines)
         extra_args = list(decided.extra_args)

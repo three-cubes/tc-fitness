@@ -8,7 +8,17 @@ from pathlib import Path
 
 import pytest
 
+from tc_fitness.coverage_catalogue import ENTRIES
+
 pytestmark = pytest.mark.integration
+
+
+def test_coverage_catalogue_declares_the_actual_coverage_checks() -> None:
+    assert tuple((entry.id, entry.check) for entry in ENTRIES) == (
+        ("coverage_includes_branches", "core:coverage_includes_branches"),
+        ("coverage_floor", "core:coverage_floor"),
+        ("new_code_coverage", "core:new_code_coverage"),
+    )
 
 
 def seed(root: Path, relative: str, body: str) -> Path:
