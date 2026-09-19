@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.deterministic_tests import (
@@ -48,6 +49,7 @@ FAILED tests/test_a.py::TestCls::test_m - assert True is False
 """
 
 
+@pytest.mark.unit
 def test_parse_outcomes_reads_progress_lines_only() -> None:
     outcomes = parse_outcomes(_PYTEST_V_OUTPUT)
     assert outcomes == {
@@ -60,6 +62,7 @@ def test_parse_outcomes_reads_progress_lines_only() -> None:
     # a result (it carries no [ NN%] progress marker).
 
 
+@pytest.mark.unit
 def test_parse_collected_keeps_node_ids_only() -> None:
     text = "tests/test_a.py::test_one\ntests/test_b.py::test_p[1]\n\n2 tests collected in 0.01s\n"
     assert parse_collected(text) == [
@@ -68,6 +71,7 @@ def test_parse_collected_keeps_node_ids_only() -> None:
     ]
 
 
+@pytest.mark.unit
 def test_shuffled_order_is_deterministic_in_seed() -> None:
     ids = [f"t{i}" for i in range(12)]
     assert shuffled_order(ids, 7) == shuffled_order(ids, 7)
@@ -75,12 +79,14 @@ def test_shuffled_order_is_deterministic_in_seed() -> None:
     assert shuffled_order(ids, 7) != ids
 
 
+@pytest.mark.unit
 def test_plan_runs_shape() -> None:
     plan = plan_runs(2, [1, 2])
     assert [s.label for s in plan] == ["fixed-seed:rep1", "fixed-seed:rep2", "order:seed1", "order:seed2"]
     assert [s.order_seed for s in plan] == [None, None, 1, 2]
 
 
+@pytest.mark.unit
 def test_compare_runs_flags_only_unstable() -> None:
     runs = [
         ("rep1", {"a": "passed", "b": "passed"}),
@@ -91,6 +97,7 @@ def test_compare_runs_flags_only_unstable() -> None:
     assert diffs[0].outcomes == (("rep1", "passed"), ("rep2", "failed"))
 
 
+@pytest.mark.unit
 def test_compare_runs_flags_absence_as_instability() -> None:
     runs = [("r1", {"a": "passed"}), ("r2", {})]
     diffs = compare_runs(runs)
@@ -98,11 +105,13 @@ def test_compare_runs_flags_absence_as_instability() -> None:
     assert diffs[0].outcomes == (("r1", "passed"), ("r2", "<absent>"))
 
 
+@pytest.mark.unit
 def test_compare_runs_stable_suite_is_clean() -> None:
     runs = [("r1", {"a": "passed", "b": "skipped"}), ("r2", {"a": "passed", "b": "skipped"})]
     assert compare_runs(runs) == []
 
 
+@pytest.mark.unit
 def test_build_argv_plugin_free_blocks_reruns_and_randomly() -> None:
     argv = build_pytest_argv(
         ["python", "-m", "pytest"],
@@ -121,6 +130,7 @@ def test_build_argv_plugin_free_blocks_reruns_and_randomly() -> None:
     assert argv[-1] == "tests"
 
 
+@pytest.mark.unit
 def test_build_argv_order_run_uses_shuffled_node_ids() -> None:
     node_ids = [f"tests/test_a.py::t{i}" for i in range(8)]
     argv = build_pytest_argv(
@@ -135,6 +145,7 @@ def test_build_argv_order_run_uses_shuffled_node_ids() -> None:
     assert tail == shuffled_order(node_ids, 3)
 
 
+@pytest.mark.unit
 def test_build_argv_randomly_mode_delegates_ordering() -> None:
     argv = build_pytest_argv(
         ["python", "-m", "pytest"],
@@ -149,6 +160,7 @@ def test_build_argv_randomly_mode_delegates_ordering() -> None:
     assert "no:rerunfailures" in argv  # still never masked by reruns
 
 
+@pytest.mark.contract
 def test_detect_nondeterminism_with_injected_runner() -> None:
     # rep1/rep2 identical; the order run flips "b" — the order probe bites.
     scripted = {
@@ -161,6 +173,7 @@ def test_detect_nondeterminism_with_injected_runner() -> None:
     assert [d.test_id for d in diffs] == ["b"]
 
 
+@pytest.mark.unit
 def test_format_failure_names_offender_and_remediation() -> None:
     block = format_failure(
         [Divergence("tests/test_x.py::test_flaky", (("rep1", "passed"), ("rep2", "failed")))]
@@ -176,6 +189,7 @@ def test_format_failure_names_offender_and_remediation() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.unit
 def test_build_returns_rule_with_defaults() -> None:
     rule = build({})
     assert isinstance(rule, DeterministicTests)
@@ -183,6 +197,7 @@ def test_build_returns_rule_with_defaults() -> None:
     assert rule.use_randomly is False
 
 
+@pytest.mark.unit
 def test_from_config_reads_knobs() -> None:
     rule = build(
         {
@@ -203,17 +218,20 @@ def test_from_config_reads_knobs() -> None:
     assert rule.timeout_seconds == 120
 
 
+@pytest.mark.integration
 def test_no_config_is_vacuous_pass(tmp_path: Path, capsys: object) -> None:
     # No roots configured → nothing to run → vacuous pass (adoption default).
     assert build({}, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.deterministic_tests as mod
 
     assert_no_repo_identity(mod.__file__)
 
 
+@pytest.mark.integration
 def test_suite_run_error_surfaces_as_fail(tmp_path: Path, capsys: object) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
@@ -256,6 +274,7 @@ def _rule_for(tmp_path: Path, *, repeats: int, order_seeds: tuple[int, ...]) -> 
     return rule
 
 
+@pytest.mark.integration
 def test_fixed_seed_repeat_catches_flaky_test(tmp_path: Path, capsys: object) -> None:
     """A test that flips outcome each run is caught by the repeat probe."""
     counter = tmp_path / "counter.txt"
@@ -278,6 +297,7 @@ def test_fixed_seed_repeat_catches_flaky_test(tmp_path: Path, capsys: object) ->
     assert "test_flaky_counter" in out
 
 
+@pytest.mark.integration
 def test_order_probe_catches_order_dependent_test(tmp_path: Path, capsys: object) -> None:
     """A pair leaking module state across tests is caught by the order probe."""
     tests = _seed_tests(tmp_path)
@@ -313,6 +333,7 @@ def test_order_probe_catches_order_dependent_test(tmp_path: Path, capsys: object
     assert "test_depends_on_clean" in out
 
 
+@pytest.mark.integration
 def test_stable_suite_passes(tmp_path: Path, capsys: object) -> None:
     """A genuinely independent suite passes under repeats + order probes."""
     tests = _seed_tests(tmp_path)
@@ -327,6 +348,7 @@ def test_stable_suite_passes(tmp_path: Path, capsys: object) -> None:
     assert "ok [deterministic-tests]" in out
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_is_noop_zero(tmp_path: Path, capsys: object) -> None:
     # A determinism gate has no per-file baseline; establish mode is a harmless
     # zero-exit no-op (nothing to grandfather), keeping the adoption contract.

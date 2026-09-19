@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_logging_secrets import (
     DEFAULT_DIRECT_SINKS,
     DEFAULT_LOG_METHODS,
@@ -25,6 +27,7 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_detection_flags_logged_secret(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", "import logging\nlogging.info(api_key)\n")
     assert (
@@ -35,6 +38,7 @@ def test_detection_flags_logged_secret(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_detection_flags_fstring_interpolation(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", 'logger.info(f"auth = {access_token}")\n')
     assert (
@@ -45,6 +49,7 @@ def test_detection_flags_fstring_interpolation(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_detection_flags_raise_with_secret(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", 'raise RuntimeError(f"bad token: {token}")\n')
     assert (
@@ -55,6 +60,7 @@ def test_detection_flags_raise_with_secret(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_redacted_summary_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", 'logger.info("api_key present: %s", api_key is not None)\n')
     assert (
@@ -65,6 +71,7 @@ def test_redacted_summary_is_clean(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_non_secret_name_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", "logger.info(client_id)\n")
     assert (
@@ -75,12 +82,14 @@ def test_non_secret_name_is_clean(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_exempt_file_skipped_via_config(tmp_path: Path) -> None:
     _seed(tmp_path, "src/boundary.py", "logging.info(api_key)\n")
     rule = build({"roots": ["src"], "exempt_files": ["src/boundary.py"]}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/leak.py", "logging.info(api_key)\n")
     rule = NoLoggingSecrets.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -89,6 +98,7 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "leak.py", "logging.info(api_key)\n")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])

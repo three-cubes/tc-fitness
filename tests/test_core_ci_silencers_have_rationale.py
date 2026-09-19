@@ -6,6 +6,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.ci_silencers_have_rationale import (
     DEFAULT_RATIONALE_TOKENS,
     DEFAULT_SILENCER_PATTERNS,
@@ -56,21 +58,25 @@ def _detect(p: Path) -> bool:
     return file_has_unjustified_silencer(p, silencer_re=_SIL, rationale_re=_RAT, window=DEFAULT_WINDOW)
 
 
+@pytest.mark.integration
 def test_detection_core_flags_bare(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _BARE)
     assert _detect(p) is True
 
 
+@pytest.mark.integration
 def test_trailing_comment_satisfies(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _COMMENT_REASON)
     assert _detect(p) is False
 
 
+@pytest.mark.integration
 def test_nearby_token_satisfies(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _NEARBY_REASON)
     assert _detect(p) is False
 
 
+@pytest.mark.integration
 def test_enumerates_workflow_dir(tmp_path: Path) -> None:
     _seed(tmp_path, ".github/workflows/ci.yml", _BARE)
     _seed(tmp_path, ".github/workflows/ok.yml", _COMMENT_REASON)
@@ -78,12 +84,14 @@ def test_enumerates_workflow_dir(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {".github/workflows/ci.yml"}
 
 
+@pytest.mark.integration
 def test_scan_files_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/check.sh", "pytest || true\n")
     rule = build({"scan_files": ["scripts/check.sh"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"scripts/check.sh"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, ".github/workflows/ci.yml", _BARE)
     rule = CiSilencersHaveRationale.from_config({}, repo_root=tmp_path)
@@ -92,6 +100,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, ".github/workflows/ci.yml", _BARE)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -99,6 +108,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "ci-silencers-have-rationale-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.ci_silencers_have_rationale as mod
 

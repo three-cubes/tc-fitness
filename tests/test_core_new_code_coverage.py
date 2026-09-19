@@ -129,6 +129,7 @@ def _git_repo(tmp_path: Path) -> Path:
     return repo
 
 
+@pytest.mark.integration
 def test_default_git_runner_disables_interactive_credentials(tmp_path: Path) -> None:
     """A stale-base refresh must warn/fall back, never block for credentials."""
     repo = _git_repo(tmp_path)
@@ -150,11 +151,13 @@ def test_default_git_runner_disables_interactive_credentials(tmp_path: Path) -> 
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_parse_line_coverage_joins_source_and_reads_hits(tmp_path: Path) -> None:
     p = _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 1, 11: 0}, "b.py": {1: 3}}))
     assert parse_line_coverage(p) == {"src/a.py": {10: 1, 11: 0}, "src/b.py": {1: 3}}
 
 
+@pytest.mark.integration
 def test_parse_line_coverage_dot_source_stays_repo_relative(tmp_path: Path) -> None:
     """A ``<source>.</source>`` root (normalised repo-root coverage — the shape a
     multi-``--cov``-root report is collapsed to for Sonar) keeps the class
@@ -167,10 +170,12 @@ def test_parse_line_coverage_dot_source_stays_repo_relative(tmp_path: Path) -> N
     assert parse_line_coverage(p) == {"scripts/lib/x.py": {10: 1, 11: 0}}
 
 
+@pytest.mark.integration
 def test_parse_line_coverage_missing_report_empty(tmp_path: Path) -> None:
     assert parse_line_coverage(tmp_path / "nope.xml") == {}
 
 
+@pytest.mark.integration
 def test_parse_line_coverage_merges_duplicate_class_with_max_hits(tmp_path: Path) -> None:
     xml = (
         "<coverage><sources><source>src</source></sources><packages><package><classes>"
@@ -182,6 +187,7 @@ def test_parse_line_coverage_merges_duplicate_class_with_max_hits(tmp_path: Path
     assert parse_line_coverage(p) == {"src/a.py": {5: 4}}  # covered anywhere ⇒ covered
 
 
+@pytest.mark.integration
 def test_parse_line_coverage_rejects_unsafe_xml(tmp_path: Path) -> None:
     p = _seed(tmp_path, "coverage.xml", "<!DOCTYPE x>\n<coverage/>")
     try:
@@ -197,16 +203,19 @@ def test_parse_line_coverage_rejects_unsafe_xml(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.unit
 def test_parse_added_lines_basic_hunk() -> None:
     diff = _diff("src/a.py", 10, ["x = 1", "y = 2", "z = 3"])
     assert parse_added_lines(diff) == {"src/a.py": {10, 11, 12}}
 
 
+@pytest.mark.unit
 def test_parse_added_lines_new_file_whole_body_is_added() -> None:
     diff = _diff("src/new.py", 1, ["a = 1", "b = 2"], new_file=True)
     assert parse_added_lines(diff) == {"src/new.py": {1, 2}}
 
 
+@pytest.mark.unit
 def test_parse_added_lines_deleted_file_contributes_nothing() -> None:
     diff = (
         "diff --git a/src/gone.py b/src/gone.py\n"
@@ -221,6 +230,7 @@ def test_parse_added_lines_deleted_file_contributes_nothing() -> None:
     assert parse_added_lines(diff) == {}
 
 
+@pytest.mark.unit
 def test_parse_added_lines_context_lines_advance_counter() -> None:
     # A -U1 hunk: context lines advance the new-side counter so the added line
     # lands on its true number (11), not the hunk start (10).
@@ -237,6 +247,7 @@ def test_parse_added_lines_context_lines_advance_counter() -> None:
     assert parse_added_lines(diff) == {"src/c.py": {11}}
 
 
+@pytest.mark.unit
 def test_parse_added_lines_multiple_hunks_one_file() -> None:
     diff = (
         "diff --git a/src/m.py b/src/m.py\n"
@@ -257,6 +268,7 @@ def test_parse_added_lines_multiple_hunks_one_file() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_working_tree_added_lines_match_post_commit_measurement(tmp_path: Path) -> None:
     """Unstaged, staged, and committed forms of one source tree agree."""
     repo = _git_repo(tmp_path)
@@ -279,6 +291,7 @@ def test_working_tree_added_lines_match_post_commit_measurement(tmp_path: Path) 
     assert (unstaged_verdict, staged_verdict, committed_verdict) == (1, 1, 1)
 
 
+@pytest.mark.integration
 def test_untracked_source_is_measured_before_first_commit(tmp_path: Path) -> None:
     """A new source file cannot disappear from the local changed-line floor."""
     repo = _git_repo(tmp_path)
@@ -290,6 +303,7 @@ def test_untracked_source_is_measured_before_first_commit(tmp_path: Path) -> Non
     assert rule.run() == 1
 
 
+@pytest.mark.unit
 def test_git_output_decodes_non_utf8_bytes_losslessly() -> None:
     raw = b"src/bad_\xff.py\0"
     decoder = getattr(new_code_coverage, "_decode_git_output", None)
@@ -298,6 +312,7 @@ def test_git_output_decodes_non_utf8_bytes_losslessly() -> None:
     assert decoder(raw) == "src/bad_\udcff.py\0"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(sys.platform == "darwin", reason="macOS rejects invalid UTF-8 filenames")
 def test_untracked_source_with_non_utf8_filename_is_enumerated_losslessly(tmp_path: Path) -> None:
     """Git's byte-preserving path output must not abort the local gate."""
@@ -316,6 +331,7 @@ def test_untracked_source_with_non_utf8_filename_is_enumerated_losslessly(tmp_pa
     assert rule._changed_lines()[f"src/{decoded_name}"] == {1}
 
 
+@pytest.mark.integration
 def test_ignored_untracked_source_does_not_change_the_ci_equivalent_tree(tmp_path: Path) -> None:
     """Build residue excluded by Git remains outside local measurement."""
     repo = _git_repo(tmp_path)
@@ -328,6 +344,7 @@ def test_ignored_untracked_source_does_not_change_the_ci_equivalent_tree(tmp_pat
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_stale_remote_base_is_refreshed_before_exact_merge_base(tmp_path: Path) -> None:
     """A stale remote-tracking ref is refreshed before it defines new code."""
     calls: list[list[str]] = []
@@ -377,6 +394,7 @@ def test_stale_remote_base_is_refreshed_before_exact_merge_base(tmp_path: Path) 
     ]
 
 
+@pytest.mark.integration
 def test_real_stale_remote_tracking_ref_is_advanced(tmp_path: Path) -> None:
     """The production runner repairs an actually stale remote-tracking ref."""
     repo = _git_repo(tmp_path)
@@ -399,6 +417,7 @@ def test_real_stale_remote_tracking_ref_is_advanced(tmp_path: Path) -> None:
     assert _git(repo, "rev-parse", "origin/main").stdout.strip() == fresh
 
 
+@pytest.mark.integration
 def test_remote_refresh_failure_uses_cached_base_with_visible_diagnostic(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -426,6 +445,7 @@ def test_remote_refresh_failure_uses_cached_base_with_visible_diagnostic(
     assert "network unavailable" in diagnostic
 
 
+@pytest.mark.integration
 def test_below_floor_changed_lines_are_a_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 1, 11: 0, 12: 0}}))
     diff = _diff("src/a.py", 10, ["x = 1", "y = 2", "z = 3"])
@@ -434,6 +454,7 @@ def test_below_floor_changed_lines_are_a_violation(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
 
 
+@pytest.mark.integration
 def test_fully_covered_changed_lines_pass(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 1, 11: 1, 12: 1}}))
     diff = _diff("src/a.py", 10, ["x = 1", "y = 2", "z = 3"])
@@ -441,6 +462,7 @@ def test_fully_covered_changed_lines_pass(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_floor_is_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 1, 11: 1, 12: 0, 13: 0}}))  # 50% covered
     diff = _diff("src/a.py", 10, ["a", "b", "c", "d"])
@@ -457,6 +479,7 @@ def test_floor_is_config_driven(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_roots_scope_the_violation_set(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0, 11: 0}}, source="vendor"))
     diff = _diff("vendor/a.py", 10, ["x = 1", "y = 2"])
@@ -464,6 +487,7 @@ def test_roots_scope_the_violation_set(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()  # vendor/a.py is out of the src root
 
 
+@pytest.mark.integration
 def test_changed_lines_with_no_report_entry_are_not_measurable(tmp_path: Path) -> None:
     # The report records lines 1-2 for src/a.py, but the change added lines
     # 10-12 (blank lines / comments the report never recorded) → no coverable
@@ -474,6 +498,7 @@ def test_changed_lines_with_no_report_entry_are_not_measurable(tmp_path: Path) -
     assert rule.collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_file_absent_from_report_is_skipped(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"other.py": {1: 1}}))
     diff = _diff("src/a.py", 10, ["x = 1"])
@@ -486,18 +511,21 @@ def test_file_absent_from_report_is_skipped(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_no_coverage_report_is_a_soft_pass(tmp_path: Path) -> None:
     diff = _diff("src/a.py", 10, ["x = 1"])  # changes exist, but no report to score
     rule = build(_cfg(), repo_root=tmp_path, git_runner=_fake_git(diff=diff))
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_no_changed_files_passes(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
     rule = build(_cfg(), repo_root=tmp_path, git_runner=_fake_git(diff=""))
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_merge_base_unavailable_is_a_soft_pass(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
     diff = _diff("src/a.py", 10, ["x = 1"])
@@ -505,6 +533,7 @@ def test_merge_base_unavailable_is_a_soft_pass(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_unsafe_base_ref_skips_without_touching_git(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
 
@@ -521,6 +550,7 @@ def test_unsafe_base_ref_skips_without_touching_git(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_run_fails_hard_and_baseline_grandfathers_nothing(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
     diff = _diff("src/a.py", 10, ["x = 1"])
@@ -539,6 +569,7 @@ def test_run_fails_hard_and_baseline_grandfathers_nothing(tmp_path: Path) -> Non
     assert entries == []
 
 
+@pytest.mark.integration
 def test_hand_crafted_baseline_cannot_soften_the_floor(tmp_path: Path) -> None:
     # Even a MANUALLY written baseline naming the offender is ignored: run()
     # consults no baseline at all, so the hard floor holds.
@@ -551,6 +582,7 @@ def test_hand_crafted_baseline_cannot_soften_the_floor(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_writes_empty_baseline(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -570,6 +602,7 @@ def test_main_establish_baseline_writes_empty_baseline(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.new_code_coverage as mod
 

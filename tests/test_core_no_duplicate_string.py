@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_duplicate_string import (
     NoDuplicateString,
     build,
@@ -37,22 +39,26 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_detection_core_flags_duplicate(tmp_path: Path) -> None:
     p = _seed(tmp_path, "dup.py", _DUP)
     assert module_has_duplicate(p, min_length=10, min_occurrences=3) is True
 
 
+@pytest.mark.integration
 def test_detection_core_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "clean.py", _CLEAN)
     assert module_has_duplicate(p, min_length=10, min_occurrences=3) is False
 
 
+@pytest.mark.integration
 def test_docstring_not_counted(tmp_path: Path) -> None:
     body = '"""this is a long module docstring repeated"""\n' * 1  # single docstring
     p = _seed(tmp_path, "d.py", body)
     assert module_has_duplicate(p, min_length=10, min_occurrences=3) is False
 
 
+@pytest.mark.integration
 def test_threshold_is_config_driven(tmp_path: Path) -> None:
     p = _seed(tmp_path, "two.py", 'a="abcdefghij"\nb="abcdefghij"\n')
     # default 3 occurrences → clean; lower to 2 via config → violation.
@@ -61,6 +67,7 @@ def test_threshold_is_config_driven(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is True
 
 
+@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/dup.py", _DUP)
     _seed(tmp_path, "vendor/dup.py", _DUP)
@@ -68,6 +75,7 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/dup.py"}
 
 
+@pytest.mark.integration
 def test_run_fails_on_new_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/dup.py", _DUP)
     rule = NoDuplicateString.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -76,6 +84,7 @@ def test_run_fails_on_new_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "dup.py", _DUP)
     # main() uses default roots () → matches all .py via extension; scope to repo.
@@ -84,6 +93,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-duplicate-string-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     # DESIGN LAW: a CORE module's LOGIC carries no repo identity (no taz/kairix
     # paths, globs, or thresholds). Provenance docstrings/comments may name the

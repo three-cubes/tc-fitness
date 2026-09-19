@@ -26,6 +26,7 @@ rules:
 """
 
 
+@pytest.mark.integration
 def test_materialize_owasp_permissions_policy_replaces_numeric_mode_heuristic(tmp_path: Path) -> None:
     source = tmp_path / "owasp-source.yaml"
     target = tmp_path / "owasp-policy.yaml"
@@ -39,6 +40,7 @@ def test_materialize_owasp_permissions_policy_replaces_numeric_mode_heuristic(tm
     assert "comparison: $BITS >= 0o100650 and ($BITS & 0o077) != 0" in rendered
 
 
+@pytest.mark.integration
 def test_materialize_owasp_permissions_policy_rejects_unknown_snapshot(tmp_path: Path) -> None:
     source = tmp_path / "unknown.yaml"
     target = tmp_path / "owasp-policy.yaml"
@@ -48,6 +50,7 @@ def test_materialize_owasp_permissions_policy_rejects_unknown_snapshot(tmp_path:
         materialize_owasp_permissions_policy(source, target)
 
 
+@pytest.mark.integration
 def test_materialize_owasp_permissions_policy_preserves_upstream_input(tmp_path: Path) -> None:
     source = tmp_path / "owasp-source.yaml"
     source.write_text(_RULE_FRAGMENT, encoding="utf-8")
@@ -56,6 +59,7 @@ def test_materialize_owasp_permissions_policy_preserves_upstream_input(tmp_path:
         materialize_owasp_permissions_policy(source, source)
 
 
+@pytest.mark.integration
 def test_materialize_owasp_permissions_policy_rejects_ambiguous_predicates(tmp_path: Path) -> None:
     source = tmp_path / "ambiguous.yaml"
     target = tmp_path / "owasp-policy.yaml"

@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.coverage_floor import (
     build,
     main,
@@ -31,22 +33,26 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_parse_joins_source_root(tmp_path: Path) -> None:
     p = _seed(tmp_path, "coverage.xml", _report({"a.py": 0.4, "b.py": 1.0}))
     parsed = parse_coverage_report(p)
     assert parsed == {"src/a.py": 40.0, "src/b.py": 100.0}
 
 
+@pytest.mark.integration
 def test_parse_missing_report_empty(tmp_path: Path) -> None:
     assert parse_coverage_report(tmp_path / "nope.xml") == {}
 
 
+@pytest.mark.integration
 def test_below_floor_is_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.4, "b.py": 0.95}))
     rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
 
 
+@pytest.mark.integration
 def test_floor_is_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.85}))
     # floor 90 → a.py violates; floor 80 → clean.
@@ -56,12 +62,14 @@ def test_floor_is_config_driven(tmp_path: Path) -> None:
     assert build({"roots": ["src"], "floor_pct": 80.0}, repo_root=tmp_path).collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_roots_scope_the_violation_set(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}, source="vendor"))
     rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
     assert rule.collect_violations() == set()  # vendor/a.py is out of the src root
 
 
+@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}))
     rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
@@ -70,6 +78,7 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_unsafe_xml_rejected(tmp_path: Path) -> None:
     p = _seed(tmp_path, "coverage.xml", "<!DOCTYPE x>\n<coverage/>")
     try:
@@ -80,6 +89,7 @@ def test_unsafe_xml_rejected(tmp_path: Path) -> None:
         raise AssertionError("expected ValueError for DTD declaration")
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}))
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -87,6 +97,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "coverage-floor-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.coverage_floor as mod
 

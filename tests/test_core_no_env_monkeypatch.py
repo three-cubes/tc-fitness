@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_env_monkeypatch import (
@@ -37,32 +38,38 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_detection_flags_owned_prefix(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _SETENV)
     assert file_has_env_monkeypatch(p, prefixes=("MYAPP_",)) is True
 
 
+@pytest.mark.integration
 def test_detection_ignores_unowned_key(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _OTHER_ENV)
     assert file_has_env_monkeypatch(p, prefixes=("MYAPP_",)) is False
 
 
+@pytest.mark.integration
 def test_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _CLEAN)
     assert file_has_env_monkeypatch(p, prefixes=("MYAPP_",)) is False
 
 
+@pytest.mark.integration
 def test_no_prefixes_matches_nothing(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _SETENV)
     assert file_has_env_monkeypatch(p, prefixes=()) is False
 
 
+@pytest.mark.integration
 def test_prefix_is_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _SETENV)
     rule = NoEnvMonkeypatch.from_config({"roots": ["tests"], "env_prefixes": ["MYAPP_"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_x.py"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _SETENV)
     rule = NoEnvMonkeypatch.from_config({"roots": ["tests"], "env_prefixes": ["MYAPP_"]}, repo_root=tmp_path)
@@ -71,6 +78,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "test_x.py", _SETENV)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -78,10 +86,12 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-env-monkeypatch-files.txt").exists()
 
 
+@pytest.mark.unit
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), NoEnvMonkeypatch)
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_env_monkeypatch as mod
 

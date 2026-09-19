@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -119,17 +120,20 @@ def _quality_gate_violations(workflow: dict[str, Any]) -> list[str]:
     return violations
 
 
+@pytest.mark.integration
 def test_every_uv_setup_reads_the_reviewed_repository_pin() -> None:
     """Changing or adding any workflow installer must not create a second uv pin."""
     assert _uv_setup_violations(REPO_ROOT) == []
 
 
+@pytest.mark.integration
 def test_quality_gate_is_a_non_matrix_fan_in_for_all_qualification_workers() -> None:
     """A worker matrix must not replace branch protection's one Quality gate result."""
     workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
     assert _quality_gate_violations(workflow) == []
 
 
+@pytest.mark.integration
 def test_resolver_action_accepts_only_an_exact_uv_version(tmp_path: Path) -> None:
     """The adapter proves the file before passing it to setup-uv's version input."""
     action = yaml.safe_load(RESOLVER_ACTION.read_text(encoding="utf-8"))
@@ -156,6 +160,7 @@ def test_resolver_action_accepts_only_an_exact_uv_version(tmp_path: Path) -> Non
     assert run(None).returncode != 0
 
 
+@pytest.mark.integration
 def test_parity_check_examines_every_setup_occurrence(tmp_path: Path) -> None:
     """One correct installer must not hide a stale installer later in the workflow."""
     (tmp_path / ".uv-version").write_text("0.12.5\n", encoding="utf-8")

@@ -36,12 +36,14 @@ from tc_fitness.lib import (
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_gate_clean_when_no_violations(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = gate("rule-x", set(), "fix it", repo_root=tmp_path)
     assert rc == 0
     assert "clean" in capsys.readouterr().out
 
 
+@pytest.mark.integration
 def test_gate_fails_on_net_new_violation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = gate("rule-x", {Path("kairix/bad.py")}, "REMEDIATION-TEXT", repo_root=tmp_path)
     out = capsys.readouterr().out
@@ -50,6 +52,7 @@ def test_gate_fails_on_net_new_violation(tmp_path: Path, capsys: pytest.CaptureF
     assert "REMEDIATION-TEXT" in out
 
 
+@pytest.mark.integration
 def test_gate_grandfathers_baseline_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -62,6 +65,7 @@ def test_gate_grandfathers_baseline_files(tmp_path: Path, capsys: pytest.Capture
     assert "1 grandfathered" in out
 
 
+@pytest.mark.integration
 def test_gate_new_violation_alongside_baseline(tmp_path: Path) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -70,6 +74,7 @@ def test_gate_new_violation_alongside_baseline(tmp_path: Path) -> None:
     assert rc == 1  # legacy grandfathered, new.py is net-new
 
 
+@pytest.mark.integration
 def test_gate_baseline_skips_comment_lines(tmp_path: Path) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -78,6 +83,7 @@ def test_gate_baseline_skips_comment_lines(tmp_path: Path) -> None:
     assert rc == 0
 
 
+@pytest.mark.integration
 def test_gate_relativises_absolute_paths(tmp_path: Path) -> None:
     abs_violation = tmp_path / "kairix" / "bad.py"
     abs_violation.parent.mkdir(parents=True)
@@ -97,6 +103,7 @@ def test_gate_relativises_absolute_paths(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_gate_fail_on_stale_fails_when_baseline_entry_no_longer_violates(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -119,6 +126,7 @@ def test_gate_fail_on_stale_fails_when_baseline_entry_no_longer_violates(
     assert "STALE" in out or "stale" in out
 
 
+@pytest.mark.integration
 def test_gate_fail_on_stale_passes_and_prints_counts_when_no_stale(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -139,6 +147,7 @@ def test_gate_fail_on_stale_passes_and_prints_counts_when_no_stale(
     assert "grandfathered" in out
 
 
+@pytest.mark.integration
 def test_gate_fail_on_stale_default_false_is_unchanged(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -153,6 +162,7 @@ def test_gate_fail_on_stale_default_false_is_unchanged(
     assert "STALE" not in out
 
 
+@pytest.mark.integration
 def test_gate_net_new_still_fails_under_fail_on_stale(tmp_path: Path) -> None:
     # A net-new violation FAILs regardless of fail_on_stale.
     baseline_dir = tmp_path / ".architecture" / "baseline"
@@ -169,6 +179,7 @@ def test_gate_net_new_still_fails_under_fail_on_stale(tmp_path: Path) -> None:
     assert rc == 1
 
 
+@pytest.mark.integration
 def test_gate_keys_fail_on_stale(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -187,6 +198,7 @@ def test_gate_keys_fail_on_stale(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert "REMOVE-STALE-ID" in out
 
 
+@pytest.mark.integration
 def test_gate_keys_fail_on_stale_default_false_unchanged(tmp_path: Path) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -200,6 +212,7 @@ def test_gate_keys_fail_on_stale_default_false_unchanged(tmp_path: Path) -> None
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_python_files_finds_py_skips_pycache(tmp_path: Path) -> None:
     (tmp_path / "kairix").mkdir()
     (tmp_path / "kairix" / "a.py").write_text("")
@@ -213,10 +226,12 @@ def test_python_files_finds_py_skips_pycache(tmp_path: Path) -> None:
     assert found == {"a.py", "b.py"}
 
 
+@pytest.mark.integration
 def test_python_files_skips_missing_root(tmp_path: Path) -> None:
     assert python_files("does-not-exist", repo_root=tmp_path) == []
 
 
+@pytest.mark.integration
 def test_repo_relative_strips_root(tmp_path: Path) -> None:
     target = tmp_path / "kairix" / "x.py"
     target.parent.mkdir(parents=True)
@@ -224,6 +239,7 @@ def test_repo_relative_strips_root(tmp_path: Path) -> None:
     assert repo_relative(target, repo_root=tmp_path) == Path("kairix/x.py")
 
 
+@pytest.mark.integration
 def test_main_entry_gates_on_check_fn(tmp_path: Path) -> None:
     (tmp_path / "kairix").mkdir()
     good = tmp_path / "kairix" / "good.py"
@@ -238,6 +254,7 @@ def test_main_entry_gates_on_check_fn(tmp_path: Path) -> None:
     assert rc == 1  # bad.py flagged, net-new
 
 
+@pytest.mark.integration
 def test_main_entry_clean_when_check_fn_never_fires(tmp_path: Path) -> None:
     (tmp_path / "kairix").mkdir()
     (tmp_path / "kairix" / "good.py").write_text("clean\n")
@@ -250,10 +267,12 @@ def test_main_entry_clean_when_check_fn_never_fires(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.unit
 def test_actionable_shape() -> None:
     assert actionable("X broke", "do Y", "rerun Z") == "X broke; fix: do Y; next: rerun Z"
 
 
+@pytest.mark.unit
 def test_actionable_v01_default_is_byte_identical_two_marker() -> None:
     # v0.1.0 contract: with run omitted the output is EXACTLY the 2-marker form.
     # Proves the new optional param did not perturb existing call sites.
@@ -264,6 +283,7 @@ def test_actionable_v01_default_is_byte_identical_two_marker() -> None:
     assert "; run:" not in actionable("a", "b", "c")
 
 
+@pytest.mark.unit
 def test_actionable_run_appends_third_marker() -> None:
     # taz's 59 fix/next/run checks: the third marker is appended verbatim.
     assert actionable("X broke", "do Y", "rerun Z", "python check.py") == (
@@ -271,10 +291,12 @@ def test_actionable_run_appends_third_marker() -> None:
     )
 
 
+@pytest.mark.unit
 def test_actionable_run_can_be_keyword() -> None:
     assert actionable("X", "Y", "Z", run="cmd") == "X; fix: Y; next: Z; run: cmd"
 
 
+@pytest.mark.unit
 def test_actionable_run_explicit_none_matches_default() -> None:
     assert actionable("X", "Y", "Z", run=None) == actionable("X", "Y", "Z")
 
@@ -284,11 +306,13 @@ def test_actionable_run_explicit_none_matches_default() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.unit
 def test_remediation_three_markers_on_own_lines() -> None:
     block = remediation("redact it", "re-run check", "python check.py")
     assert block == "fix: redact it\nnext: re-run check\nrun: python check.py"
 
 
+@pytest.mark.unit
 def test_remediation_with_pass_and_forbidden_examples() -> None:
     block = remediation(
         "redact the secret",
@@ -306,12 +330,14 @@ def test_remediation_with_pass_and_forbidden_examples() -> None:
     )
 
 
+@pytest.mark.unit
 def test_remediation_pass_only_omits_forbidden() -> None:
     block = remediation("a", "b", "c", passing="good")
     assert block == "fix: a\nnext: b\nrun: c\nPass: good"
     assert "Forbidden:" not in block
 
 
+@pytest.mark.unit
 def test_remediation_forbidden_only_omits_pass() -> None:
     block = remediation("a", "b", "c", forbidden="bad")
     assert block == "fix: a\nnext: b\nrun: c\nForbidden: bad"
@@ -323,12 +349,14 @@ def test_remediation_forbidden_only_omits_pass() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_gate_keys_clean_when_no_violations(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = gate_keys("rule-id", set(), "fix it", repo_root=tmp_path)
     assert rc == 0
     assert "clean" in capsys.readouterr().out
 
 
+@pytest.mark.integration
 def test_gate_keys_fails_on_net_new_logical_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = gate_keys("f30", {"F30:my_new_tool"}, "REMEDIATION-TEXT", repo_root=tmp_path)
     out = capsys.readouterr().out
@@ -337,6 +365,7 @@ def test_gate_keys_fails_on_net_new_logical_id(tmp_path: Path, capsys: pytest.Ca
     assert "REMEDIATION-TEXT" in out
 
 
+@pytest.mark.integration
 def test_gate_keys_grandfathers_baseline_ids(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -347,6 +376,7 @@ def test_gate_keys_grandfathers_baseline_ids(tmp_path: Path, capsys: pytest.Capt
     assert "1 grandfathered" in out
 
 
+@pytest.mark.integration
 def test_gate_keys_new_id_alongside_baseline(tmp_path: Path) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -355,6 +385,7 @@ def test_gate_keys_new_id_alongside_baseline(tmp_path: Path) -> None:
     assert rc == 1  # legacy grandfathered, new_tool is net-new
 
 
+@pytest.mark.integration
 def test_gate_keys_baseline_skips_comment_lines(tmp_path: Path) -> None:
     baseline_dir = tmp_path / ".architecture" / "baseline"
     baseline_dir.mkdir(parents=True)
@@ -363,6 +394,7 @@ def test_gate_keys_baseline_skips_comment_lines(tmp_path: Path) -> None:
     assert rc == 0
 
 
+@pytest.mark.integration
 def test_gate_keys_shrinks_only_is_clean(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # Baseline has two ids; current has one (a resolved id). No net-new ⇒ clean pass.
     baseline_dir = tmp_path / ".architecture" / "baseline"
@@ -373,6 +405,7 @@ def test_gate_keys_shrinks_only_is_clean(tmp_path: Path, capsys: pytest.CaptureF
     assert "grandfathered" in capsys.readouterr().out
 
 
+@pytest.mark.integration
 def test_gate_keys_paths_suffix_selects_paths_baseline(tmp_path: Path) -> None:
     # A path-glob key set ratchets against -paths.txt when the suffix is overridden.
     baseline_dir = tmp_path / ".architecture" / "baseline"
@@ -388,6 +421,7 @@ def test_gate_keys_paths_suffix_selects_paths_baseline(tmp_path: Path) -> None:
     assert rc == 0
 
 
+@pytest.mark.integration
 def test_gate_keys_does_not_relativise_keys(tmp_path: Path) -> None:
     # A key that looks like an absolute path must be treated as an OPAQUE string,
     # NOT relativised the way gate() relativises real Paths. Same string in the
@@ -405,6 +439,7 @@ def test_gate_keys_does_not_relativise_keys(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.unit
 def test_emit_failures_banner_and_bullets() -> None:
     buf = io.StringIO()
     emit_failures("my_check", ["first fail", "second fail"], stream=buf)
@@ -414,6 +449,7 @@ def test_emit_failures_banner_and_bullets() -> None:
     assert "  - second fail" in text
 
 
+@pytest.mark.contract
 def test_emit_failures_defaults_to_stderr(capsys: pytest.CaptureFixture[str]) -> None:
     emit_failures("my_check", ["boom"])
     captured = capsys.readouterr()
@@ -421,12 +457,14 @@ def test_emit_failures_defaults_to_stderr(capsys: pytest.CaptureFixture[str]) ->
     assert captured.out == ""
 
 
+@pytest.mark.unit
 def test_emit_pass_writes_message() -> None:
     buf = io.StringIO()
     emit_pass("PASS my_check", stream=buf)
     assert buf.getvalue().strip() == "PASS my_check"
 
 
+@pytest.mark.contract
 def test_emit_pass_defaults_to_stdout(capsys: pytest.CaptureFixture[str]) -> None:
     emit_pass("PASS my_check")
     captured = capsys.readouterr()
@@ -439,6 +477,7 @@ def test_emit_pass_defaults_to_stdout(capsys: pytest.CaptureFixture[str]) -> Non
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_load_yaml_success(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     f = tmp_path / "ok.yaml"
@@ -448,6 +487,7 @@ def test_load_yaml_success(tmp_path: Path) -> None:
     assert data == {"a": 1, "b": "two"}
 
 
+@pytest.mark.integration
 def test_load_yaml_empty_returns_empty_dict(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     f = tmp_path / "empty.yaml"
@@ -457,6 +497,7 @@ def test_load_yaml_empty_returns_empty_dict(tmp_path: Path) -> None:
     assert data == {}
 
 
+@pytest.mark.integration
 def test_load_yaml_malformed_returns_error(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     f = tmp_path / "bad.yaml"
@@ -472,13 +513,16 @@ def test_load_yaml_malformed_returns_error(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.unit
 def test_missing_keys_reports_absent() -> None:
     assert missing_keys({"a": 1}, ("a", "b", "c")) == ["b", "c"]
 
 
+@pytest.mark.unit
 def test_missing_keys_empty_when_all_present() -> None:
     assert missing_keys({"a": 1, "b": 2}, ("a", "b")) == []
 
 
+@pytest.mark.unit
 def test_missing_keys_preserves_required_order() -> None:
     assert missing_keys({}, ("z", "a", "m")) == ["z", "a", "m"]

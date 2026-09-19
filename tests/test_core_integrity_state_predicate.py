@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.integrity_state_predicate import build, file_missing_state_predicate
 
 _STATE = {"content_vectors": ("model", "embedded_at")}
@@ -45,33 +47,39 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_detection_flags_presence_only_check(tmp_path: Path) -> None:
     p = _seed(tmp_path, "integrity.py", _BAD)
     assert file_missing_state_predicate(p, state_tables=_STATE) is True
 
 
+@pytest.mark.integration
 def test_detection_passes_with_state_predicate(tmp_path: Path) -> None:
     p = _seed(tmp_path, "integrity.py", _OK)
     assert file_missing_state_predicate(p, state_tables=_STATE) is False
 
 
+@pytest.mark.integration
 def test_orphan_check_on_non_state_table_is_clean(tmp_path: Path) -> None:
     """LEFT JOIN documents (not a configured state table) must not fire."""
     p = _seed(tmp_path, "integrity.py", _ORPHAN)
     assert file_missing_state_predicate(p, state_tables=_STATE) is False
 
 
+@pytest.mark.integration
 def test_empty_state_tables_flags_nothing(tmp_path: Path) -> None:
     p = _seed(tmp_path, "integrity.py", _BAD)
     assert file_missing_state_predicate(p, state_tables={}) is False
 
 
+@pytest.mark.integration
 def test_no_state_tables_configured_is_clean(tmp_path: Path) -> None:
     _seed(tmp_path, "src/integrity.py", _BAD)
     rule = build({"roots": ["src"]}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_build_flags_in_scope_presence_only_check(tmp_path: Path) -> None:
     _seed(tmp_path, "src/integrity.py", _BAD)
     rule = build(
@@ -80,6 +88,7 @@ def test_build_flags_in_scope_presence_only_check(tmp_path: Path) -> None:
     assert Path("src/integrity.py") in rule.collect_violations()
 
 
+@pytest.mark.integration
 def test_build_clean_when_state_predicate_present(tmp_path: Path) -> None:
     _seed(tmp_path, "src/integrity.py", _OK)
     rule = build(

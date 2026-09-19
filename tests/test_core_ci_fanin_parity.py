@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.ci_fanin_parity import (
     CiFaninParity,
     build,
@@ -78,6 +80,7 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_honest_fanin_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _HONEST)
     assert (
@@ -88,6 +91,7 @@ def test_honest_fanin_clean(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_dangling_job_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _DANGLING)
     assert (
@@ -98,6 +102,7 @@ def test_dangling_job_flagged(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_marked_informational_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _MARKED)
     assert (
@@ -108,6 +113,7 @@ def test_marked_informational_clean(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_missing_aggregator_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "ci.yml", _NO_AGGREGATOR)
     assert (
@@ -118,6 +124,7 @@ def test_missing_aggregator_flagged(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.integration
 def test_aggregator_name_config_driven(tmp_path: Path) -> None:
     body = _DANGLING.replace("CI gate", "merge-gate")
     _seed(tmp_path, ".github/workflows/ci.yml", body)
@@ -125,17 +132,20 @@ def test_aggregator_name_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {".github/workflows/ci.yml"}
 
 
+@pytest.mark.integration
 def test_rule_clean_on_honest(tmp_path: Path) -> None:
     _seed(tmp_path, ".github/workflows/ci.yml", _HONEST)
     rule = build({}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_absent_workflow_is_clean(tmp_path: Path) -> None:
     rule = build({}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
+@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, ".github/workflows/ci.yml", _DANGLING)
     rule = CiFaninParity.from_config({}, repo_root=tmp_path)
@@ -144,6 +154,7 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, ".github/workflows/ci.yml", _DANGLING)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -151,6 +162,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "ci-fanin-parity-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.ci_fanin_parity as mod
 

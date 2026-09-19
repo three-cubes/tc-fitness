@@ -40,17 +40,20 @@ def _selected_contract() -> dict[str, object]:
     }
 
 
+@pytest.mark.unit
 def test_canonical_json_bytes_are_stable_and_compact() -> None:
     assert canonical_json_bytes({"z": 1, "snowman": "☃", "a": [True, None]}) == (
         b'{"a":[true,null],"snowman":"\\u2603","z":1}'
     )
 
 
+@pytest.mark.unit
 def test_canonical_json_bytes_reject_nan() -> None:
     with pytest.raises(ValueError, match="Out of range float"):
         canonical_json_bytes({"value": float("nan")})
 
 
+@pytest.mark.unit
 def test_posix_path_helpers_compare_components_not_string_prefixes() -> None:
     profiles = absolute_posix_components("/hermes-home/profiles")
     profile = absolute_posix_components("/hermes-home/profiles/consultant")
@@ -64,11 +67,13 @@ def test_posix_path_helpers_compare_components_not_string_prefixes() -> None:
     assert not component_paths_overlap(profiles, sibling)
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("value", ["relative/path", "/safe/../escape", "\\windows\\path", ""])
 def test_posix_path_helpers_reject_non_absolute_or_unsafe_paths(value: str) -> None:
     assert absolute_posix_components(value) is None
 
 
+@pytest.mark.unit
 def test_identity_helpers_reject_boolean_ids_and_noncanonical_digests() -> None:
     assert is_integer_identity(1000)
     assert not is_integer_identity(True)
@@ -76,6 +81,7 @@ def test_identity_helpers_reject_boolean_ids_and_noncanonical_digests() -> None:
     assert not is_sha256_digest("sha256:" + "A" * 64)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("body", "code"),
     [
@@ -96,6 +102,7 @@ def test_strict_json_contract_failures_are_actionable(tmp_path: Path, body: str,
     assert all(finding.fix for finding in findings)
 
 
+@pytest.mark.integration
 def test_configured_path_must_stay_beneath_repo_root(tmp_path: Path) -> None:
     documents, findings = load_contract_documents(
         {"contract_file": "../contract.json"},
@@ -105,6 +112,7 @@ def test_configured_path_must_stay_beneath_repo_root(tmp_path: Path) -> None:
     assert {finding.code for finding in findings} == {"unsafe-config-path"}
 
 
+@pytest.mark.integration
 def test_missing_configured_contract_is_a_finding(tmp_path: Path) -> None:
     documents, findings = load_contract_documents(
         {"contract_file": "missing.json"},
@@ -114,6 +122,7 @@ def test_missing_configured_contract_is_a_finding(tmp_path: Path) -> None:
     assert {finding.code for finding in findings} == {"missing-file"}
 
 
+@pytest.mark.integration
 def test_resolve_selects_one_registry_target_without_mutating_input() -> None:
     registry = {
         "schema": CONTRACT_SCHEMA,
@@ -145,6 +154,7 @@ def test_resolve_selects_one_registry_target_without_mutating_input() -> None:
     assert canonical_json_bytes(registry) == before
 
 
+@pytest.mark.integration
 def test_loader_preserves_exact_source_bytes(tmp_path: Path) -> None:
     contract = _selected_contract()
     body = json.dumps(contract, indent=2).encode("utf-8") + b"\n"
@@ -156,6 +166,7 @@ def test_loader_preserves_exact_source_bytes(tmp_path: Path) -> None:
     assert documents.contract == contract
 
 
+@pytest.mark.integration
 def test_yaml_duplicate_keys_are_rejected(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     (tmp_path / "contract.yaml").write_text(
@@ -170,6 +181,7 @@ def test_yaml_duplicate_keys_are_rejected(tmp_path: Path) -> None:
     assert {finding.code for finding in findings} == {"duplicate-key"}
 
 
+@pytest.mark.integration
 def test_yaml_repeated_container_aliases_are_rejected_before_expansion(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     aliases = ["seed: &level0 [value]"]
@@ -191,6 +203,7 @@ def test_yaml_repeated_container_aliases_are_rejected_before_expansion(tmp_path:
     assert {finding.code for finding in findings} == {"repeated-container-alias"}
 
 
+@pytest.mark.integration
 def test_explicit_null_environments_is_not_treated_as_a_selected_contract(tmp_path: Path) -> None:
     registry = {"schema": CONTRACT_SCHEMA, "environments": None}
 
@@ -205,6 +218,7 @@ def test_explicit_null_environments_is_not_treated_as_a_selected_contract(tmp_pa
     assert {finding.code for finding in findings} == {"invalid-environments"}
 
 
+@pytest.mark.integration
 def test_yaml_without_optional_dependency_is_actionable(tmp_path: Path) -> None:
     registry = tmp_path / "contract.yaml"
     registry.write_text(

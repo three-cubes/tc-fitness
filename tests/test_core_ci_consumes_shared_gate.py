@@ -6,6 +6,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.ci_consumes_shared_gate import (
     CiConsumesSharedGate,
     build,
@@ -59,6 +61,7 @@ def _write_workflow(tmp_path: Path, name: str, body: str) -> Path:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_workflow_files_enumerates_only_yaml(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "ci.yml", _VIA_REUSABLE)
     _write_workflow(tmp_path, "release.yaml", _VIA_ENGINE)
@@ -67,10 +70,12 @@ def test_workflow_files_enumerates_only_yaml(tmp_path: Path) -> None:
     assert found == {"ci.yml", "release.yaml"}
 
 
+@pytest.mark.integration
 def test_workflow_files_missing_dir_is_empty(tmp_path: Path) -> None:
     assert workflow_files(tmp_path / ".github" / "workflows") == []
 
 
+@pytest.mark.unit
 def test_satisfying_mechanism_prefers_reusable() -> None:
     reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
     engine = re.compile(r"\btc-fitness run\b")
@@ -82,6 +87,7 @@ def test_satisfying_mechanism_prefers_reusable() -> None:
     assert "reusable-workflow" in mechanism
 
 
+@pytest.mark.unit
 def test_satisfying_mechanism_none_on_fork() -> None:
     reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
     engine = re.compile(r"\btc-fitness run\b")
@@ -93,16 +99,19 @@ def test_satisfying_mechanism_none_on_fork() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_pass_via_reusable(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "ci.yml", _VIA_REUSABLE)
     assert build({}, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_pass_via_engine(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "ci.yml", _VIA_ENGINE)
     assert build({}, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_pass_when_one_of_several_workflows_satisfies(tmp_path: Path) -> None:
     # A repo with several workflows passes when ANY of them consumes the gate.
     _write_workflow(tmp_path, "docs.yml", _FORKED_GATE)
@@ -115,11 +124,13 @@ def test_pass_when_one_of_several_workflows_satisfies(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_fail_on_fork(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
     assert build({}, repo_root=tmp_path).run() == 1
 
 
+@pytest.mark.integration
 def test_fail_on_multiple_forked_workflows(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
     _write_workflow(tmp_path, "nightly.yml", "name: nightly\non: schedule\n")
@@ -131,11 +142,13 @@ def test_fail_on_multiple_forked_workflows(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_skip_on_no_workflows_dir(tmp_path: Path) -> None:
     # No .github/workflows at all → vacuous pass (nothing to enforce).
     assert build({}, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_skip_on_empty_workflows_dir(tmp_path: Path) -> None:
     # Directory exists but holds no yaml → vacuous pass.
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
@@ -148,6 +161,7 @@ def test_skip_on_empty_workflows_dir(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_warn_only_reports_but_passes(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
     assert build({"warn_only": True}, repo_root=tmp_path).run() == 0
@@ -156,6 +170,7 @@ def test_warn_only_reports_but_passes(tmp_path: Path, capsys) -> None:  # type: 
     assert "warn-only" in out
 
 
+@pytest.mark.integration
 def test_baseline_ok_alias_is_warn_mode(tmp_path: Path) -> None:
     # `baseline_ok` is the accepted alias for `warn_only` — same soft-mode effect.
     _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
@@ -167,6 +182,7 @@ def test_baseline_ok_alias_is_warn_mode(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_config_workflows_dir_knob(tmp_path: Path) -> None:
     # A repo whose CI lives elsewhere binds `workflows_dir`; the default dir is
     # empty (skip) but the configured dir holds a forked gate (fail).
@@ -176,6 +192,7 @@ def test_config_workflows_dir_knob(tmp_path: Path) -> None:
     assert build({"workflows_dir": "ci"}, repo_root=tmp_path).run() == 1
 
 
+@pytest.mark.integration
 def test_config_custom_engine_pattern(tmp_path: Path) -> None:
     # A consumer can point the engine arm at a different invocation token.
     body = "name: gate\non: [pull_request]\njobs:\n  q:\n    steps:\n      - run: make org-quality-gate\n"
@@ -187,6 +204,7 @@ def test_config_custom_engine_pattern(tmp_path: Path) -> None:
     assert build(cfg, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_config_custom_reusable_pattern(tmp_path: Path) -> None:
     body = (
         "name: gate\non: [pull_request]\njobs:\n  q:\n"
@@ -198,12 +216,14 @@ def test_config_custom_reusable_pattern(tmp_path: Path) -> None:
     assert build(cfg, repo_root=tmp_path).run() == 0
 
 
+@pytest.mark.integration
 def test_invalid_pattern_fails_actionably(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "ci.yml", _VIA_REUSABLE)
     # A broken regex is a config error → hard fail regardless of would-be match.
     assert build({"reusable_pattern": "["}, repo_root=tmp_path).run() == 1
 
 
+@pytest.mark.integration
 def test_from_config_binds_all_knobs(tmp_path: Path) -> None:
     rule = CiConsumesSharedGate.from_config(
         {
@@ -225,6 +245,7 @@ def test_from_config_binds_all_knobs(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "ci.yml", _VIA_REUSABLE)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -232,6 +253,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "ci-consumes-shared-gate-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.ci_consumes_shared_gate as mod
 

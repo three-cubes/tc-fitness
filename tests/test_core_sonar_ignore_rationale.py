@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.sonar_ignore_rationale import (
     DEFAULT_RULE_KEY_PATTERN,
     SonarIgnoreRationale,
@@ -32,34 +34,40 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.integration
 def test_detection_core_flags_bare_ignore(tmp_path: Path) -> None:
     p = _seed(tmp_path, "sonar-project.properties", _BARE)
     assert file_has_unjustified_ignore(p, rule_key_pattern=DEFAULT_RULE_KEY_PATTERN) is True
 
 
+@pytest.mark.integration
 def test_justified_ignore_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "sonar-project.properties", _JUSTIFIED)
     assert file_has_unjustified_ignore(p, rule_key_pattern=DEFAULT_RULE_KEY_PATTERN) is False
 
 
+@pytest.mark.integration
 def test_absent_file_is_clean(tmp_path: Path) -> None:
     rule = SonarIgnoreRationale.from_config({}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_enumerates_only_the_sonar_file(tmp_path: Path) -> None:
     _seed(tmp_path, "sonar-project.properties", _BARE)
     rule = SonarIgnoreRationale.from_config({}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"sonar-project.properties"}
 
 
+@pytest.mark.integration
 def test_sonar_file_name_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "config/sonar.props", _BARE)
     rule = build({"sonar_file": "config/sonar.props"}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"config/sonar.props"}
 
 
+@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "sonar-project.properties", _BARE)
     rule = SonarIgnoreRationale.from_config({}, repo_root=tmp_path)
@@ -68,6 +76,7 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "sonar-project.properties", _BARE)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -75,6 +84,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "sonar-ignore-rationale-files.txt").exists()
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.sonar_ignore_rationale as mod
 

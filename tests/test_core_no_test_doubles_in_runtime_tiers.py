@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_test_doubles_in_runtime_tiers import (
@@ -19,6 +20,7 @@ def _seed(tmp_path: Path, content: str) -> Path:
     return path
 
 
+@pytest.mark.integration
 def test_rejects_monkeypatch_in_module_marked_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -29,6 +31,7 @@ def test_rejects_monkeypatch_in_module_marked_runtime_tier(tmp_path: Path) -> No
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_mock_in_individually_marked_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -39,6 +42,7 @@ def test_rejects_mock_in_individually_marked_runtime_tier(tmp_path: Path) -> Non
     assert file_has_runtime_tier_test_double(path, runtime_markers=("pvt",)) is True
 
 
+@pytest.mark.integration
 def test_allows_real_http_patch_method_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -49,6 +53,7 @@ def test_allows_real_http_patch_method_in_runtime_tier(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is False
 
 
+@pytest.mark.integration
 def test_rejects_mock_in_runtime_marked_test_class(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -59,6 +64,7 @@ def test_rejects_mock_in_runtime_marked_test_class(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_fixture_double_used_by_individually_marked_test(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -69,6 +75,7 @@ def test_rejects_fixture_double_used_by_individually_marked_test(tmp_path: Path)
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_double_in_in_file_helper_called_by_runtime_test(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -80,6 +87,7 @@ def test_rejects_double_in_in_file_helper_called_by_runtime_test(tmp_path: Path)
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_double_in_transitive_in_file_helper_called_by_runtime_test(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -92,6 +100,7 @@ def test_rejects_double_in_transitive_in_file_helper_called_by_runtime_test(tmp_
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_monkeypatch_passed_to_a_renamed_helper_parameter(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -103,6 +112,7 @@ def test_rejects_monkeypatch_passed_to_a_renamed_helper_parameter(tmp_path: Path
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_allows_restoring_a_real_module_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -114,6 +124,7 @@ def test_allows_restoring_a_real_module_in_runtime_tier(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is False
 
 
+@pytest.mark.integration
 def test_ignores_module_helper_shadowed_by_a_local_binding(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -125,6 +136,7 @@ def test_ignores_module_helper_shadowed_by_a_local_binding(tmp_path: Path) -> No
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is False
 
 
+@pytest.mark.integration
 def test_rejects_monkeypatch_in_a_runtime_test_class_helper_method(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -138,6 +150,7 @@ def test_rejects_monkeypatch_in_a_runtime_test_class_helper_method(tmp_path: Pat
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_underscore_prefixed_fake_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -148,6 +161,7 @@ def test_rejects_underscore_prefixed_fake_in_runtime_tier(tmp_path: Path) -> Non
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_synthetic_module_injection_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -158,6 +172,7 @@ def test_rejects_synthetic_module_injection_in_runtime_tier(tmp_path: Path) -> N
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_all_monkeypatch_mutation_methods_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -168,6 +183,7 @@ def test_rejects_all_monkeypatch_mutation_methods_in_runtime_tier(tmp_path: Path
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_resolves_pytest_import_aliases(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -178,6 +194,7 @@ def test_resolves_pytest_import_aliases(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_imported_unittest_patch_object(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -188,6 +205,7 @@ def test_rejects_imported_unittest_patch_object(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_resolves_imported_pytest_mark_alias(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -198,6 +216,7 @@ def test_resolves_imported_pytest_mark_alias(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e",)) is True
 
 
+@pytest.mark.integration
 def test_rejects_configured_simulation_seam_in_runtime_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -214,6 +233,7 @@ def test_rejects_configured_simulation_seam_in_runtime_tier(tmp_path: Path) -> N
     )
 
 
+@pytest.mark.integration
 def test_allows_test_double_in_contract_tier(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -223,6 +243,7 @@ def test_allows_test_double_in_contract_tier(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("e2e", "pvt")) is False
 
 
+@pytest.mark.integration
 def test_allows_live_runtime_test_without_a_test_double(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -232,6 +253,7 @@ def test_allows_live_runtime_test_without_a_test_double(tmp_path: Path) -> None:
     assert file_has_runtime_tier_test_double(path, runtime_markers=("journey",)) is False
 
 
+@pytest.mark.integration
 def test_runtime_markers_are_consumer_configured(tmp_path: Path) -> None:
     path = _seed(
         tmp_path,
@@ -246,10 +268,12 @@ def test_runtime_markers_are_consumer_configured(tmp_path: Path) -> None:
     assert rule.file_has_violation(path) is True
 
 
+@pytest.mark.unit
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), NoTestDoublesInRuntimeTiers)
 
 
+@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_test_doubles_in_runtime_tiers as mod
 

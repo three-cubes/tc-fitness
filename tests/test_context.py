@@ -11,9 +11,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.context import CheckContext
 
 
+@pytest.mark.integration
 def test_python_files_indexes_and_skips_pycache(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("")
@@ -24,6 +27,7 @@ def test_python_files_indexes_and_skips_pycache(tmp_path: Path) -> None:
     assert found == {"a.py"}
 
 
+@pytest.mark.integration
 def test_python_files_memoised(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("")
@@ -33,6 +37,7 @@ def test_python_files_memoised(tmp_path: Path) -> None:
     assert first is second  # same tuple object returned (memoised)
 
 
+@pytest.mark.integration
 def test_parse_cache_parses_each_source_once(tmp_path: Path) -> None:
     ctx = CheckContext(repo_root=tmp_path)
     source = "x = 1\n"
@@ -43,6 +48,7 @@ def test_parse_cache_parses_each_source_once(tmp_path: Path) -> None:
     assert ctx.parse_hits == 1  # served from cache once
 
 
+@pytest.mark.integration
 def test_parse_cache_key_includes_source_text(tmp_path: Path) -> None:
     # Same filename, DIFFERENT source ⇒ a fresh parse (no stale tree).
     ctx = CheckContext(repo_root=tmp_path)
@@ -52,6 +58,7 @@ def test_parse_cache_key_includes_source_text(tmp_path: Path) -> None:
     assert ctx.parse_misses == 2
 
 
+@pytest.mark.integration
 def test_walk_cache_shares_node_list_by_tree_identity(tmp_path: Path) -> None:
     ctx = CheckContext(repo_root=tmp_path)
     tree = ctx.parse("def f():\n    return 1\n", filename="f.py")
@@ -66,6 +73,7 @@ def test_walk_cache_shares_node_list_by_tree_identity(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.integration
 def test_install_patches_and_restores_ast_parse(tmp_path: Path) -> None:
     real_parse = ast.parse
     real_walk = ast.walk
@@ -80,6 +88,7 @@ def test_install_patches_and_restores_ast_parse(tmp_path: Path) -> None:
     assert ast.walk is real_walk
 
 
+@pytest.mark.integration
 def test_install_passes_exotic_parse_through_uncached(tmp_path: Path) -> None:
     ctx = CheckContext(repo_root=tmp_path)
     with ctx.install():
@@ -89,6 +98,7 @@ def test_install_passes_exotic_parse_through_uncached(tmp_path: Path) -> None:
     assert ctx.parse_misses == 0  # exotic call never touched the cache
 
 
+@pytest.mark.integration
 def test_tree_for_returns_none_on_syntax_error(tmp_path: Path) -> None:
     bad = tmp_path / "bad.py"
     bad.write_text("def (:\n")  # syntax error
@@ -96,6 +106,7 @@ def test_tree_for_returns_none_on_syntax_error(tmp_path: Path) -> None:
     assert ctx.tree_for(bad) is None
 
 
+@pytest.mark.integration
 def test_source_for_caches_and_tolerates_missing(tmp_path: Path) -> None:
     f = tmp_path / "x.py"
     f.write_text("z = 3\n")
@@ -104,6 +115,7 @@ def test_source_for_caches_and_tolerates_missing(tmp_path: Path) -> None:
     assert ctx.source_for(tmp_path / "missing.py") is None
 
 
+@pytest.mark.integration
 def test_distinct_files_parsed_is_the_miss_count(tmp_path: Path) -> None:
     ctx = CheckContext(repo_root=tmp_path)
     ctx.parse("a = 1\n", filename="a.py")

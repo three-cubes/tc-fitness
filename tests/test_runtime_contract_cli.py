@@ -40,6 +40,7 @@ def _run(*args: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
+@pytest.mark.integration
 def test_resolve_and_digest_write_canonical_results(tmp_path: Path) -> None:
     registry = tmp_path / "registry.json"
     registry.write_bytes(canonical_json_bytes(_registry()))
@@ -77,6 +78,7 @@ def test_resolve_and_digest_write_canonical_results(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.integration
 def test_verify_evidence_accepts_independent_identity_values(tmp_path: Path) -> None:
     registry = tmp_path / "registry.json"
     registry.write_bytes(canonical_json_bytes(_registry()))
@@ -159,6 +161,7 @@ def test_verify_evidence_accepts_independent_identity_values(tmp_path: Path) -> 
     assert json.loads(output.read_bytes()) == {"findings": [], "valid": True}
 
 
+@pytest.mark.integration
 def test_cli_returns_one_and_writes_findings_for_bad_input(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text('{"schema":"wrong"}', encoding="utf-8")
@@ -182,6 +185,7 @@ def test_cli_returns_one_and_writes_findings_for_bad_input(tmp_path: Path) -> No
     assert payload["findings"][0]["run"]
 
 
+@pytest.mark.integration
 def test_recursive_yaml_writes_canonical_invalid_result(tmp_path: Path) -> None:
     contract = tmp_path / "contract.yaml"
     contract.write_text(
@@ -208,6 +212,7 @@ def test_recursive_yaml_writes_canonical_invalid_result(tmp_path: Path) -> None:
     assert payload["findings"][0]["code"] == "cyclic-document"
 
 
+@pytest.mark.integration
 def test_depth_invalid_yaml_writes_canonical_invalid_result(tmp_path: Path) -> None:
     contract = tmp_path / "contract.yaml"
     nested = ""
@@ -233,6 +238,7 @@ def test_depth_invalid_yaml_writes_canonical_invalid_result(tmp_path: Path) -> N
     assert payload["findings"][0]["code"] == "document-too-deep"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("key", ["1", "true", "null"])
 def test_yaml_non_string_mapping_key_is_rejected_by_cli(tmp_path: Path, key: str) -> None:
     contract = tmp_path / "contract.yaml"
@@ -260,6 +266,7 @@ def test_yaml_non_string_mapping_key_is_rejected_by_cli(tmp_path: Path, key: str
     assert payload["findings"][0]["code"] == "non-string-key"
 
 
+@pytest.mark.integration
 def test_verify_cli_rejects_missing_receipt_execution_identity(tmp_path: Path) -> None:
     registry = tmp_path / "registry.json"
     registry.write_bytes(canonical_json_bytes(_registry()))
@@ -332,6 +339,7 @@ def test_verify_cli_rejects_missing_receipt_execution_identity(tmp_path: Path) -
     )
 
 
+@pytest.mark.integration
 def test_verify_cli_rejects_receipt_from_an_earlier_attempt(tmp_path: Path) -> None:
     registry = tmp_path / "registry.json"
     registry.write_bytes(canonical_json_bytes(_registry()))

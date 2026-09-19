@@ -29,6 +29,7 @@ def _report(*vulnerability_ids: str) -> dict[str, object]:
     }
 
 
+@pytest.mark.integration
 def test_missing_required_scanner_is_incomplete_and_cannot_pass(tmp_path: Path) -> None:
     rule = OsvScannerSca(
         tmp_path,
@@ -49,6 +50,7 @@ def test_missing_required_scanner_is_incomplete_and_cannot_pass(tmp_path: Path) 
     assert rule.run() == 1
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("status", [ScanStatus.MISSING_TOOL, ScanStatus.INCOMPLETE])
 def test_only_an_executed_clean_scan_can_return_green(tmp_path: Path, status: ScanStatus) -> None:
     rule = OsvScannerSca(
@@ -61,6 +63,7 @@ def test_only_an_executed_clean_scan_can_return_green(tmp_path: Path, status: Sc
     assert rule.run() != 0
 
 
+@pytest.mark.integration
 def test_executed_clean_scan_passes(tmp_path: Path) -> None:
     rule = OsvScannerSca(
         tmp_path,
@@ -75,6 +78,7 @@ def test_executed_clean_scan_passes(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_executed_scan_with_any_finding_fails_without_grandfathering(tmp_path: Path) -> None:
     rule = OsvScannerSca(
         tmp_path,
@@ -94,6 +98,7 @@ def test_executed_scan_with_any_finding_fails_without_grandfathering(tmp_path: P
     assert rule.run() == 1
 
 
+@pytest.mark.integration
 def test_config_requires_an_exact_scanner_pin(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="scanner_version"):
         build({"required": True, "lockfiles": ["uv.lock"]}, repo_root=tmp_path)
@@ -129,6 +134,7 @@ def _scanner_script(
     return scanner
 
 
+@pytest.mark.integration
 def test_real_executable_boundary_accepts_exact_version_and_clean_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -142,6 +148,7 @@ def test_real_executable_boundary_accepts_exact_version_and_clean_report(
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_real_executable_boundary_rejects_wrong_scanner_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -159,6 +166,7 @@ def test_real_executable_boundary_rejects_wrong_scanner_version(
     assert "expected osv-scanner 2.2.4, found 2.2.3" in execution.detail
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("version", ["2.2.4-rc.1", "2.2.4+dirty"])
 def test_real_executable_boundary_rejects_scanner_version_suffixes(
     tmp_path: Path,
@@ -179,6 +187,7 @@ def test_real_executable_boundary_rejects_scanner_version_suffixes(
     assert f"expected osv-scanner 2.2.4, found {version}" in execution.detail
 
 
+@pytest.mark.integration
 def test_real_executable_boundary_rejects_missing_declared_lockfile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -194,6 +203,7 @@ def test_real_executable_boundary_rejects_missing_declared_lockfile(
     assert execution.detail == "declared lockfile(s) missing: uv.lock"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("lockfile", ["../outside.lock", "symlink.lock"])
 def test_real_executable_boundary_rejects_lockfiles_outside_the_repo(
     tmp_path: Path,
@@ -219,6 +229,7 @@ def test_real_executable_boundary_rejects_lockfiles_outside_the_repo(
     assert "must resolve beneath repository root" in execution.detail
 
 
+@pytest.mark.integration
 def test_real_executable_boundary_rejects_an_absolute_lockfile_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -240,6 +251,7 @@ def test_real_executable_boundary_rejects_an_absolute_lockfile_path(
     assert "must be repository-relative" in execution.detail
 
 
+@pytest.mark.integration
 def test_real_executable_boundary_rejects_clean_report_with_exit_one(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -258,6 +270,7 @@ def test_real_executable_boundary_rejects_clean_report_with_exit_one(
     assert "exit 1 with no vulnerabilities" in execution.detail
 
 
+@pytest.mark.integration
 def test_unconfigured_core_check_is_a_vacuous_pass(tmp_path: Path) -> None:
     entry = RuleEntry(id="osv", gate="osv", check="core:osv_scanner_sca")
 
@@ -266,6 +279,7 @@ def test_unconfigured_core_check_is_a_vacuous_pass(tmp_path: Path) -> None:
     assert run() == 0
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "report",
     [

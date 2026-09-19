@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_llm_attribution import (
     NoLlmAttribution,
     build,
@@ -30,29 +32,35 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
 # ── scan_text: the shared detector (hook + CI legs + file scan all key on it) ──
 
 
+@pytest.mark.unit
 def test_scan_text_flags_coauthor_claude_trailer() -> None:
     hits = scan_text("feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
     assert hits, "the Co-Authored-By: Claude trailer must be flagged"
 
 
+@pytest.mark.unit
 def test_scan_text_flags_generated_with_claude_code() -> None:
     hits = scan_text(f"{ROBOT} Generated with [Claude Code](https://claude.com/claude-code)")
     assert hits
 
 
+@pytest.mark.unit
 def test_scan_text_flags_anthropic_noreply_email() -> None:
     assert scan_text("Signed-off-by: bot <noreply@anthropic.com>")
 
 
+@pytest.mark.unit
 def test_scan_text_flags_bare_robot_emoji() -> None:
     assert scan_text(f"nice work {ROBOT}")
 
 
+@pytest.mark.unit
 def test_scan_text_is_provider_generic() -> None:
     # Cursor / Copilot co-author trailers are the same class of residue.
     assert scan_text("Co-authored-by: Cursor Agent <cursor@cursor.com>")
 
 
+@pytest.mark.unit
 def test_scan_text_clean_text_passes() -> None:
     # A bare mention of the word "Anthropic" and a genuine HUMAN co-author must NOT flag.
     clean = (
@@ -63,6 +71,7 @@ def test_scan_text_clean_text_passes() -> None:
     assert scan_text(clean) == []
 
 
+@pytest.mark.unit
 def test_scan_text_reports_signature_names() -> None:
     hits = scan_text("Co-Authored-By: Claude <noreply@anthropic.com>")
     sigs = {h.signature for h in hits}
@@ -73,6 +82,7 @@ def test_scan_text_reports_signature_names() -> None:
 # ── FitnessRule surface: file scan, baseline grandfathering (guard-forward) ──
 
 
+@pytest.mark.integration
 def test_file_has_violation_true_and_false(tmp_path: Path) -> None:
     rule = build({"roots": ["."], "extensions": [".py", ".md"]}, repo_root=tmp_path)
     dirty = _seed(tmp_path, "src/a.py", f"# {ROBOT} Generated with Claude Code\nx = 1\n")
@@ -81,6 +91,7 @@ def test_file_has_violation_true_and_false(tmp_path: Path) -> None:
     assert rule.file_has_violation(clean) is False
 
 
+@pytest.mark.integration
 def test_functional_claude_string_is_not_authorship(tmp_path: Path) -> None:
     # A functional in-source string that merely names the tool (no attribution
     # signature) must NOT be flagged — only attribution residue is.
@@ -89,6 +100,7 @@ def test_functional_claude_string_is_not_authorship(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is False
 
 
+@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.py", f"# {ROBOT} Generated with Claude Code\n")
     rule = NoLlmAttribution.from_config({"roots": ["src"], "extensions": [".py"]}, repo_root=tmp_path)
@@ -97,6 +109,7 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
+@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.py", "Co-Authored-By: Claude <noreply@anthropic.com>\n")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -107,6 +120,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
 # ── message-scan / strip CLI: the seam the commit-msg hook + CI leg consume ──
 
 
+@pytest.mark.unit
 def test_strip_text_removes_trailer_and_credit_lines() -> None:
     from tc_fitness.core_checks.no_llm_attribution import strip_text
 
@@ -122,6 +136,7 @@ def test_strip_text_removes_trailer_and_credit_lines() -> None:
     assert "feat: do the thing" in cleaned and "body line" in cleaned
 
 
+@pytest.mark.unit
 def test_strip_text_keeps_genuine_human_coauthor() -> None:
     from tc_fitness.core_checks.no_llm_attribution import strip_text
 
@@ -131,6 +146,7 @@ def test_strip_text_keeps_genuine_human_coauthor() -> None:
     assert "Jane Doe" in cleaned
 
 
+@pytest.mark.integration
 def test_main_scan_file_flags_dirty_and_passes_clean(tmp_path: Path) -> None:
     dirty = tmp_path / "MSG_DIRTY"
     dirty.write_text("feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n", encoding="utf-8")
@@ -143,6 +159,7 @@ def test_main_scan_file_flags_dirty_and_passes_clean(tmp_path: Path) -> None:
     assert main(["--scan-file", str(clean)]) == 0
 
 
+@pytest.mark.integration
 def test_main_strip_file_cleans_then_passes(tmp_path: Path) -> None:
     msg = tmp_path / "COMMIT_EDITMSG"
     msg.write_text(
@@ -155,6 +172,7 @@ def test_main_strip_file_cleans_then_passes(tmp_path: Path) -> None:
     assert "feat: x" in after and "body" in after
 
 
+@pytest.mark.integration
 def test_main_strip_file_rejects_nonstrippable_inline_residue(tmp_path: Path) -> None:
     # A robot emoji embedded mid-line is not a whole strippable line → hard-reject.
     msg = tmp_path / "COMMIT_EDITMSG"
