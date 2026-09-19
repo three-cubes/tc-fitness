@@ -49,12 +49,13 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 - **Contract assurance rejects mutable or suppressed proof** — snapshot inputs
   and candidate source before dispatch, reject execution-time mutations and
   baseline influence, and exercise unavailable cases through real checks using
-  a versioned per-case environment declaration. Checkov now returns an error
-  when its required executable is absent and cannot create an empty adoption
-  baseline without running the scanner.
-  Contract execution disables baseline suppression at the shared read boundary,
-  including Checkov's custom loader, so transient baseline files cannot attest
-  false PASS. Ordinary consumer baseline semantics are unchanged.
+  a versioned per-case environment declaration. Checkov is an absolute clean-scan
+  gate: any finding, parser error, unavailable executable, malformed report or
+  scanner failure blocks. It no longer reads or writes a findings baseline; the
+  dev environment pins Checkov 3.2.531 and the integration contract runs that
+  executable against compliant and violating Bicep fixtures. Shared baseline
+  suppression remains disabled during assurance of checks that use baselines;
+  ordinary consumer baseline semantics are unchanged.
   A reviewed per-CORE option inventory now rejects unknown aliases, adoption
   modes and exclusion overrides in assurance while retaining normal consumer
   configuration. Mutation reports and OSV contracts require strict missing-input

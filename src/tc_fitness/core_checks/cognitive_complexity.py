@@ -63,6 +63,7 @@ class _Scorer(ast.NodeVisitor):
 
     def visit_If(self, node: ast.If) -> None:
         self._bump()
+        self.visit(node.test)
         self._walk_nested(node.body)
         if node.orelse:
             # An ``elif`` is a single nested If in orelse — recurse so it is
@@ -87,6 +88,7 @@ class _Scorer(ast.NodeVisitor):
 
     def visit_While(self, node: ast.While) -> None:
         self._bump()
+        self.visit(node.test)
         self._walk_nested(node.body)
         if node.orelse:
             self._walk_nested(node.orelse)

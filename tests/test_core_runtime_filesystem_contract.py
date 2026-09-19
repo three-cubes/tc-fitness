@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import os
+import runpy
 import subprocess
 import sys
 import threading
@@ -21,9 +22,11 @@ from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks._runtime_contracts import (
     CONTRACT_SCHEMA,
     EVIDENCE_SCHEMA,
+    ContractDocuments,
     canonical_json_bytes,
     resolve_contract,
 )
+from tc_fitness.core_checks.runtime_filesystem_contract import validate_filesystem_contract
 from tc_fitness.runner import run
 
 pytestmark = pytest.mark.integration
@@ -265,6 +268,432 @@ def _seed(tmp_path: Path, contract: object, evidence: object | None = None) -> N
     (tmp_path / "contract.json").write_bytes(canonical_json_bytes(contract))
     if evidence is not None:
         (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
+
+
+def _direct_documents(
+    tmp_path: Path,
+    contract: dict[str, object],
+    evidence: dict[str, object] | None = None,
+) -> ContractDocuments:
+    return ContractDocuments(
+        contract_path=tmp_path / "contract.json",
+        contract=contract,
+        contract_bytes=canonical_json_bytes(contract),
+        evidence_path=tmp_path / "evidence.json" if evidence is not None else None,
+        evidence=evidence,
+        evidence_bytes=canonical_json_bytes(evidence) if evidence is not None else None,
+    )
+
+
+def _direct_codes(
+    tmp_path: Path, contract: dict[str, object], evidence: dict[str, object] | None = None
+) -> set[str]:
+    return {
+        finding.code
+        for finding in validate_filesystem_contract(_direct_documents(tmp_path, contract, evidence))
+    }
+
+
+def _minimal_valid_contract() -> dict[str, object]:
+    return _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/"}},
+        roots={
+            "data": {
+                "namespace": "container",
+                "path": "/data",
+                "kind": "directory",
+                "lifecycle": "persistent",
+            }
+        },
+    )
+
+
+def test_direct_validator_rejects_absent_filesystem_contract(tmp_path: Path) -> None:
+    contract = {"schema": CONTRACT_SCHEMA}
+    assert "missing-filesystem-contract" in _direct_codes(tmp_path, contract)
+
+
+@pytest.mark.parametrize(
+    ("section", "invalid"),
+    [
+        ("namespaces", "not-a-mapping"),
+        ("roots", None),
+        ("mounts", "not-a-list"),
+        ("aliases", None),
+        ("symlinks", {}),
+        ("allowed_nested_roots", "not-a-list"),
+        ("required_executables", None),
+    ],
+)
+def test_direct_validator_rejects_invalid_section_shapes(
+    tmp_path: Path, section: str, invalid: object
+) -> None:
+    contract = _minimal_valid_contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem[section] = invalid
+    assert "invalid-filesystem-section" in _direct_codes(tmp_path, contract)
+
+
+@pytest.mark.parametrize(
+    ("namespaces", "expected"),
+    [
+        ({"container": None}, "invalid-namespace"),
+        ({"": {"kind": "container", "root": "/"}}, "invalid-namespace"),
+        ({"container": {"kind": "other", "root": "/"}}, "invalid-namespace-kind"),
+        ({"container": {"kind": "container", "root": "relative"}}, "invalid-posix-path"),
+        (
+            {"container": {"kind": "container", "root": "/", "physical_namespace": "missing"}},
+            "undefined-physical-namespace",
+        ),
+        (
+            {
+                "container": {"kind": "container", "root": "/", "physical_namespace": "profile"},
+                "profile": {"kind": "profile", "root": "/profile", "physical_namespace": "container"},
+            },
+            "physical-namespace-cycle",
+        ),
+        (
+            {"container": {"kind": "container", "root": "/", "unexpected": True}},
+            "unknown-filesystem-field",
+        ),
+    ],
+)
+def test_direct_validator_checks_namespace_identity_and_physical_ownership(
+    tmp_path: Path, namespaces: dict[str, object], expected: str
+) -> None:
+    contract = _minimal_contract(namespaces=namespaces, roots={})
+    assert expected in _direct_codes(tmp_path, contract)
+
+
+@pytest.mark.parametrize(
+    ("access", "expected"),
+    [
+        (None, "invalid-root-access"),
+        ({"uid": 1}, "invalid-root-access"),
+        ({"uid": True, "gids": [], "read": True, "write": True, "traverse": True}, "invalid-root-access"),
+        ({"uid": 1, "gids": [2, 1], "read": True, "write": True, "traverse": True}, "invalid-root-access"),
+        ({"uid": 1, "gids": [1, 1], "read": True, "write": True, "traverse": True}, "invalid-root-access"),
+        ({"uid": 1, "gids": [1, True], "read": True, "write": True, "traverse": True}, "invalid-root-access"),
+        ({"uid": 1, "gids": [], "read": 1, "write": True, "traverse": True}, "invalid-root-access"),
+    ],
+)
+def test_direct_validator_requires_canonical_effective_access_shape(
+    tmp_path: Path, access: object, expected: str
+) -> None:
+    contract = _minimal_valid_contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    roots = filesystem["roots"]
+    assert isinstance(roots, dict)
+    root = roots["data"]
+    assert isinstance(root, dict)
+    root["access"] = access
+    assert expected in _direct_codes(tmp_path, contract)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value", "expected"),
+    [
+        ("namespace", "missing", "undefined-namespace"),
+        ("path", "relative", "invalid-posix-path"),
+        ("kind", "socket", "invalid-root-kind"),
+        ("lifecycle", "", "invalid-lifecycle"),
+        ("owner_uid", True, "invalid-root-owner-uid"),
+        ("owner_gid", -1, "invalid-root-owner-gid"),
+        ("mode", True, "invalid-root-mode"),
+        ("additional", "not-supported", "unknown-filesystem-field"),
+    ],
+)
+def test_direct_validator_checks_root_declaration_fields(
+    tmp_path: Path, field: str, bad_value: object, expected: str
+) -> None:
+    contract = _minimal_valid_contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    roots = filesystem["roots"]
+    assert isinstance(roots, dict)
+    root = roots["data"]
+    assert isinstance(root, dict)
+    root[field] = bad_value
+    assert expected in _direct_codes(tmp_path, contract)
+
+
+def test_direct_validator_rejects_declared_root_that_escapes_namespace(tmp_path: Path) -> None:
+    contract = _minimal_contract(
+        namespaces={"container": {"kind": "container", "root": "/data/safe"}},
+        roots={
+            "data": {
+                "namespace": "container",
+                "path": "/data/outside",
+                "kind": "file",
+                "lifecycle": "persistent",
+            }
+        },
+    )
+    assert "namespace-escape" in _direct_codes(tmp_path, contract)
+
+
+@pytest.mark.parametrize("section", ["mounts", "aliases", "symlinks", "required_executables"])
+def test_direct_validator_rejects_malformed_and_duplicate_record_ids(tmp_path: Path, section: str) -> None:
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    original = filesystem[section]
+    assert isinstance(original, list) and original
+    filesystem[section] = [None]
+    assert "invalid-filesystem-record" in _direct_codes(tmp_path, contract)
+
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    original = filesystem[section]
+    assert isinstance(original, list) and original
+    filesystem[section] = [copy.deepcopy(original[0]), copy.deepcopy(original[0])]
+    assert "duplicate-filesystem-id" in _direct_codes(tmp_path, contract)
+
+
+def test_direct_validator_rejects_malformed_root_and_alias_records(tmp_path: Path) -> None:
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["roots"] = {"bad": None}
+    assert "invalid-root" in _direct_codes(tmp_path, contract)
+
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["aliases"] = [
+        {
+            "id": "missing-namespace",
+            "root": "profile-home",
+            "namespace": "unknown",
+            "path": "/hermes-home/profiles/{profile}",
+        }
+    ]
+    assert "undefined-namespace" in _direct_codes(tmp_path, contract)
+
+
+def test_direct_validator_rejects_duplicate_alias_destination_and_missing_path(tmp_path: Path) -> None:
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    aliases = filesystem["aliases"]
+    assert isinstance(aliases, list)
+    aliases.append({**copy.deepcopy(aliases[0]), "id": "second-alias"})
+    assert "duplicate-alias-destination" in _direct_codes(tmp_path, contract)
+
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["aliases"] = [
+        {"id": "bad-path", "root": "profile-home", "namespace": "profile", "path": "relative"}
+    ]
+    assert "invalid-posix-path" in _direct_codes(tmp_path, contract)
+
+
+def test_direct_validator_rejects_invalid_nested_root_allowances(tmp_path: Path) -> None:
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["allowed_nested_roots"] = [None]
+    assert "invalid-nested-root-allowance" in _direct_codes(tmp_path, contract)
+
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["allowed_nested_roots"] = [
+        {"parent": "missing", "child": "profile-home", "reason": "a named reason"}
+    ]
+    assert "undefined-root" in _direct_codes(tmp_path, contract)
+
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["allowed_nested_roots"] = [
+        {"parent": "container-home", "child": "profile-home", "reason": " "},
+        {"parent": "container-home", "child": "profile-home", "reason": "duplicate pair"},
+        {"parent": "profile-home", "child": "container-home", "reason": "wrong order"},
+    ]
+    codes = _direct_codes(tmp_path, contract)
+    assert {
+        "missing-overlap-reason",
+        "duplicate-nested-root-allowance",
+        "invalid-nested-root-allowance",
+    } <= codes
+
+
+def test_direct_validator_rejects_executable_records_and_namespace_escape(tmp_path: Path) -> None:
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    filesystem["required_executables"] = [{"id": "runtime", "namespace": "missing", "path": "/bin/runtime"}]
+    assert "undefined-namespace" in _direct_codes(tmp_path, contract)
+
+    contract = _contract()
+    filesystem = contract["filesystem"]
+    assert isinstance(filesystem, dict)
+    namespaces = filesystem["namespaces"]
+    assert isinstance(namespaces, dict)
+    namespaces["container"] = {"kind": "container", "root": "/usr/local"}
+    filesystem["required_executables"] = [
+        {"id": "runtime", "namespace": "container", "path": "/usr/bin/runtime"}
+    ]
+    assert "namespace-escape" in _direct_codes(tmp_path, contract)
+
+
+def test_direct_observation_validation_rejects_missing_unknown_and_unmatched_records(tmp_path: Path) -> None:
+    contract = _contract()
+    evidence = _evidence()
+    evidence.pop("filesystem")
+    assert "missing-filesystem-observations" in _direct_codes(tmp_path, contract, evidence)
+
+    contract = _contract()
+    evidence = _evidence()
+    observed = evidence["filesystem"]
+    assert isinstance(observed, dict)
+    observed["extra"] = []
+    assert "unknown-filesystem-observation-collection" in _direct_codes(tmp_path, contract, evidence)
+
+    contract = _contract()
+    evidence = _evidence()
+    observed = evidence["filesystem"]
+    assert isinstance(observed, dict)
+    observed["roots"] = None
+    assert "missing-root-observations" in _direct_codes(tmp_path, contract, evidence)
+
+    contract = _contract()
+    evidence = _evidence()
+    observed = evidence["filesystem"]
+    assert isinstance(observed, dict)
+    observed["roots"] = [None, *observed["roots"]]
+    assert "invalid-root-observation" in _direct_codes(tmp_path, contract, evidence)
+
+    contract = _contract()
+    evidence = _evidence()
+    observed = evidence["filesystem"]
+    assert isinstance(observed, dict)
+    roots = observed["roots"]
+    assert isinstance(roots, list)
+    roots.append({"id": "unexpected-root"})
+    assert "unexpected-root-observation" in _direct_codes(tmp_path, contract, evidence)
+
+
+def test_direct_observation_validation_rejects_duplicate_unknown_and_mismatched_records(
+    tmp_path: Path,
+) -> None:
+    contract = _contract()
+    evidence = _evidence()
+    observed = evidence["filesystem"]
+    assert isinstance(observed, dict)
+    roots = observed["roots"]
+    assert isinstance(roots, list)
+    roots.append(copy.deepcopy(roots[0]))
+    assert "duplicate-root-observation" in _direct_codes(tmp_path, contract, evidence)
+
+    contract = _contract()
+    evidence = _evidence()
+    observed = evidence["filesystem"]
+    assert isinstance(observed, dict)
+    roots = observed["roots"]
+    assert isinstance(roots, list)
+    roots[0]["unknown"] = "field"
+    assert "root-observation-unknown-field" in _direct_codes(tmp_path, contract, evidence)
+
+    contract = _contract()
+    evidence = _evidence()
+    observed = evidence["filesystem"]
+    assert isinstance(observed, dict)
+    roots = observed["roots"]
+    assert isinstance(roots, list)
+    roots[0]["owner_uid"] = 1
+    assert "root-observation-mismatch" in _direct_codes(tmp_path, contract, evidence)
+
+
+def test_main_supports_default_and_explicit_selected_contract_modes(tmp_path: Path) -> None:
+    module = _module()
+    assert module.main(["--repo-root", str(tmp_path)]) == 0
+
+    _seed(tmp_path, _contract())
+    assert (
+        module.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--contract-file",
+                "contract.json",
+                "--environment",
+                "prod",
+                "--target",
+                "service",
+            ]
+        )
+        == 0
+    )
+
+
+def test_main_supports_complete_live_evidence_arguments(tmp_path: Path) -> None:
+    module = _module()
+    _seed(tmp_path, _contract(), _evidence())
+    assert (
+        module.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--contract-file",
+                "contract.json",
+                "--environment",
+                "prod",
+                "--target",
+                "service",
+                "--evidence-file",
+                "evidence.json",
+                "--expected-source-sha",
+                _SOURCE_SHA,
+                "--expected-image-digest",
+                _IMAGE_DIGEST,
+                "--expected-host-id",
+                "vm-service-1",
+                "--expected-runtime-user",
+                "service",
+                "--expected-deployment-id",
+                "deploy-20260911-001",
+                "--expected-configuration-identity",
+                _CONFIGURATION_IDENTITY,
+                "--expected-run-id",
+                "42",
+                "--expected-attempt-id",
+                "1",
+                "--required-check",
+                "filesystem-probe",
+                "--max-age-seconds",
+                "300",
+            ]
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [["--environment", "prod"], ["--contract-file", "contract.json", "--environment", "prod"]],
+)
+def test_main_rejects_partial_contract_selection(tmp_path: Path, arguments: list[str]) -> None:
+    with pytest.raises(SystemExit) as result:
+        _module().main(["--repo-root", str(tmp_path), *arguments])
+    assert result.value.code == 2
+
+
+def test_module_entrypoint_uses_selected_repository_and_exits_with_verdict(tmp_path: Path) -> None:
+    module = _module()
+    original_argv = sys.argv
+    sys.argv = ["runtime_filesystem_contract", "--repo-root", str(tmp_path)]
+    try:
+        with pytest.raises(SystemExit) as result:
+            runpy.run_path(str(Path(module.__file__)), run_name="__main__")
+    finally:
+        sys.argv = original_argv
+    assert result.value.code == 0
 
 
 def _config(*, observations: bool = False) -> dict[str, object]:
