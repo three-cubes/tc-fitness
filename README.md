@@ -360,6 +360,27 @@ actual decision point. `gate()`-based checks, including `license_present`, alrea
 use this interface. Custom checks must emit their own structured findings;
 console output is never parsed and detectors are never invoked twice.
 
+### Pytest tier assurance
+
+Canonical pytest tier assurance uses two complementary checks. Configure
+`core:every_test_has_tier_marker` with `require_module_marker = true` to require
+one literal module declaration, `pytestmark = pytest.mark.<tier>`, using
+`unit`, `contract`, `integration` or `e2e`. In this mode, `tier_markers` cannot
+change the vocabulary. Reusing `pytestmark`, aliasing pytest's marker namespace,
+and additional explicit tier applications fail; ordinary attributes and
+non-tier marks remain valid. The generic default retains configurable tiers
+and function-level markers for existing consumers.
+
+Also run `pytest -p tc_fitness.pytest_tiers --strict-markers` (register the four
+tiers in pytest configuration). This public plugin checks actual markers at
+collection finish, including parametrised, inherited and deselected items.
+Missing tiers, two identical tier marks and multiple different tiers fail with
+the node ID and exact marker list. It catches dynamic decorators and hook-added
+tiers without interpreting Python or starting another pytest process. tc-fitness
+enables it in its own pytest `addopts`; its source self-check uses the unsuppressed
+violation set. Collection assurance checks the items that pytest collects, not
+the correctness of tier selection or code that changes markers after collection.
+
 ## Library modules
 
 tc-fitness also ships these modules (the helpers `tc-fitness run` and a repo's

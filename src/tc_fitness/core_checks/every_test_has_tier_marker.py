@@ -18,8 +18,10 @@ Detection (AST walk per file):
   4. With ``require_module_marker``, every test module must declare exactly one
      module-level tier; function-level markers alone do not satisfy the rule.
 
-The gate checks only the *presence* of a tier marker, not which one is right
--- mis-classification is a code-review concern; absence is caught here.
+Canonical mode checks a deliberately small source grammar, not Python's
+runtime semantics. Pair it with ``-p tc_fitness.pytest_tiers`` to prove that
+each collected item actually has exactly one effective canonical tier.
+Whether the chosen tier matches the test's reach remains a review concern.
 
 Ported from tc-agent-zone ``scripts/checks/every_test_has_tier_marker.py``
 and re-expressed as a configurable, repo-agnostic rule: scan roots and the
@@ -128,14 +130,10 @@ def _canonical_declaration(tree: ast.Module, tiers: frozenset[str]) -> ast.Assig
     return declarations[0] if len(declarations) == 1 else None
 
 
-def _binds_pytestmark(node: ast.AST, allowed_target: ast.expr) -> bool:
-    """Whether ``node`` binds pytestmark other than the allowed target."""
+def _uses_pytestmark(node: ast.AST, allowed_target: ast.expr) -> bool:
+    """Reserve pytestmark for the sole declaration, including bare reads."""
     if isinstance(node, ast.Name):
-        return (
-            isinstance(node.ctx, ast.Store | ast.Del)
-            and node.id == "pytestmark"
-            and node is not allowed_target
-        )
+        return node.id == "pytestmark" and node is not allowed_target
     if isinstance(node, ast.alias):
         return node.asname == "pytestmark" or (
             node.asname is None and node.name.split(".", maxsplit=1)[0] == "pytestmark"
@@ -156,8 +154,38 @@ def _binds_pytestmark(node: ast.AST, allowed_target: ast.expr) -> bool:
     )
 
 
-def _has_unallowed_pytestmark_binding(tree: ast.Module, declaration: ast.Assign) -> bool:
-    return any(_binds_pytestmark(node, declaration.targets[0]) for node in ast.walk(tree))
+def _has_unallowed_pytestmark_use(tree: ast.Module, declaration: ast.Assign) -> bool:
+    return any(_uses_pytestmark(node, declaration.targets[0]) for node in ast.walk(tree))
+
+
+def _has_marker_namespace_alias(tree: ast.Module) -> bool:
+    """Require direct pytest namespace access; never resolve alias chains.
+
+    ``pytest`` and ``pytest.mark`` must be the receiver of an attribute, not
+    a value copied/passed elsewhere. Marker imports must use ``import pytest``.
+    Unrelated attributes such as ``documents.contract`` remain ordinary code.
+    Imported helper semantics and reflection belong to collection assurance.
+    """
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == "pytest" and alias.asname is not None for alias in node.names):
+                return True
+        if isinstance(node, ast.ImportFrom) and node.module == "pytest":
+            if any(alias.name in {"mark", "*"} for alias in node.names):
+                return True
+        is_pytest = isinstance(node, ast.Name) and node.id == "pytest"
+        is_mark = (
+            isinstance(node, ast.Attribute)
+            and node.attr == "mark"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "pytest"
+        )
+        if is_pytest or is_mark:
+            parent = parents.get(node)
+            if not isinstance(parent, ast.Attribute) or parent.value is not node:
+                return True
+    return False
 
 
 def _has_pytestmark_attribute_or_mutation(tree: ast.Module) -> bool:
@@ -191,7 +219,8 @@ def _canonical_module_tier_is_valid(tree: ast.Module, tiers: frozenset[str]) -> 
     if declaration is None:
         return False
     return not (
-        _has_unallowed_pytestmark_binding(tree, declaration)
+        _has_unallowed_pytestmark_use(tree, declaration)
+        or _has_marker_namespace_alias(tree)
         or _has_pytestmark_attribute_or_mutation(tree)
         or _has_tier_marker_outside_declaration(tree, tiers, declaration)
     )
@@ -216,23 +245,6 @@ def _untagged_functions(tree: ast.Module, tiers: frozenset[str]) -> list[str]:
     return out
 
 
-def _has_function_tier_marker(tree: ast.Module, tiers: frozenset[str]) -> bool:
-    return any(
-        _function_tier_marker(node, tiers)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test_")
-    )
-
-
-def _has_class_tier_marker(tree: ast.Module, tiers: frozenset[str]) -> bool:
-    return any(
-        _extract_marker_names(decorator) & tiers
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef)
-        for decorator in node.decorator_list
-    )
-
-
 def file_missing_tier_marker(
     path: Path,
     *,
@@ -244,7 +256,8 @@ def file_missing_tier_marker(
     Pure helper (the detection core): a module-level ``pytestmark`` tier
     covers the whole file; otherwise every ``test_*`` function must carry one.
     When ``require_module_marker`` is true, a test module instead needs exactly
-    one module-level tier marker. A file with no test functions (a fixtures
+    one static module-level tier from the fixed canonical vocabulary; ``tiers``
+    is a generic-mode option only. A file with no test functions (a fixtures
     module) is not a violation. A syntax / decode error is treated as "no
     violation".
     """
@@ -252,21 +265,15 @@ def file_missing_tier_marker(
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (SyntaxError, UnicodeDecodeError, OSError):
         return False
-    module_markers = _module_tier_marker(tree, tiers)
     has_tests = any(
         isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test_")
         for node in ast.walk(tree)
     )
-    untagged = _untagged_functions(tree, tiers)
     if require_module_marker:
-        return has_tests and (
-            not _canonical_module_tier_is_valid(tree, tiers)
-            or _has_function_tier_marker(tree, tiers)
-            or _has_class_tier_marker(tree, tiers)
-        )
-    if module_markers:
+        return has_tests and not _canonical_module_tier_is_valid(tree, frozenset(DEFAULT_TIER_MARKERS))
+    if _module_tier_marker(tree, tiers):
         return False
-    return bool(untagged)
+    return bool(_untagged_functions(tree, tiers))
 
 
 class EveryTestHasTierMarker(FitnessRule):
