@@ -348,6 +348,50 @@ def test_public_executor_requires_regular_readable_git_history(tmp_path: Path) -
         execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
 
 
+def test_public_executor_reports_an_unreadable_fixture(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = make_git_contract(tmp_path)
+    history = tmp_path / "fixture" / ".contract" / "git.fast-import"
+    history.chmod(0)
+    try:
+        with pytest.raises(CheckContractError, match="cannot read contract fixture"):
+            execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
+    finally:
+        history.chmod(0o600)
+
+
+def test_verified_fixture_copy_rejects_digest_mismatch(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import copy_verified_fixture
+    from tc_fitness.check_contracts import CheckContractError
+
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "input.txt").write_text("bound input\n")
+    with pytest.raises(CheckContractError, match="changed while copying"):
+        copy_verified_fixture(fixture, tmp_path / "snapshot", "sha256:" + "0" * 64)
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_terminal_result_cardinality_is_enforced(count: int) -> None:
+    from tc_fitness.check_contract_execution import terminal_check_result
+    from tc_fitness.check_contracts import CheckContractError
+    from tc_fitness.check_evidence import CheckEvidence, CheckResult
+
+    evidence = CheckEvidence(results=[CheckResult("check", "pass", 0) for _ in range(count)])
+    with pytest.raises(CheckContractError, match="missing or multiple terminal"):
+        terminal_check_result(evidence)
+
+
+def test_one_terminal_result_is_returned() -> None:
+    from tc_fitness.check_contract_execution import terminal_check_result
+    from tc_fitness.check_evidence import CheckEvidence, CheckResult
+
+    result = CheckResult("check", "pass", 0)
+    assert terminal_check_result(CheckEvidence(results=[result])) is result
+
+
 def test_public_executor_reports_missing_git_executable_without_patch_seams(tmp_path: Path) -> None:
     from tc_fitness.check_contract_execution import execute_contract_case
     from tc_fitness.check_contracts import CheckContractError

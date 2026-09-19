@@ -6,16 +6,23 @@ import ast
 import copy
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from tc_fitness.mutation_assurance import execute_mutation, main, validate_mutation_receipt
+from tc_fitness.mutation_assurance import (
+    _native_mutants,
+    execute_mutation,
+    main,
+    validate_mutation_receipt,
+)
 from tc_fitness.mutation_scope import MutationError
 
 pytestmark = pytest.mark.integration
@@ -129,6 +136,85 @@ def test_missing_receipt_cannot_satisfy_admission(tmp_path: Path) -> None:
     result = _command(root, base, head, tmp_path / "missing", "verify")
     assert result.returncode == 2
     assert json.loads(result.stdout)["code"] == "missing-receipt"
+
+
+def test_missing_mutation_distribution_is_a_dependency_error(tmp_path: Path) -> None:
+    from importlib.metadata import distribution
+
+    root = tmp_path / "consumer"
+    base, head = _consumer(root)
+    metadata = Path(str(distribution("mutmut")._path))
+    hidden = metadata.with_name(metadata.name + ".hidden-for-test")
+    metadata.rename(hidden)
+    try:
+        with pytest.raises(MutationError, match="required mutmut executable is unavailable"):
+            execute_mutation(root, base, head, tmp_path / "evidence", run_id="test", attempt=1)
+    finally:
+        hidden.rename(metadata)
+
+
+def test_wrong_installed_mutation_version_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, head = _consumer(root)
+    fake_distribution = tmp_path / "fake-distribution"
+    metadata = fake_distribution / "mutmut-0.0.0.dist-info"
+    metadata.mkdir(parents=True)
+    (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: mutmut\nVersion: 0.0.0\n")
+    sys.path.insert(0, str(fake_distribution))
+    try:
+        with pytest.raises(MutationError, match="exact pinned mutmut tool"):
+            execute_mutation(root, base, head, tmp_path / "evidence", run_id="test", attempt=1)
+    finally:
+        sys.path.remove(str(fake_distribution))
+
+
+def test_candidate_change_during_real_mutation_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, head = _consumer(root)
+    barrier = tmp_path / "mutation-started.fifo"
+    signalled = tmp_path / "mutation-signalled"
+    os.mkfifo(barrier)
+    test_file = root / "tests/test_admission.py"
+    test_file.write_text(
+        test_file.read_text()
+        + "\ndef test_signal_mutation_started():\n"
+        + f"    marker = __import__('pathlib').Path({str(signalled)!r})\n"
+        + "    if not marker.exists():\n"
+        + "        marker.write_text('sent')\n"
+        + f"        open({str(barrier)!r}, 'w').close()\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: deterministic mutation barrier")
+    head = _git(root, "rev-parse", "HEAD")
+
+    changed = threading.Event()
+
+    def alter_candidate() -> None:
+        with barrier.open("rb"):
+            pass
+        source = root / "src/admission.py"
+        source.write_text(source.read_text() + "\n# changed during execution\n")
+        changed.set()
+
+    thread = threading.Thread(target=alter_candidate, daemon=True)
+    thread.start()
+    receipt = execute_mutation(root, base, head, tmp_path / "evidence", run_id="test", attempt=1)
+    thread.join(timeout=2)
+
+    assert changed.is_set()
+    assert receipt["status"] == "error"
+    assert receipt["error"] == "candidate checkout has tracked modifications"
+
+
+def test_duplicate_native_mutant_identity_is_rejected(
+    killed_evidence: tuple[Path, str, str, Path],
+) -> None:
+    _root, _base, _head, output = killed_evidence
+    receipt = json.loads((output / "receipt.json").read_text())
+    scope = copy.deepcopy(receipt["scope"])
+    scope["functions"].append(copy.deepcopy(scope["functions"][0]))
+    with pytest.raises(MutationError, match="duplicate native mutant identity"):
+        _native_mutants(output / "native", scope)
 
 
 def _seal(output: Path, receipt: dict[str, object]) -> None:

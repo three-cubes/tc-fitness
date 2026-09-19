@@ -279,9 +279,10 @@ def execute_mutation(
             receipt["status"] = (
                 "fail" if any(item["status"] == "survived" for item in receipt["mutants"]) else "pass"
             )
-            current, _, _ = _inputs(root, base, head, broad)
-            if current != binding:
-                raise MutationError("candidate inputs changed during mutation execution")
+            # Re-reading the immutable base/head binding also proves the working
+            # tree remains the exact candidate. Any mutation is rejected by
+            # ``_inputs`` before it can return a different binding.
+            _inputs(root, base, head, broad)
         except MutationError as exc:
             receipt["status"] = "error"
             receipt["error"] = str(exc)

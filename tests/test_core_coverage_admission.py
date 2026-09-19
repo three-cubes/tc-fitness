@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tc_fitness.core_checks._coverage_evidence import CoverageCounts
+from tc_fitness.coverage_admission import complete_line_hits, exact_checkout
+from tc_fitness.coverage_measurement import cross_check_branches
 from tc_fitness.runner import run_contract_case
 
 pytestmark = pytest.mark.integration
@@ -71,6 +75,107 @@ def consumer(root: Path, *, critical: bool = False) -> int:
 def test_branch_floor_rejects_low_branches_despite_full_lines(tmp_path: Path) -> None:
     seed(tmp_path, "coverage.xml", report(tmp_path, branches=100, branch_covered=94))
     assert consumer(tmp_path) == 1
+
+
+def test_exact_checkout_rejects_a_noncommit_base(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    seed(tmp_path, "tracked.txt", "value\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Coverage",
+            "-c",
+            "user.email=coverage@example.invalid",
+            "commit",
+            "-qm",
+            "candidate",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Coverage",
+            "-c",
+            "user.email=coverage@example.invalid",
+            "tag",
+            "-am",
+            "annotated",
+            "base-tag",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    tag_object = subprocess.run(
+        ["git", "rev-parse", "base-tag"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    with pytest.raises(ValueError, match="exact base is not a commit"):
+        exact_checkout(tmp_path, tag_object, head)
+
+
+def test_complete_line_hits_rejects_missing_source_document(tmp_path: Path) -> None:
+    xml = seed(tmp_path, "coverage.xml", report(tmp_path, lines=1, covered=1, branches=2, branch_covered=2))
+    extra = seed(tmp_path, "src/extra.py", "value = 2\n")
+    files = {"src/subject.py": tmp_path / "src/subject.py", "src/extra.py": extra}
+    with pytest.raises(ValueError, match="complete source set"):
+        complete_line_hits(tmp_path, xml, files)
+
+
+def test_complete_line_hits_rejects_invented_executable_line(tmp_path: Path) -> None:
+    xml = seed(tmp_path, "coverage.xml", report(tmp_path, lines=2, covered=2, branches=2, branch_covered=2))
+    source = tmp_path / "src/subject.py"
+    source.write_text("value = 1\n# non-executable line\n")
+    with pytest.raises(ValueError, match="omits or invents executable source lines"):
+        complete_line_hits(tmp_path, xml, {"src/subject.py": source})
+
+
+def test_branch_cross_check_rejects_malformed_xml_counts(tmp_path: Path) -> None:
+    source = seed(tmp_path, "src/subject.py", "def choose(flag):\n    return 1 if flag else 0\n")
+    xml = seed(
+        tmp_path,
+        "coverage.xml",
+        "<coverage><sources><source>src</source></sources><packages><package><classes>"
+        '<class filename="subject.py"><lines><line number="2" hits="1" branch="true" '
+        'condition-coverage="malformed"/></lines></class></classes></package></packages></coverage>',
+    )
+    seed(
+        tmp_path,
+        "coverage.json",
+        json.dumps(
+            {
+                "meta": {"branch_coverage": True},
+                "files": {"src/subject.py": {}},
+                "totals": {},
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="branch counts are malformed"):
+        cross_check_branches(
+            tmp_path,
+            xml,
+            {"src/subject.py": source},
+            {"src/subject.py": {1: 1, 2: 1}},
+            {"src/subject.py": CoverageCounts(2, 2, 2, 2)},
+        )
+
+
+def test_coverage_admission_module_entrypoint_exposes_help(capsys: pytest.CaptureFixture[str]) -> None:
+    original = sys.argv
+    sys.argv = ["coverage_admission", "--help"]
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            runpy.run_path(complete_line_hits.__code__.co_filename, run_name="__main__")
+    finally:
+        sys.argv = original
+    assert stopped.value.code == 0
+    assert "produce" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("change", ["empty-roots", "exemption", "nan-line", "nan-branch", "missing-critical"])

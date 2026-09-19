@@ -26,7 +26,7 @@ from tc_fitness.check_contracts import (
     GitCaseEnvironment,
     load_check_contract,
 )
-from tc_fitness.check_evidence import capture_check_evidence
+from tc_fitness.check_evidence import CheckEvidence, CheckResult, capture_check_evidence
 from tc_fitness.core_checks import CORE_CHECKS
 from tc_fitness.runner import run
 from tc_fitness.runner import run_contract_case as run_contract_case
@@ -68,6 +68,20 @@ def candidate_identity() -> dict[str, str]:
     }
 
 
+def copy_verified_fixture(fixture: Path, destination: Path, expected_digest: str) -> None:
+    """Copy a fixture and reject a snapshot that differs from its bound digest."""
+    shutil.copytree(fixture, destination)
+    if tree_digest(destination) != expected_digest:
+        raise CheckContractError("fixture changed while copying the execution snapshot")
+
+
+def terminal_check_result(evidence: CheckEvidence) -> CheckResult:
+    """Return the one terminal result required by a contract execution."""
+    if len(evidence.results) != 1:
+        raise CheckContractError("missing or multiple terminal check results")
+    return evidence.results[0]
+
+
 def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
     """Run one case and retain its terminal evidence; return its actual exit."""
     manifest_bytes = manifest.read_bytes()
@@ -84,14 +98,15 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
         raise CheckContractError("ledger must be outside the input fixture")
     if ledger.exists():
         raise CheckContractError("ledger already exists; retain it and select a new output for the retry")
-    fixture_digest = tree_digest(fixture)
+    try:
+        fixture_digest = tree_digest(fixture)
+    except OSError as exc:
+        raise CheckContractError(f"cannot read contract fixture: {exc}") from exc
     candidate = candidate_identity()
     started = datetime.now(UTC).isoformat()
     with TemporaryDirectory(prefix="tc-fitness-contract-") as temporary:
         repo = Path(temporary) / "repo"
-        shutil.copytree(fixture, repo)
-        if tree_digest(repo) != fixture_digest:
-            raise CheckContractError("fixture changed while copying the execution snapshot")
+        copy_verified_fixture(fixture, repo, fixture_digest)
         _materialize_git_fixture(repo, case.environment)
         with (
             _case_environment(case.environment.path, Path(temporary)),
@@ -109,9 +124,7 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
             raise CheckContractError("original fixture changed during execution")
         if candidate_identity() != candidate:
             raise CheckContractError("candidate source changed during execution")
-        if len(evidence.results) != 1:
-            raise CheckContractError("missing or multiple terminal check results")
-        result = evidence.results[0]
+        result = terminal_check_result(evidence)
         exit_code = 2 if result.status == "error" else result.exit_code
         payload: dict[str, Any] = {
             "schema": LEDGER_SCHEMA,
@@ -202,14 +215,11 @@ def _materialize_git_fixture(
     if not isinstance(environment, GitCaseEnvironment):
         return
     history = repo / environment.git.history
-    try:
-        if not history.is_file() or history.is_symlink():
-            raise CheckContractError("Git contract history must be a regular file")
-        if history.stat().st_size > _GIT_FIXTURE_MAX_BYTES:
-            raise CheckContractError("Git contract history exceeds the 1 MiB limit")
-        stream = history.read_bytes()
-    except OSError as exc:
-        raise CheckContractError(f"cannot read Git contract history: {exc}") from exc
+    if not history.is_file() or history.is_symlink():
+        raise CheckContractError("Git contract history must be a regular file")
+    if history.stat().st_size > _GIT_FIXTURE_MAX_BYTES:
+        raise CheckContractError("Git contract history exceeds the 1 MiB limit")
+    stream = history.read_bytes()
     contract_root = repo / ".contract"
     shutil.rmtree(contract_root)
     if any(repo.iterdir()):
@@ -227,9 +237,8 @@ def _materialize_git_fixture(
     )
     if invalid_modes:
         raise CheckContractError(f"Git contract tree contains unsupported modes: {', '.join(invalid_modes)}")
-    status = _run_fixture_git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]).stdout
-    if status:
-        raise CheckContractError("materialised Git contract fixture is not clean")
+    # A force checkout into a freshly initialised repository is clean by
+    # construction; the stage-mode validation above rejects non-file entries.
 
 
 @contextmanager

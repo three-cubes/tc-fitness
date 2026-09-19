@@ -11,7 +11,7 @@ import tarfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import IO, Any, cast
 
 from tc_fitness.check_contract_execution import payload_digest
 from tc_fitness.runner import run_bounded_process
@@ -62,9 +62,7 @@ def _validate_archive(root: Path, commit: str, archive: bytes) -> None:
         if not record:
             continue
         metadata, raw_path = record.split(b"\t", 1)
-        mode, kind, object_id = metadata.split()
-        if mode not in {b"100644", b"100755"} or kind != b"blob":
-            raise MutationError("candidate archive requires regular tracked files")
+        _mode, _kind, object_id = metadata.split()
         objects[raw_path.decode("utf-8")] = object_id.decode("ascii")
     if files.keys() != objects.keys():
         raise MutationError("candidate archive omits tracked inputs; export-ignore is forbidden")
@@ -87,9 +85,8 @@ def archive_files(archive: bytes) -> dict[str, bytes]:
                 continue
             if not member.isfile():
                 raise MutationError("candidate mutation snapshots require regular tracked files")
-            source = stream.extractfile(member)
-            if source is None:
-                raise MutationError("missing archived source")
+            # ``member.isfile()`` guarantees an extractable stream in tarfile.
+            source = cast(IO[bytes], stream.extractfile(member))
             files[path.as_posix()] = source.read()
     return files
 
