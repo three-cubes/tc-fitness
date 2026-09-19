@@ -32,8 +32,11 @@ trap 'rm -rf "$workdir"' EXIT
 dist_dir="$workdir/dist"
 rebuilt_dir="$workdir/rebuilt"
 fixture_dir="$workdir/fixture"
+runtime_requirements="$workdir/runtime-requirements.txt"
 
 mkdir -p "$dist_dir" "$rebuilt_dir" "$fixture_dir"
+uv export --project "$repo_root" --locked --no-dev --no-emit-project \
+  --format requirements.txt --output-file "$runtime_requirements" >/dev/null
 uv build --python "$python_bin" --out-dir "$dist_dir" "$repo_root"
 
 wheels=("$dist_dir"/*.whl)
@@ -100,7 +103,11 @@ qualify() {
   local verification="$workdir/$label-verification.json"
 
   uv venv --clear --no-project --python "$python_bin" "$environment"
-  uv pip install --no-index --python "$environment/bin/python" "$wheel"
+  # The installed candidate remains an index-free artifact install. Its required
+  # runtime dependency is resolved from this repository's locked environment
+  # before that proof, rather than treating the post-Task-2 package as stdlib-only.
+  uv pip install --python "$environment/bin/python" --require-hashes -r "$runtime_requirements"
+  uv pip install --no-deps --no-index --python "$environment/bin/python" "$wheel"
 
   "$environment/bin/tc-fitness" --help >/dev/null
   "$environment/bin/tc-fitness" run --repo-root "$fixture_dir"
