@@ -205,6 +205,7 @@ class CheckovIacSecurity:
         self._timeout = timeout
         # DI seam: a test injects canned Checkov JSON; None => the real binary.
         self._runner = runner
+        self._last_net_new: list[dict[str, Any]] = []
 
     @classmethod
     def from_config(
@@ -257,6 +258,7 @@ class CheckovIacSecurity:
         failed = parse_failed(data)
         baseline = self._load_baseline()
         net_new = net_new_findings(failed, baseline)
+        self._last_net_new = net_new
         errors = [_format_finding(fc, scan_dir=self._scan_dir) for fc in net_new]
         meta = {
             "unavailable": False,
@@ -292,6 +294,12 @@ class CheckovIacSecurity:
                 f"all {meta['baselined']} baselined; 0 net-new)"
             )
             return 0
+        for finding in self._last_net_new:
+            report_finding(
+                str(finding.get("check_id", "checkov-finding")),
+                str(finding.get("file_path", ".")),
+                str(finding.get("check_name", "Checkov policy violation")),
+            )
         print(f"FAIL checkov_iac_security ({meta['net_new']} net-new finding(s)):")
         for line in errors:
             print(line)
