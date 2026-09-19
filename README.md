@@ -274,6 +274,53 @@ integration/E2E tests. The hard gate verifies that a named test invokes the
 exact executable and asserts its result and produced output; it does not support
 baselines.
 
+### Check-contract execution
+
+Execute a `tc.fitness/check-contract/v1` case through the same CORE dispatcher:
+
+```sh
+tc-fitness run --contract path/to/contract.yaml --case violation --ledger artifacts/violation.json
+```
+
+These three arguments are required together and cannot be combined with ordinary
+gate options. The fixture is copied into a temporary repository; its declared
+config and a single catalogue entry are passed to the existing runner. Fixtures
+must be contained beneath the manifest, without symlinks or suppression baselines.
+The output directory must exist, and the ledger must be a new path outside the
+fixture. Retries retain the previous ledger and use a new output path.
+
+The command returns the observed result: 0 for pass, 1 for a check violation,
+and 2 for an execution or dependency error. An expected violation therefore still
+returns non-zero. To evaluate whether that observed result satisfies the case,
+use the process runner, which invokes the installed `tc-fitness run` entrypoint
+and validates its ledger:
+
+```python
+from pathlib import Path
+from tc_fitness.check_contract_execution import run_contract_case
+
+evidence = run_contract_case(
+    Path("path/to/contract.yaml"), "violation", Path("artifacts/violation.json")
+)
+```
+
+`CheckContractError` means the assurance case failed. Missing evidence, unexpected
+findings or exits, stale timestamps, changed inputs, and digest mismatches are
+failures. An unavailable declared executable is an `error`, and satisfies only a
+case that explicitly expects that error and its `dependency-unavailable` finding.
+
+The `tc.fitness/check-ledger/v1` JSON binds the check and case, manifest and case
+digests, fixture contents and permissions, package version and source digest,
+execution UUID and timestamps, expected and actual outcomes, and structured
+findings. `payload_digest` is SHA-256 over the UTF-8 JSON object with that field
+removed, sorted keys, compact separators, unescaped Unicode and no NaN values.
+The validator recomputes it; it is an integrity digest, not a signature.
+
+Checks emit findings through `tc_fitness.check_evidence.report_finding` at the
+actual decision point. `gate()`-based checks, including `license_present`, already
+use this interface. Custom checks must emit their own structured findings;
+console output is never parsed and detectors are never invoked twice.
+
 ## Library modules
 
 tc-fitness also ships these modules (the helpers `tc-fitness run` and a repo's
