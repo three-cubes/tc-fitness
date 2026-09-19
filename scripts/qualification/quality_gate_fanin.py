@@ -7,7 +7,12 @@ import os
 import sys
 from typing import Any
 
-REQUIRED_WORKERS = ("check", "distribution-qualification", "changed-mutation")
+REQUIRED_WORKERS = (
+    "check-static",
+    "coverage-assurance",
+    "distribution-qualification",
+    "changed-mutation",
+)
 
 
 def _worker_results(value: object) -> dict[str, str] | None:

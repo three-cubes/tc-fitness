@@ -139,12 +139,10 @@ module = ["defusedxml", "defusedxml.*"]
 ignore_missing_imports = true
 
 # ── tc-fitness gate declaration — the engine eats its own dog food ───────────
-# The engine runs THROUGH the gate it ships: `uv run tc-fitness run` reads this
-# block and runs the engine's own quality gate (ruff / format / mypy / pytest)
-# plus its own branch-naming module — the SAME binary both CI and a local run
-# invoke, so local == CI by construction. ci.yml's `check` matrix job shrinks to
-# `setup-uv-cached → uv run tc-fitness run`, keeping the py3.12/3.13 matrix
-# caller-side while the gate's STEPS live here as config, never hand-copied YAML.
+# `uv run tc-fitness run` owns deterministic static evaluation: ruff, format,
+# strict typing and branch naming. `make check` composes that static gate with
+# one fresh exact-base/candidate coverage transaction; CI uses the same split so
+# its Python matrix never repeats the full coverage measurement.
 [tool.tc_fitness]
 name = "three-cubes-fitness self gate"
 
@@ -178,18 +176,6 @@ skip_when_staged = true
 fix = "resolve the type error mypy reports"
 next = "re-run `tc-fitness run`"
 
-# pytest with coverage — the engine's self-test suite, producing fresh XML/JSON
-# and an exact-source receipt at the declared external attempt path. Dropped from
-# the `--staged` <60s smoke (skip_when_staged): the full coverage run is the
-# expensive full-tree leg the smoke deliberately defers to the merge gate.
-[[tool.tc_fitness.steps]]
-id = "pytest"
-summary = "pytest with fresh exact-source coverage receipt"
-run = ["python", "-m", "tc_fitness.coverage_admission", "produce", "--base-commit", "env:TC_FITNESS_BASE_COMMIT", "--candidate-commit", "env:TC_FITNESS_CANDIDATE_COMMIT", "--source", "src/tc_fitness", "--config", "pyproject.toml", "--run-id", "env:TC_FITNESS_RUN_ID", "--attempt-id", "env:TC_FITNESS_ATTEMPT_ID", "--output", "env:TC_FITNESS_COVERAGE_OUTPUT", "--digest-output", "env:TC_FITNESS_COVERAGE_DIGEST_FILE", "--", "-m", "pytest", "-q"]
-skip_when_staged = true
-fix = "fix the failing test or the code under test"
-next = "re-run `tc-fitness run`"
-
 # The engine's OWN branch-naming gate, run against the gate. branch_naming is an
 # engine-shipped module (`tc_fitness.checks.branch_naming`) with a `python -m`
 # entrypoint; it gates the LIVE branch name (not a per-file baseline), so it is
@@ -200,48 +186,4 @@ id = "branch-naming"
 summary = "branch_naming (engine's own convention gate)"
 run = ["python", "-m", "tc_fitness.checks.branch_naming"]
 fix = "rename the branch to the Linear <user>/<team>-<number>-<slug> shape"
-next = "re-run `tc-fitness run`"
-
-# Evidence is never optional: absent exact-base receipts fail this catalogue.
-[[tool.tc_fitness.steps]]
-id = "coverage-assurance"
-summary = "exact-source coverage floors and accepted-base ratchet"
-catalogue = "tc_fitness.coverage_catalogue:ENTRIES"
-baseline_free = true
-fix = "produce current coverage evidence, supply the trusted accepted-base digest, and cover all findings"
-next = "re-run `tc-fitness run`"
-
-[tool.tc_fitness.core_checks.coverage_includes_branches]
-coverage_report = "env:TC_FITNESS_COVERAGE_REPORT"
-
-[tool.tc_fitness.core_checks.coverage_floor]
-roots = ["src/tc_fitness"]
-floor_pct = 95
-branch_floor_pct = 95
-critical_branch_files = ["src/tc_fitness/gate.py", "src/tc_fitness/runner.py", "src/tc_fitness/gate_config.py", "src/tc_fitness/runtime_contract.py"]
-coverage_report = "env:TC_FITNESS_COVERAGE_REPORT"
-coverage_config = "pyproject.toml"
-coverage_receipt = "env:TC_FITNESS_COVERAGE_RECEIPT"
-coverage_receipt_digest = "file:env:TC_FITNESS_COVERAGE_DIGEST_FILE"
-accepted_coverage_receipt = "env:TC_FITNESS_ACCEPTED_COVERAGE_RECEIPT"
-accepted_coverage_digest = "env:TC_FITNESS_ACCEPTED_COVERAGE_DIGEST"
-exact_base_commit = "env:TC_FITNESS_BASE_COMMIT"
-candidate_commit = "env:TC_FITNESS_CANDIDATE_COMMIT"
-run_id = "env:TC_FITNESS_RUN_ID"
-attempt_id = "env:TC_FITNESS_ATTEMPT_ID"
-max_age_seconds = 3600
-
-[tool.tc_fitness.core_checks.new_code_coverage]
-roots = ["src/tc_fitness"]
-floor_pct = 100
-coverage_report = "env:TC_FITNESS_COVERAGE_REPORT"
-coverage_config = "pyproject.toml"
-coverage_receipt = "env:TC_FITNESS_COVERAGE_RECEIPT"
-coverage_receipt_digest = "file:env:TC_FITNESS_COVERAGE_DIGEST_FILE"
-accepted_coverage_receipt = "env:TC_FITNESS_ACCEPTED_COVERAGE_RECEIPT"
-accepted_coverage_digest = "env:TC_FITNESS_ACCEPTED_COVERAGE_DIGEST"
-exact_base_commit = "env:TC_FITNESS_BASE_COMMIT"
-candidate_commit = "env:TC_FITNESS_CANDIDATE_COMMIT"
-run_id = "env:TC_FITNESS_RUN_ID"
-attempt_id = "env:TC_FITNESS_ATTEMPT_ID"
-max_age_seconds = 3600
+next = "re-run `make check-static`"

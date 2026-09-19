@@ -187,18 +187,24 @@ library modules tc-fitness ships.
 
 ## The `[tool.tc_fitness]` config
 
-`tc-fitness run` is the one command both CI and your laptop invoke, so the local
-check and the CI check are the same by construction — there is no hand-copied
-pytest/lint block to drift between a `scripts/ci/check.sh` and a CI workflow.
+Consumer repositories use `tc-fitness run` as the shared static gate. This
+repository composes that gate with its own exact-commit coverage transaction:
 
 ```bash
-uv run tc-fitness run         # local: this is what `make check` becomes
+make prepare       # sync the lock and apply deterministic formatting fixes
+make smoke         # <60s staged feedback; never admissible coverage evidence
+make check         # clean committed tree + static gate + fresh base/head coverage
 ```
 
 ```yaml
-# CI: the reusable python-quality-gate.yml shrinks to
-#   checkout → setup-uv → uv run tc-fitness run
+# Self CI: matrix check-static + one exact-base/head coverage-assurance job
 ```
+
+`make check` runs preparation first and withholds evaluation if preparation
+changes a file or any other working-tree change is present. Commit the exact
+bytes to evaluate, then rerun it. Coverage evidence is written outside the
+checkout. `make check-static` runs ruff, format verification, mypy and branch
+naming without repeating the coverage transaction.
 
 You declare the check **once**, in a `[tool.tc_fitness]` block in your
 `pyproject.toml` (or a dedicated `.tc-fitness.toml`):
@@ -437,12 +443,10 @@ thresholds, exemptions and empty source scope cannot pass. Untracked Python file
 within the declared roots are included. Existing line-only consumers remain
 compatible when `branch_floor_pct` is absent.
 
-The repository's self gate now produces fresh branch-aware XML, JSON and a
-`tc.fitness/coverage-receipt/v1` receipt for the complete package, without
-line/partial-branch exclusion patterns. Its following `coverage-assurance`
-catalogue is baseline-free and enforces these floors, exact-base changed-line
-coverage and monotonic accepted-base admission. Missing evidence is an error;
-the current repository does **not** yet meet its required coverage floors.
+The repository's self gate measures fresh branch-aware evidence for the exact
+base and candidate commits. It enforces the absolute floors, exact-base
+changed-line coverage and non-regression in one transaction. Missing or
+uncommitted evidence is an error.
 
 ### Exact-base coverage and evidence handoff
 
@@ -486,10 +490,9 @@ JSON executed/missing arcs must partition those opportunities, and XML must
 agree on each branch's total and covered exits. Removing metadata from both
 reports cannot turn a real branch into a zero-opportunity measurement.
 
-The engine accepts full immutable IDs only. Trusted local/hosted wrappers own
-resolving the relevant Git event or default-branch merge base. This first slice
-does not yet replace the existing `run` catalogue's receipt-based self-gate
-wiring below; wrapper resolution and that cutover remain integration work.
+The engine accepts full immutable IDs only. Trusted local and hosted wrappers
+resolve the Git event or default-branch merge base. The self gate does not
+select an accepted receipt or allow the candidate to choose its anchor.
 
 `core:new_code_coverage` accepts `exact_base_commit` and `candidate_commit` as
 full immutable Git object IDs (or explicit `env:NAME` bindings). This mode
@@ -500,7 +503,8 @@ analysis supplies the executable-line inventory; report omissions cannot turn
 changed executable statements into non-code. Ordinary `base_ref` consumers keep
 their existing behaviour when exact identities are absent.
 
-The public producer executes a Python test command with fresh Coverage.py data:
+The receipt producer remains available to consumer repositories that use the
+receipt-admission API. It is not part of this repository's self gate:
 
 ```bash
 uv run python -m tc_fitness.coverage_admission produce \
@@ -518,20 +522,6 @@ evidence or marks its own measurement accepted. It binds exact commits, complete
 source bytes, tracked configuration, XML/JSON digests, integer counts, timestamps,
 run/attempt identity, test command, Python and Coverage.py versions.
 
-For the self gate, set the immutable commit and execution inputs above and:
-
-- `TC_FITNESS_COVERAGE_RECEIPT` to `<output>/receipt.json`;
-- `TC_FITNESS_COVERAGE_REPORT` to `<output>/coverage.xml`;
-- `TC_FITNESS_ACCEPTED_COVERAGE_RECEIPT` to the latest accepted exact-base receipt;
-- `TC_FITNESS_ACCEPTED_COVERAGE_DIGEST` to its independently trusted SHA-256 digest.
-
-Then invoke the ordinary `uv run tc-fitness run`. Its test step produces the
-candidate receipt and separate digest handoff; the catalogue consumes that same
-attempt. Current evidence must be no older than one hour and match the expected
-run and attempt. Accepted evidence binds the exact base and its versioned
-source/configuration, not the candidate's age window. Both line and branch
-ratchets use exact integer ratios, independently of the absolute floors.
-
 `coverage_receipt` activates receipt admission on the existing coverage checks.
 Its configuration also supplies `coverage_receipt_digest`,
 `accepted_coverage_receipt`, `accepted_coverage_digest`, `coverage_config`,
@@ -539,12 +529,10 @@ Its configuration also supplies `coverage_receipt_digest`,
 or `file:/absolute/external/path` / `file:env:NAME` handoffs. A digest computed
 from the receipt being checked is not an independent trust anchor.
 
-Trusted CI/storage must select and protect the **latest accepted** digest. The
+Consumer CI/storage must select and protect the **latest accepted** digest. The
 producer and validator do not implement an acceptance store, bootstrap waiver,
 signature or hostile-process sandbox. Digest binding detects changed evidence;
-it cannot authenticate an attacker who also controls the trusted handoff. The
-remaining repository work is real test uplift to 95/95/100, trusted accepted-base
-storage/CI inputs and broader self-catalogue/release composition, not lower bars.
+it cannot authenticate an attacker who also controls the trusted handoff.
 
 Catalogue steps may declare `baseline_free = true`. They must be gating,
 in-process and non-parallel; shell dispatch, optional/missing execution and
