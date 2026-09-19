@@ -451,19 +451,18 @@ class DeterministicTests(FitnessRule):
         plan = plan_runs(self.repeats, self.order_seeds)
         need_node_ids = not self.use_randomly and any(spec.order_seed is not None for spec in plan)
         node_ids: list[str] = []
-        if need_node_ids:
-            node_ids = collect_node_ids(
-                self.test_command,
-                test_paths,
-                repo_root=self._repo_root,
-                seed=self.seed,
-                timeout=self.timeout_seconds,
-            )
-            if not node_ids:
-                print("ok [deterministic-tests] — no tests collected under the configured roots.")
-                return 0
-
         try:
+            if need_node_ids:
+                node_ids = collect_node_ids(
+                    self.test_command,
+                    test_paths,
+                    repo_root=self._repo_root,
+                    seed=self.seed,
+                    timeout=self.timeout_seconds,
+                )
+                if not node_ids:
+                    print("ok [deterministic-tests] — no tests collected under the configured roots.")
+                    return 0
             divergences = detect_nondeterminism(plan, self._runner(test_paths, node_ids))
         except SuiteRunError as exc:
             if str(exc).startswith("configured test command unavailable:"):

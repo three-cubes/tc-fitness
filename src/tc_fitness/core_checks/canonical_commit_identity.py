@@ -97,11 +97,15 @@ def _log_identities(repo_root: Path, rev_range: str) -> list[tuple[str, str, str
         return []
     rows: list[tuple[str, str, str, str, str]] = []
     for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
         parts = line.split(_SEP)
         if len(parts) == 5:
             rows.append((parts[0], parts[1], parts[2], parts[3], parts[4]))
+        else:
+            # Commit metadata can contain arbitrary control characters. If one
+            # collides with the record separator, or Git returns an empty row,
+            # do not silently omit the record from the identity gate.
+            sha = parts[0] if parts[0].strip() else "malformed git-log record"
+            rows.append((sha, "", "", "", ""))
     return rows
 
 

@@ -43,6 +43,20 @@ def test_bad_packages_malformed(tmp_path: Path) -> None:
     assert report_is_malformed(p) is True
 
 
+def test_missing_packages_object_is_malformed(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "r.json", '{"schema_version": 1}')
+
+    assert report_is_malformed(p) is True
+
+
+@pytest.mark.parametrize("body", ["[]", "null", "\xff"])
+def test_non_object_or_non_utf8_report_is_malformed(tmp_path: Path, body: str) -> None:
+    p = tmp_path / "r.json"
+    p.write_bytes(body.encode("utf-8", errors="surrogateescape"))
+
+    assert report_is_malformed(p) is True
+
+
 def test_bad_json_malformed(tmp_path: Path) -> None:
     p = _seed(tmp_path, "r.json", _BAD_JSON)
     assert report_is_malformed(p) is True

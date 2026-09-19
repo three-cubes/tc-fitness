@@ -411,8 +411,6 @@ class NewCodeCoverage(FitnessRule):
         if measured is None:
             return False
         covered, coverable = measured
-        if coverable == 0:  # defensive: _measured never stores a zero-coverable file
-            return False
         return covered / coverable * 100.0 < self.floor_pct
 
     def run(self) -> int:
