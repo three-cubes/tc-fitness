@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_hardcoded_repo_paths
+config: {"roots":["src"],"needles":["reserved-project"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-hardcoded-repo-paths
+          path: src/example.py
+          message_contains: "hardcoded absolute checkout path"
+dependencies: []

@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_real_names
+config: {"roots":["examples"],"tokens":["ReservedClient"],"scope_segments":["examples"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-real-names
+          path: examples/client.txt
+          message_contains: "synthetic placeholder"
+dependencies: []

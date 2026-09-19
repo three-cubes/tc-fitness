@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_internal_patches_ts
+config: {"roots":["src"],"internal_packages":["fixture_core"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-internal-patches-ts
+          path: src/example.test.ts
+          message_contains: "composition failures"
+dependencies: []
