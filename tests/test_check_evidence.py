@@ -1,6 +1,7 @@
 """Context-local events preserve check outcomes without global capture state."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 
 import pytest
 
@@ -41,3 +42,50 @@ def test_error_from_one_check_does_not_poison_the_next_check_result() -> None:
         report_result("first", 2)
         report_result("second", 0)
     assert [result.status for result in evidence.results] == ["error", "pass"]
+
+
+def test_finding_preserves_the_complete_structured_failure() -> None:
+    with capture_check_evidence() as evidence:
+        report_finding("schema-check", "src/schema.json", "required field is missing")
+    assert [asdict(finding) for finding in evidence.findings] == [
+        {
+            "rule": "schema-check",
+            "path": "src/schema.json",
+            "message": "required field is missing",
+            "status": "fail",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "crashed", "expected_status"),
+    [
+        (0, False, "pass"),
+        (1, False, "fail"),
+        (7, False, "fail"),
+        (-9, False, "fail"),
+        (0, True, "error"),
+        (2, True, "error"),
+    ],
+)
+def test_terminal_result_preserves_raw_exit_and_distinguishes_failure_from_crash(
+    exit_code: int, crashed: bool, expected_status: str
+) -> None:
+    with capture_check_evidence() as evidence:
+        report_result("schema-check", exit_code, crashed=crashed)
+    assert [asdict(result) for result in evidence.results] == [
+        {"check": "schema-check", "status": expected_status, "exit_code": exit_code}
+    ]
+
+
+def test_error_finding_overrides_zero_exit_without_contaminating_the_next_check() -> None:
+    with capture_check_evidence() as evidence:
+        report_finding("first", "dependency.json", "dependency unavailable", status="error")
+        report_result("first", 0)
+        report_finding("second", "input.json", "invalid input")
+        report_result("second", 9)
+    assert [asdict(result) for result in evidence.results] == [
+        {"check": "first", "status": "error", "exit_code": 0},
+        {"check": "second", "status": "fail", "exit_code": 9},
+    ]
+    assert evidence.findings[0].status == "error"
