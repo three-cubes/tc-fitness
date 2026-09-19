@@ -453,8 +453,8 @@ def _load_strict_yaml(
                 source,
                 "/",
                 "yaml-dependency-missing",
-                "YAML contract selected but the optional PyYAML dependency is not installed",
-                "install three-cubes-fitness[yaml] or use a JSON contract",
+                "YAML contract selected but the required PyYAML runtime dependency is not installed",
+                "repair the three-cubes-fitness installation or use a JSON contract",
             ),
         )
 

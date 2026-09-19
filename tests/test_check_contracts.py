@@ -12,7 +12,7 @@ from tc_fitness.check_contracts import (
     validate_contract_registry,
 )
 
-pytestmark = pytest.mark.contract
+pytestmark = pytest.mark.integration
 
 
 def _write(path: Path, text: str) -> Path:
@@ -128,7 +128,13 @@ cases:
           message_contains: required behaviour is missing
   - id: unavailable
     fixture: unavailable
-    expected: {status: error, exit: nonzero, findings: []}
+    expected:
+      status: error
+      exit: nonzero
+      findings:
+        - rule: example-tool
+          path: pyproject.toml
+          message_contains: example-tool is unavailable
 dependencies: [example-tool]
 """,
     )
@@ -137,6 +143,37 @@ dependencies: [example-tool]
 
     assert contract.dependencies == ("example-tool",)
     assert contract.cases[-1].expected.status == "error"
+
+
+def test_dependency_contract_requires_an_unavailable_stable_finding(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path / "example_check" / "contract.yaml",
+        """
+schema: tc.fitness/check-contract/v1
+check: core:example_check
+config: {}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: example-check
+          path: src/broken.py
+          message_contains: required behaviour is missing
+  - id: unavailable
+    fixture: unavailable
+    expected: {status: error, exit: nonzero, findings: []}
+dependencies: [example-tool]
+""",
+    )
+
+    with pytest.raises(CheckContractError, match="unavailable case must expect at least one stable finding"):
+        load_check_contract(manifest)
 
 
 @pytest.mark.parametrize(
@@ -484,6 +521,35 @@ def test_rejects_a_missing_or_invalid_yaml_contract_manifest(tmp_path: Path) -> 
 
     with pytest.raises(CheckContractError, match="invalid YAML"):
         load_check_contract(invalid)
+
+
+def test_rejects_duplicate_yaml_mapping_keys(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path / "example_check" / "contract.yaml",
+        """
+schema: tc.fitness/check-contract/v1
+check: core:another_check
+check: core:example_check
+config: {}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: example-check
+          path: src/broken.py
+          message_contains: required behaviour is missing
+dependencies: []
+""",
+    )
+
+    with pytest.raises(CheckContractError, match="duplicate YAML mapping key: 'check'"):
+        load_check_contract(manifest)
 
 
 @pytest.mark.parametrize(
