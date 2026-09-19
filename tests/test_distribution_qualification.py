@@ -27,3 +27,5 @@ def test_distribution_qualification_exercises_both_installed_artifact_paths() ->
     assert result.returncode == 0, result.stderr
     assert "qualified direct wheel" in result.stdout
     assert "qualified wheel rebuilt from sdist" in result.stdout
+    assert "qualified direct-wheel coverage transaction" in result.stdout
+    assert "qualified wheel-from-sdist coverage transaction" in result.stdout

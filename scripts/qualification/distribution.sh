@@ -33,10 +33,13 @@ dist_dir="$workdir/dist"
 rebuilt_dir="$workdir/rebuilt"
 fixture_dir="$workdir/fixture"
 runtime_requirements="$workdir/runtime-requirements.txt"
+assurance_requirements="$workdir/assurance-requirements.txt"
 
 mkdir -p "$dist_dir" "$rebuilt_dir" "$fixture_dir"
 uv export --project "$repo_root" --locked --no-dev --no-emit-project \
   --format requirements.txt --output-file "$runtime_requirements" >/dev/null
+uv export --project "$repo_root" --locked --no-dev --all-extras --no-emit-project \
+  --format requirements.txt --output-file "$assurance_requirements" >/dev/null
 uv build --python "$python_bin" --out-dir "$dist_dir" "$repo_root"
 
 wheels=("$dist_dir"/*.whl)
@@ -111,6 +114,7 @@ qualify() {
 
   "$environment/bin/python" -c 'import coverage'
   "$environment/bin/tc-fitness" --help >/dev/null
+  "$environment/bin/tc-fitness" assure-coverage --help >/dev/null
   "$environment/bin/tc-fitness" run --repo-root "$fixture_dir"
   "$environment/bin/tc-fitness-runtime-contract" --help >/dev/null
   "$environment/bin/tc-fitness-runtime-contract" resolve \
@@ -135,6 +139,61 @@ qualify() {
     --required-check distribution-fixture \
     --max-age-seconds 300 \
     --output "$verification"
+
+  # Coverage parsing is an assurance extra, not a default-install dependency.
+  uv pip install --python "$environment/bin/python" --require-hashes -r "$assurance_requirements"
+  "$environment/bin/python" - "$workdir/$label-coverage" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+root.mkdir()
+(root / "src/tc_fitness").mkdir(parents=True)
+(root / "tests").mkdir()
+(root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+(root / "pyproject.toml").write_text(
+    "[project]\nname='installed-assurance-fixture'\nversion='0.0.0'\nrequires-python='>=3.12'\n"
+    "[project.optional-dependencies]\ndev=['coverage==7.14.2','pytest==9.1.0']\n"
+)
+
+def run(*args):
+    return subprocess.run(args, cwd=root, check=True, capture_output=True, text=True, timeout=90).stdout.strip()
+
+def commit():
+    run("git", "add", ".")
+    run("git", "-c", "user.name=Contract", "-c", "user.email=contract@example.invalid", "commit", "-qm", "fixture")
+    return run("git", "rev-parse", "HEAD")
+
+run("git", "init", "-q")
+run("uv", "lock", "--python", sys.executable)
+source = root / "src/tc_fitness/subject.py"
+source.write_text("def choose(flag):\n    return 1\n")
+test = root / "tests/test_subject.py"
+test.write_text(
+    "import runpy\nimport pytest\npytestmark=pytest.mark.integration\n"
+    "def test_choices():\n    choose=runpy.run_path('src/tc_fitness/subject.py')['choose']\n"
+    "    assert choose(False)==1\n"
+)
+# Fixed critical predicates must be present even in the tiny shipped-surface proof.
+for name in ("gate", "runner", "gate_config", "runtime_contract"):
+    (root / f"src/tc_fitness/{name}.py").write_text("")
+base = commit()
+source.write_text("def choose(flag):\n    if flag:\n        return 2\n    return 1\n")
+test.write_text(test.read_text() + "    assert choose(True)==2\n")
+candidate = commit()
+payload = json.loads(run(
+    str(Path(sys.executable).with_name("tc-fitness")), "assure-coverage", "--repo-root", str(root),
+    "--base-commit", base, "--candidate-commit", candidate,
+))
+if (payload["status"] != "pass" or payload["base"]["commit"] != base
+        or payload["candidate"]["commit"] != candidate
+        or payload["base"]["counts"]["branches"] != 0
+        or payload["candidate"]["counts"]["covered_branches"] != 2):
+    raise SystemExit("installed coverage transaction did not prove the exact A/B branch change")
+PY
+  echo "qualified $label coverage transaction"
 }
 
 cd "$workdir"
