@@ -70,11 +70,82 @@ def test_property_setter_value_exempt(tmp_path: Path) -> None:
     assert module_has_unused_param(p) is False
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "def f(query):\n    pass\n",
+        "def f(query):\n    ...\n",
+        "def f(query):\n    raise NotImplementedError\n",
+        "def f(query):\n    raise NotImplementedError()\n",
+        'def f(query):\n    "protocol contract"\n',
+        'def f(query):\n    "protocol contract"\n    pass\n',
+        'def f(query):\n    "protocol contract"\n    ...\n',
+        'def f(query):\n    "protocol contract"\n    raise NotImplementedError\n',
+        "from typing import overload\n@overload\ndef f(query):\n    ...\n",
+        "from typing import overload\n@overload()\ndef f(query):\n    ...\n",
+    ],
+)
+def test_contract_stub_forms_do_not_report_unused_parameters(tmp_path: Path, body: str) -> None:
+    _seed(tmp_path, "src/stubs.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 0
+
+
+def test_positional_only_and_keyword_only_unused_parameters_are_reported(tmp_path: Path) -> None:
+    body = "def positional(event, /):\n    return 1\n"
+    body += "def keyword(*, context):\n    return 1\n"
+    _seed(tmp_path, "src/handlers.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_non_name_decorator_does_not_hide_a_real_unused_parameter(tmp_path: Path) -> None:
+    body = "@decorators['contract']\ndef handle(event):\n    return 1\n"
+    _seed(tmp_path, "src/decorated.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_two_statement_implementation_bodies_are_not_treated_as_stubs(tmp_path: Path) -> None:
+    body = 'def uses_event(event):\n    "description"\n    return event.id\n'
+    body += "def ignores_event(event):\n    pass\n    return 1\n"
+    _seed(tmp_path, "src/handlers.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_no_args_and_underscore_parameters_are_clean(tmp_path: Path) -> None:
+    body = "def empty():\n    return 1\n"
+    body += "def ignored(_context):\n    return 1\n"
+    _seed(tmp_path, "src/handlers.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 0
+
+
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/u.py", _UNUSED)
     _seed(tmp_path, "vendor/u.py", _UNUSED)
     rule = UnusedParamsNamed.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/u.py"}
+
+
+def test_executable_numeric_expression_is_not_mistaken_for_stub(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/worker.py", "def handle(event):\n    42\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_unparseable_configured_source_is_reported(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/broken.py", "def handler(:\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
 
 
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:

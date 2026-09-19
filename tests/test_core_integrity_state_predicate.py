@@ -90,3 +90,61 @@ def test_build_clean_when_state_predicate_present(tmp_path: Path) -> None:
         {"roots": ["src"], "state_tables": {"content_vectors": ["model", "embedded_at"]}}, repo_root=tmp_path
     )
     assert rule.collect_violations() == set()
+
+
+def test_unrelated_state_column_does_not_prove_joined_row_state(tmp_path: Path) -> None:
+    body = """
+def check(db):
+    return db.execute(
+        "SELECT d.model FROM documents d "
+        "LEFT JOIN content_vectors v ON v.hash = d.hash "
+        "WHERE d.model IS NOT NULL AND v.hash IS NULL"
+    ).fetchall()
+"""
+    _seed(tmp_path, "src/integrity.py", body)
+    rule = build({"roots": ["src"], "state_tables": _STATE}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_state_column_projection_does_not_prove_join_predicate(tmp_path: Path) -> None:
+    body = """
+def check(db):
+    return db.execute(
+        "SELECT v.model FROM documents d "
+        "LEFT JOIN content_vectors v ON v.hash = d.hash "
+        "WHERE v.hash IS NULL"
+    ).fetchall()
+"""
+    _seed(tmp_path, "src/integrity.py", body)
+    rule = build({"roots": ["src"], "state_tables": _STATE}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_unparseable_configured_source_is_reported(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/integrity.py", "def check(:\n")
+    rule = build({"roots": ["src"], "state_tables": _STATE}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_state_table_join_without_null_completeness_filter_is_clean(tmp_path: Path) -> None:
+    body = """
+def check(db):
+    return db.execute(
+        "SELECT v.hash FROM documents d "
+        "LEFT JOIN content_vectors AS vector_row ON vector_row.hash = d.hash"
+    ).fetchall()
+"""
+    _seed(tmp_path, "src/integrity.py", body)
+    rule = build({"roots": ["src"], "state_tables": _STATE}, repo_root=tmp_path)
+
+    assert rule.run() == 0
+
+
+def test_configured_python_without_sql_is_clean(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/worker.py", "def work():\n    return 1\n")
+    rule = build({"roots": ["src"], "state_tables": _STATE}, repo_root=tmp_path)
+
+    assert rule.run() == 0
