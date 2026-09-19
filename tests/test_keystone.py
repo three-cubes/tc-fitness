@@ -43,6 +43,10 @@ def test_added_file_queries_follow_real_staged_and_tagged_git_diffs(tmp_path: Pa
     assert staged_added_files(bare_repo) == []
     assert added_since_tag(repo, "missing-tag") == []
 
+    outside_repo = tmp_path.parent / f"{tmp_path.name}-not-a-repo"
+    outside_repo.mkdir()
+    assert staged_added_files(outside_repo) == []
+
 
 def test_resolve_previous_tag(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
@@ -54,3 +58,12 @@ def test_resolve_previous_tag(tmp_path: Path) -> None:
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "c2")
     assert resolve_previous_tag(repo) == "v0.1.0"
+
+
+def test_resolve_previous_tag_returns_none_before_a_second_commit(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "a.txt").write_text("a")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "first")
+
+    assert resolve_previous_tag(repo) is None
