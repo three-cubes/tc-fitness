@@ -383,7 +383,7 @@ def test_real_required_scanner_reports_structured_error_with_empty_path(tmp_path
     data["config"] = (
         {"scan_dir": "src"}
         if check.startswith("checkov")
-        else {"scanner_version": "2.3.0", "lockfiles": ["requirements.txt"]}
+        else {"scanner_version": "2.3.0", "lockfiles": ["requirements.txt"], "required": True}
     )
     manifest.write_text(yaml.safe_dump(data))
     ledger = tmp_path / "ledger.json"

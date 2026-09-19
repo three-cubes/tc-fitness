@@ -34,6 +34,10 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
   Contract execution disables baseline suppression at the shared read boundary,
   including Checkov's custom loader, so transient baseline files cannot attest
   false PASS. Ordinary consumer baseline semantics are unchanged.
+  A reviewed per-CORE option inventory now rejects unknown aliases, adoption
+  modes and exclusion overrides in assurance while retaining normal consumer
+  configuration. Mutation reports and OSV contracts require strict missing-input
+  behaviour; expected identities and detector thresholds remain configurable.
 
 - **Commit identity guidance now separates metadata from authentication** —
   `canonical_commit_identity` validates Git author and committer metadata; it
