@@ -14,7 +14,6 @@ import json
 import math
 import os
 import re
-import subprocess
 import sys
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -23,6 +22,7 @@ from typing import Any
 
 from tc_fitness.core_checks._coverage_evidence import resolve_coverage_filename
 from tc_fitness.core_checks.coverage_floor import parse_coverage_details
+from tc_fitness.runner import run_bounded_process
 
 SCHEMA = "tc.fitness/coverage-receipt/v1"
 
@@ -180,8 +180,11 @@ def changed_line_failures(root: Path, config: dict[str, Any]) -> dict[str, str]:
 
 def measure(root: Path, report: Path, files: dict[str, Path]) -> dict[str, Any]:
     """Retain exact per-file and package counts after complete-source validation."""
-    complete_line_hits(root, report, files)
+    from tc_fitness.coverage_measurement import cross_check_branches
+
+    hits = complete_line_hits(root, report, files)
     counts = parse_coverage_details(report, repo_root=root)
+    cross_check_branches(root, report, files, hits, counts)
     per_file = {name: asdict(value) for name, value in sorted(counts.items())}
     return {
         "files": per_file,
@@ -310,6 +313,8 @@ def produce_coverage(
     output: Path,
     command: list[str],
     digest_output: Path | None = None,
+    environment: dict[str, str] | None = None,
+    python_executable: Path | None = None,
 ) -> dict[str, Any]:
     """Run Coverage.py from empty data and retain a new digest-bound measurement.
 
@@ -330,6 +335,24 @@ def produce_coverage(
     source_hash = digest({name: bytes_digest(path.read_bytes()) for name, path in sorted(files.items())})
     if not command:
         raise ValueError("coverage producer requires a Python test command")
+    interpreter = python_executable if python_executable is not None else Path(sys.executable)
+    if not interpreter.is_absolute() or not interpreter.is_file():
+        raise ValueError("coverage producer requires an absolute installed Python interpreter")
+    runtime = run_bounded_process(
+        [
+            str(interpreter),
+            "-I",
+            "-c",
+            "import sys,json,importlib.metadata as m; print(json.dumps({'python':sys.version,"
+            "'python_executable':sys.executable,'coverage':m.version('coverage'),'pytest':m.version('pytest')}))",
+        ],
+        cwd=root,
+        env=environment,
+        timeout=30,
+    )
+    if runtime.returncode:
+        raise ValueError("coverage interpreter lacks the required measurement toolchain")
+    versions = json.loads(runtime.stdout)
     if digest_output is not None and (
         not digest_output.is_absolute()
         or digest_output.resolve().is_relative_to(root)
@@ -351,11 +374,13 @@ def produce_coverage(
     ):
         # The producer deliberately executes caller-selected Python tests with
         # a fixed interpreter and argv, never a shell or executable from PATH.
-        result = subprocess.run(  # noqa: S603 - fixed interpreter, explicit producer command, no shell
-            [sys.executable, "-m", "coverage", args[0], "--rcfile", str(settings), *args[1:]],
+        result = run_bounded_process(
+            [str(interpreter), "-I", "-m", "coverage", args[0], "--rcfile", str(settings), *args[1:]],
             cwd=root,
-            check=False,
+            env=environment,
             timeout=600,
+            stdout_path=output / (args[0] + ".stdout.log"),
+            stderr_path=output / (args[0] + ".stderr.log"),
         )
         if result.returncode:
             raise ValueError("coverage producer command failed; no receipt emitted")
@@ -381,8 +406,10 @@ def produce_coverage(
             "started_at": started,
             "finished_at": datetime.now(UTC).isoformat(),
             "command": command,
-            "coverage_version": importlib.import_module("coverage").__version__,
-            "python_version": sys.version,
+            "coverage_version": versions["coverage"],
+            "python_version": versions["python"],
+            "pytest_version": versions["pytest"],
+            "python_executable": versions["python_executable"],
         },
         **measure(root, output / "coverage.xml", files),
     }

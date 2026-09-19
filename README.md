@@ -446,6 +446,40 @@ the current repository does **not** yet meet its required coverage floors.
 
 ### Exact-base coverage and evidence handoff
 
+The new self-assurance transaction measures both exact commits afresh:
+
+```bash
+tc-fitness assure-coverage --base-commit <full-base-sha> \
+  --candidate-commit <full-head-sha> --output /external/path/result.json
+```
+
+It verifies HEAD and ancestry, creates two detached clean worktrees, runs the
+fixed self-assurance test/profile in each, and immediately compares immutable
+in-memory measurements. It enforces 95 percent line/branch floors, 100 percent
+critical-predicate branches and changed executable lines, plus non-regression
+from the fresh exact-base measurement. Neither accepted receipts/digests nor
+candidate-configured roots, tests, floors or base selectors are inputs. The
+optional JSON is output-only and cannot be imported for admission.
+
+Each detached checkout gets its own external environment provisioned with
+`uv sync --locked --all-extras`. Coverage and pytest run through that
+environment's Python; provisioning or test failure is a terminal error, never
+a fallback to the controller environment. Measurements retain the lock digest
+and actual Python, Coverage.py, pytest and uv identities. The current trusted
+engine independently parses and adjudicates the reports. Its fixed pytest
+configuration registers tier names but does not load the candidate's tier
+plugin or candidate-selected pytest configuration.
+
+Possible branch arcs come from Coverage.py's analysis of bound Python source.
+JSON executed/missing arcs must partition those opportunities, and XML must
+agree on each branch's total and covered exits. Removing metadata from both
+reports cannot turn a real branch into a zero-opportunity measurement.
+
+The engine accepts full immutable IDs only. Trusted local/hosted wrappers own
+resolving the relevant Git event or default-branch merge base. This first slice
+does not yet replace the existing `run` catalogue's receipt-based self-gate
+wiring below; wrapper resolution and that cutover remain integration work.
+
 `core:new_code_coverage` accepts `exact_base_commit` and `candidate_commit` as
 full immutable Git object IDs (or explicit `env:NAME` bindings). This mode
 requires `floor_pct = 100`, complete Python roots and no exemptions. It rejects

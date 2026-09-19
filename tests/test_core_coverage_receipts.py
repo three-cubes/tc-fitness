@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -412,3 +414,46 @@ def test_receipt_configuration_cannot_fall_back_to_legacy_admission(tmp_path: Pa
         config.pop("exact_base_commit")
         config.pop("candidate_commit")
     assert dispatch(root, config, check).results[0].status == "error"
+
+
+def reseal(path: Path, payload: dict[str, object]) -> str:
+    payload.pop("digest", None)
+    token = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+    )
+    payload["digest"] = token
+    path.write_text(json.dumps(payload))
+    return token
+
+
+@pytest.mark.parametrize("alter_json", [False, True])
+def test_new_candidate_branch_cannot_disappear_from_xml_metadata(tmp_path: Path, alter_json: bool) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    config, accepted, current = receipt_pair(root, tmp_path)
+    assert json.loads(accepted.read_text())["counts"]["branches"] == 0
+    report = current.parent / "coverage.xml"
+    text = re.sub(r'branch-rate="[^"]+"', 'branch-rate="1"', report.read_text())
+    text = re.sub(r'branches-(valid|covered)="[0-9]+"', r'branches-\1="0"', text)
+    report.write_text(re.sub(r' (?:branch|condition-coverage|missing-branches)="[^"]*"', "", text))
+    payload = json.loads(current.read_text())
+    for counts in [payload["counts"], *payload["files"].values()]:
+        counts["branches"] = counts["covered_branches"] = 0
+    payload["reports"]["coverage.xml"] = "sha256:" + hashlib.sha256(report.read_bytes()).hexdigest()
+    if alter_json:
+        json_report = current.parent / "coverage.json"
+        content = json.loads(json_report.read_text())
+        for detail in content["files"].values():
+            detail["executed_branches"] = detail["missing_branches"] = []
+        for summary in [content["totals"], *(detail["summary"] for detail in content["files"].values())]:
+            for name in ("num_branches", "covered_branches", "missing_branches", "num_partial_branches"):
+                summary[name] = 0
+        json_report.write_text(json.dumps(content))
+        payload["reports"]["coverage.json"] = "sha256:" + hashlib.sha256(json_report.read_bytes()).hexdigest()
+    config["coverage_receipt_digest"] = reseal(current, payload)
+    evidence = dispatch(root, config, "coverage_floor")
+    assert evidence.results[0].status == "error"
+    assert evidence.findings[0].rule == "check-execution-error"
