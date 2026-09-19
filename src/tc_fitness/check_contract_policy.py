@@ -58,7 +58,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "canonical_commit_identity": frozenset(
         {"allowed_emails", "allowed_name_patterns", "base_ref", "head_ref", "cutover_ref"}
     ),
-    "checkov_iac_security": frozenset({"scan_dir", "framework", "name", "timeout"}),
+    "checkov_iac_security": frozenset({"scan_dir", "framework", "timeout"}),
     "ci_consumes_shared_gate": frozenset(
         {"workflows_dir", "reusable_pattern", "engine_pattern", "warn_only", "baseline_ok"}
     ),

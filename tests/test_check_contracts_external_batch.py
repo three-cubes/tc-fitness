@@ -16,7 +16,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS_ROOT = REPO_ROOT / "tests" / "check_contracts"
 EXTERNAL_CONTRACTS = {
     "bicep_arm_lint": ("compliant", "violation"),
-    "checkov_iac_security": ("compliant", "violation", "unavailable"),
     "deterministic_tests": ("compliant", "violation", "unavailable"),
     "osv_scanner_sca": ("compliant", "violation", "unavailable"),
     "runtime_evidence_contract": ("compliant", "violation"),
@@ -30,15 +29,6 @@ pytestmark = pytest.mark.contract
 def _install_protocol_tool_doubles(tools: Path) -> None:
     """Install protocol-unit scanner collaborators; they never establish live proof."""
     tools.mkdir()
-    (tools / "checkov").write_text(
-        "#!/bin/sh\n"
-        'if grep -q "publicNetworkAccess: \'Enabled\'" "$2/main.bicep"; then\n'
-        '  printf \'%s\\n\' \'{"results":{"failed_checks":[{"check_id":"CKV_FIXTURE_1","file_path":"infra/main.bicep","resource":"fixture","check_name":"fixture violation","file_line_range":[1,1]}]},"summary":{"parsing_errors":0}}\'\n'
-        "else\n"
-        '  printf \'%s\\n\' \'{"results":{"failed_checks":[]},"summary":{"parsing_errors":0}}\'\n'
-        "fi\n",
-        encoding="utf-8",
-    )
     (tools / "osv-scanner").write_text(
         "#!/bin/sh\n"
         'if [ "$1" = "--version" ]; then printf "%s\\n" "osv-scanner version: 2.2.4"; exit 0; fi\n'
@@ -79,7 +69,7 @@ def test_external_contract_batch_is_complete_and_runs_through_the_public_cli(
             assert result["actual"]["status"] == result["expected"]["status"]
 
 
-@pytest.mark.parametrize("name", ["checkov_iac_security", "osv_scanner_sca"])
+@pytest.mark.parametrize("name", ["osv_scanner_sca"])
 def test_scanner_protocol_contracts_are_explicitly_non_admissible(
     name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -98,6 +88,21 @@ def test_scanner_protocol_contracts_are_explicitly_non_admissible(
     assert ledger["evidence_class"] == "protocol-unit"
     assert ledger["live_qualification"] == "required-unmet"
     assert not ledger["release_admission"]
+
+
+def test_checkov_contract_runs_the_pinned_scanner_against_real_iac_fixtures(tmp_path: Path) -> None:
+    """The Checkov contract calls the installed scanner, not a protocol double."""
+    contract_path = CONTRACTS_ROOT / "checkov_iac_security" / "contract.yaml"
+    contract = load_check_contract(contract_path)
+
+    assert contract.evidence_class == "integration"
+    assert contract.live_qualification == "required-unmet"
+    assert not contract.release_admission
+    for case_id in ("compliant", "violation", "unavailable"):
+        ledger = run_contract_case(contract_path, case_id, tmp_path / f"checkov-{case_id}.json")
+        assert ledger["check"] == "core:checkov_iac_security"
+        assert ledger["case_id"] == case_id
+        assert ledger["actual"]["status"] == ledger["expected"]["status"]
 
 
 def test_contract_fixture_registry_is_not_collected_as_an_outer_test_suite() -> None:

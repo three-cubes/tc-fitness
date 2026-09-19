@@ -6,6 +6,8 @@ import errno
 import hashlib
 import json
 import os
+import runpy
+import sys
 import threading
 import time
 import tracemalloc
@@ -17,7 +19,12 @@ import pytest
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks import run_core_check
-from tc_fitness.core_checks._runtime_contracts import CONTRACT_SCHEMA, EVIDENCE_SCHEMA, canonical_json_bytes
+from tc_fitness.core_checks._runtime_contracts import (
+    CONTRACT_SCHEMA,
+    EVIDENCE_SCHEMA,
+    ContractDocuments,
+    canonical_json_bytes,
+)
 from tc_fitness.core_checks.runtime_evidence_contract import (
     RuntimeEvidenceContract,
     build,
@@ -123,6 +130,50 @@ def _config() -> dict[str, object]:
         "required_checks": ["runtime-probe"],
         "max_age_seconds": 300,
     }
+
+
+def _direct_documents(tmp_path: Path, evidence: dict[str, object] | None) -> ContractDocuments:
+    contract = _contract()
+    evidence_path = tmp_path / "evidence.json"
+    artifact = b"probe details\n"
+    artifact_path = tmp_path / "artifacts" / "probe.txt"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_bytes(artifact)
+    return ContractDocuments(
+        contract_path=tmp_path / "contract.json",
+        contract=contract,
+        contract_bytes=canonical_json_bytes(contract),
+        evidence_path=evidence_path if evidence is not None else None,
+        evidence=evidence,
+        evidence_bytes=canonical_json_bytes(evidence) if evidence is not None else None,
+    )
+
+
+def _direct_expected_identity() -> dict[str, object]:
+    return {
+        key.removeprefix("expected_"): value
+        for key, value in _config().items()
+        if key.startswith("expected_")
+    }
+
+
+def _direct_findings(
+    tmp_path: Path,
+    evidence: dict[str, object] | None,
+    *,
+    expected_identity: dict[str, object] | None = None,
+    required_checks: object = ("runtime-probe",),
+    now: datetime = _NOW,
+    max_age_seconds: object = 300,
+) -> set[str]:
+    findings = validate_runtime_evidence(
+        _direct_documents(tmp_path, evidence),
+        expected_identity=(_direct_expected_identity() if expected_identity is None else expected_identity),
+        required_checks=required_checks,  # type: ignore[arg-type]
+        now=now,
+        max_age_seconds=max_age_seconds,  # type: ignore[arg-type]
+    )
+    return {finding.code for finding in findings}
 
 
 def test_valid_runtime_evidence_passes(tmp_path: Path) -> None:
@@ -460,6 +511,320 @@ def test_large_artifact_hashing_uses_bounded_memory(tmp_path: Path) -> None:
     assert peak < 3 * 1024 * 1024
 
 
+def test_public_validator_requires_selected_runtime_receipt(tmp_path: Path) -> None:
+    assert "missing-evidence" in _direct_findings(tmp_path, None)
+
+
+@pytest.mark.parametrize(
+    ("expected_identity", "codes"),
+    [
+        ({}, {"missing-expected-identity", "invalid-expected-identity"}),
+        (
+            {
+                **_direct_expected_identity(),
+                "source_sha": "not-a-commit",
+                "image_digest": "latest",
+                "run_id": True,
+                "attempt_id": -1,
+            },
+            {"invalid-source-sha", "invalid-image-digest", "invalid-expected-identity"},
+        ),
+    ],
+)
+def test_independent_expected_identity_requires_full_typed_immutable_values(
+    tmp_path: Path,
+    expected_identity: dict[str, object],
+    codes: set[str],
+) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    assert codes <= _direct_findings(tmp_path, evidence, expected_identity=expected_identity)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value", "code"),
+    [
+        ("source_sha", "UPPER", "invalid-receipt-identity"),
+        ("image_digest", "latest", "invalid-receipt-identity"),
+        ("host_id", " ", "invalid-receipt-identity"),
+        ("runtime_user", 7, "invalid-receipt-identity"),
+        ("deployment_id", "", "invalid-receipt-identity"),
+        ("configuration_identity", None, "invalid-receipt-identity"),
+        ("run_id", True, "invalid-receipt-identity"),
+        ("attempt_id", -1, "invalid-receipt-identity"),
+    ],
+)
+def test_observed_identity_is_typed_and_digest_bound(
+    tmp_path: Path,
+    field: str,
+    bad_value: object,
+    code: str,
+) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    evidence[field] = bad_value
+    assert code in _direct_findings(tmp_path, evidence)
+
+
+@pytest.mark.parametrize(
+    ("captured_at", "now", "max_age", "code"),
+    [
+        (None, _NOW, 300, "missing-capture-time"),
+        ("not-a-time", _NOW, 300, "invalid-capture-time"),
+        ("2026-09-11T12:00:00", _NOW, 300, "invalid-capture-time"),
+        (_NOW.isoformat(), datetime(2026, 9, 11, 12), 300, "invalid-verification-time"),
+        ((_NOW + timedelta(seconds=1)).isoformat(), _NOW, 300, "future-evidence"),
+        ((_NOW - timedelta(seconds=301)).isoformat(), _NOW, 300, "stale-evidence"),
+    ],
+)
+def test_freshness_requires_timezone_valid_nonfuture_recent_evidence(
+    tmp_path: Path,
+    captured_at: str | None,
+    now: datetime,
+    max_age: int,
+    code: str,
+) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    if captured_at is None:
+        del evidence["captured_at"]
+    else:
+        evidence["captured_at"] = captured_at
+    assert code in _direct_findings(tmp_path, evidence, now=now, max_age_seconds=max_age)
+
+
+@pytest.mark.parametrize("max_age", [-1, True, 1.5])
+def test_freshness_window_must_be_nonnegative_integer_not_boolean_or_float(
+    tmp_path: Path, max_age: object
+) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    assert "invalid-max-age" in _direct_findings(tmp_path, evidence, max_age_seconds=max_age)
+
+
+@pytest.mark.parametrize(
+    ("required_checks", "code"),
+    [
+        ("runtime-probe", "invalid-required-checks"),
+        ([""], "invalid-required-checks"),
+        ([1], "invalid-required-checks"),
+        (["runtime-probe", "runtime-probe"], "invalid-required-checks"),
+    ],
+)
+def test_required_check_identifiers_are_unique_nonempty_strings(
+    tmp_path: Path, required_checks: object, code: str
+) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    assert code in _direct_findings(tmp_path, evidence, required_checks=required_checks)
+
+
+@pytest.mark.parametrize(
+    ("checks", "required", "code"),
+    [
+        (None, ("runtime-probe",), "missing-checks"),
+        ([None], (), "invalid-check"),
+        ([{"status": "passed"}], (), "missing-check-id"),
+        (
+            [
+                {"id": "runtime-probe", "status": "passed", "observation": {"state": "healthy"}},
+                {"id": "runtime-probe", "status": "passed", "observation": {"state": "healthy"}},
+            ],
+            ("runtime-probe",),
+            "duplicate-check",
+        ),
+        (
+            [{"id": "runtime-probe", "status": "unknown", "observation": {"state": "healthy"}}],
+            ("runtime-probe",),
+            "invalid-check-verdict",
+        ),
+        (
+            [{"id": "runtime-probe", "status": "failed", "observation": {"state": "error"}}],
+            ("runtime-probe",),
+            "failed-check-verdict",
+        ),
+        (
+            [{"id": "runtime-probe", "status": "passed", "observation": {"exit_code": 0}}],
+            ("runtime-probe",),
+            "incomplete-observation",
+        ),
+        (
+            [
+                {
+                    "id": "runtime-probe",
+                    "status": "passed",
+                    "exit_code": True,
+                    "observation": {"state": "healthy", "exit_code": 1},
+                }
+            ],
+            ("runtime-probe",),
+            "contradictory-check-verdict",
+        ),
+        (
+            [
+                {
+                    "id": "runtime-probe",
+                    "status": "passed",
+                    "observation": {"state": "healthy", "exit_code": "0"},
+                }
+            ],
+            ("runtime-probe",),
+            "contradictory-check-verdict",
+        ),
+        (
+            [
+                {
+                    "id": "runtime-probe",
+                    "status": "passed",
+                    "exit_code": 0,
+                    "observation": {"state": "healthy", "exit_code": 1},
+                }
+            ],
+            ("runtime-probe",),
+            "contradictory-check-verdict",
+        ),
+        (
+            [
+                {
+                    "id": "runtime-probe",
+                    "status": "passed",
+                    "exit_code": 2,
+                    "observation": {"state": "healthy"},
+                }
+            ],
+            ("runtime-probe",),
+            "contradictory-check-verdict",
+        ),
+        (
+            [
+                {
+                    "id": "runtime-probe",
+                    "status": "passed",
+                    "observation": {"state": "healthy", "success": False},
+                }
+            ],
+            ("runtime-probe",),
+            "contradictory-check-verdict",
+        ),
+        (
+            [
+                {
+                    "id": "runtime-probe",
+                    "status": "expected-denial",
+                    "exit_code": 0,
+                    "observation": {"outcome": "allowed"},
+                }
+            ],
+            ("runtime-probe",),
+            "contradictory-check-verdict",
+        ),
+        ([], ("runtime-probe",), "missing-required-check"),
+    ],
+)
+def test_check_observations_require_one_structured_consistent_required_outcome(
+    tmp_path: Path,
+    checks: list[object] | None,
+    required: tuple[str, ...],
+    code: str,
+) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    if checks is None:
+        del evidence["checks"]
+    else:
+        evidence["checks"] = checks
+    assert code in _direct_findings(tmp_path, evidence, required_checks=required)
+
+
+@pytest.mark.parametrize(
+    ("artifacts", "code"),
+    [
+        (None, "missing-artifacts"),
+        ([None], "invalid-artifact"),
+        ([{"path": "../outside", "sha256": "sha256:" + "0" * 64}], "unsafe-artifact-path"),
+        ([{"path": "C:\\secret", "sha256": "sha256:" + "0" * 64}], "unsafe-artifact-path"),
+        ([{"path": "artifacts/missing", "sha256": "sha256:" + "0" * 64}], "missing-artifact"),
+        ([{"path": "artifacts/probe.txt", "sha256": "wrong"}], "invalid-artifact-digest"),
+        ([{"path": "artifacts/probe.txt", "sha256": "sha256:" + "0" * 64}], "artifact-digest-mismatch"),
+        (
+            [
+                {
+                    "path": "artifacts/probe.txt",
+                    "sha256": "sha256:" + hashlib.sha256(b"probe details\n").hexdigest(),
+                },
+                {
+                    "path": "artifacts/probe.txt",
+                    "sha256": "sha256:" + hashlib.sha256(b"probe details\n").hexdigest(),
+                },
+            ],
+            "duplicate-artifact",
+        ),
+    ],
+)
+def test_artifact_references_are_confined_unique_readable_and_digest_bound(
+    tmp_path: Path, artifacts: list[object] | None, code: str
+) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    if artifacts is None:
+        del evidence["artifacts"]
+    else:
+        evidence["artifacts"] = artifacts
+    assert code in _direct_findings(tmp_path, evidence)
+
+
+def test_artifact_symlink_escape_is_rejected_at_public_validation_boundary(tmp_path: Path) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.write_bytes(b"external")
+    (artifacts / "escape.txt").symlink_to(outside)
+    evidence["artifacts"] = [
+        {"path": "artifacts/escape.txt", "sha256": "sha256:" + hashlib.sha256(b"external").hexdigest()}
+    ]
+    codes = _direct_findings(tmp_path, evidence)
+    assert "unsafe-artifact-path" in codes
+    outside.unlink()
+
+
+def test_contract_digest_and_observed_identity_must_match_selected_values(tmp_path: Path) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    evidence["contract_digest"] = "sha256:" + "0" * 64
+    evidence["source_sha"] = "c" * 40
+    codes = _direct_findings(tmp_path, evidence)
+    assert {"contract-digest-mismatch", "source-sha-mismatch"} <= codes
+
+
+def test_malformed_contract_digest_is_rejected_before_identity_comparison(tmp_path: Path) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    evidence["contract_digest"] = "not-a-digest"
+    assert "invalid-contract-digest" in _direct_findings(tmp_path, evidence)
+
+
+def test_self_referential_artifact_symlink_is_reported_as_unsafe(tmp_path: Path) -> None:
+    evidence = _evidence(_contract(), captured_at=_NOW)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "loop").symlink_to(artifacts / "loop")
+    evidence["artifacts"] = [{"path": "artifacts/loop", "sha256": "sha256:" + "0" * 64}]
+    assert "unsafe-artifact-path" in _direct_findings(tmp_path, evidence)
+
+
+def test_nested_expected_identity_configuration_is_used_as_one_envelope(tmp_path: Path) -> None:
+    nested = _direct_expected_identity()
+    config = _config()
+    config["expected_identity"] = nested
+    rule = build(config, repo_root=tmp_path)
+    assert rule.expected_identity == nested
+
+
+def test_module_entrypoint_loads_selected_repository(tmp_path: Path) -> None:
+    import tc_fitness.core_checks.runtime_evidence_contract as module
+
+    original_argv = sys.argv
+    sys.argv = ["runtime_evidence_contract", "--repo-root", str(tmp_path)]
+    try:
+        with pytest.raises(SystemExit) as result:
+            runpy.run_path(str(Path(module.__file__)), run_name="__main__")
+    finally:
+        sys.argv = original_argv
+    assert result.value.code == 0
+
+
 @pytest.mark.parametrize("location", ["config", "artifact"])
 def test_nul_path_is_an_actionable_finding(tmp_path: Path, capsys: object, location: str) -> None:
     _seed(tmp_path)
@@ -495,8 +860,11 @@ def test_fifo_invalid_then_valid_evidence_cannot_split_status_from_findings(tmp_
                     raise
                 time.sleep(0.01)
                 continue
-            with os.fdopen(descriptor, "wb", closefd=True) as pipe:
-                pipe.write(valid)
+            try:
+                with os.fdopen(descriptor, "wb", closefd=True) as pipe:
+                    pipe.write(valid)
+            except BrokenPipeError:
+                return
             valid_written.set()
             return
 
