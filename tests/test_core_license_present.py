@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.license_present import (
     DEFAULT_MARKERS,
-    LicensePresent,
     build,
     file_missing_license,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:
@@ -41,6 +43,15 @@ def test_marker_below_window_still_flagged(tmp_path: Path) -> None:
     assert file_missing_license(p, markers=DEFAULT_MARKERS, header_lines=20) is True
 
 
+def test_invalid_utf8_in_configured_python_file_is_not_clean(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "broken.py"
+    source.parent.mkdir()
+    source.write_bytes(b"# SPDX-License-Identifier: MIT\n" + bytes([255]) + b"\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
 def test_custom_markers_via_config(tmp_path: Path) -> None:
     rule = build({"roots": ["."], "markers": ["MY-LICENSE-TAG"]}, repo_root=tmp_path)
     ok = _seed(tmp_path, "ok.py", "# MY-LICENSE-TAG\nx = 1\n")
@@ -49,16 +60,9 @@ def test_custom_markers_via_config(tmp_path: Path) -> None:
     assert rule.file_has_violation(bad) is True
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/m.py", "x = 1\n")
-    rule = LicensePresent.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
+def test_configured_header_window_controls_visibility(tmp_path: Path) -> None:
+    rule = build({"roots": ["src"], "header_lines": 1}, repo_root=tmp_path)
+    _seed(tmp_path, "src/visible.py", "# SPDX-License-Identifier: MIT\nx = 1\n")
+    _seed(tmp_path, "src/late.py", "# no license here\n# Copyright 2026\n")
 
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "m.py", "x = 1\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "license-present-files.txt").exists()
+    assert {str(path) for path in rule.collect_violations()} == {"src/late.py"}

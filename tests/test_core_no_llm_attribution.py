@@ -10,12 +10,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_llm_attribution import (
     NoLlmAttribution,
     build,
     main,
     scan_text,
+    strip_text,
 )
+
+pytestmark = pytest.mark.unit
 
 ROBOT = "\U0001f916"  # 🤖
 
@@ -73,37 +78,6 @@ def test_scan_text_reports_signature_names() -> None:
 # ── FitnessRule surface: file scan, baseline grandfathering (guard-forward) ──
 
 
-def test_file_has_violation_true_and_false(tmp_path: Path) -> None:
-    rule = build({"roots": ["."], "extensions": [".py", ".md"]}, repo_root=tmp_path)
-    dirty = _seed(tmp_path, "src/a.py", f"# {ROBOT} Generated with Claude Code\nx = 1\n")
-    clean = _seed(tmp_path, "src/b.py", "x = 1  # ordinary code\n")
-    assert rule.file_has_violation(dirty) is True
-    assert rule.file_has_violation(clean) is False
-
-
-def test_functional_claude_string_is_not_authorship(tmp_path: Path) -> None:
-    # A functional in-source string that merely names the tool (no attribution
-    # signature) must NOT be flagged — only attribution residue is.
-    rule = build({"roots": ["."], "extensions": [".py"]}, repo_root=tmp_path)
-    p = _seed(tmp_path, "src/c.py", 'PREFIX = "Claude Code sub-agent worktrees"\n')
-    assert rule.file_has_violation(p) is False
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.py", f"# {ROBOT} Generated with Claude Code\n")
-    rule = NoLlmAttribution.from_config({"roots": ["src"], "extensions": [".py"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.py", "Co-Authored-By: Claude <noreply@anthropic.com>\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-llm-attribution-files.txt").exists()
-
-
 # ── message-scan / strip CLI: the seam the commit-msg hook + CI leg consume ──
 
 
@@ -123,40 +97,66 @@ def test_strip_text_removes_trailer_and_credit_lines() -> None:
 
 
 def test_strip_text_keeps_genuine_human_coauthor() -> None:
-    from tc_fitness.core_checks.no_llm_attribution import strip_text
-
     msg = "fix: y\n\nCo-Authored-By: Jane Doe <jane@example.com>\n"
     cleaned, stripped = strip_text(msg)
     assert stripped == []
     assert "Jane Doe" in cleaned
 
 
-def test_main_scan_file_flags_dirty_and_passes_clean(tmp_path: Path) -> None:
-    dirty = tmp_path / "MSG_DIRTY"
-    dirty.write_text("feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n", encoding="utf-8")
-    assert main(["--scan-file", str(dirty)]) == 1
-    # --scan-file does NOT modify the file (CI must not rewrite history).
-    assert "Co-Authored-By: Claude" in dirty.read_text(encoding="utf-8")
+def test_strip_text_preserves_multiple_trailing_newlines() -> None:
+    msg = "feat: x\n\nCo-Authored-By: Claude <bot@example.com>\n\n"
 
-    clean = tmp_path / "MSG_CLEAN"
-    clean.write_text("feat: x\n\nplain body\n", encoding="utf-8")
+    cleaned, dropped = strip_text(msg)
+
+    assert dropped == ["Co-Authored-By: Claude <bot@example.com>"]
+    assert cleaned == "feat: x\n\n"
+
+
+def test_scan_file_reports_residue_and_clean_messages(tmp_path: Path) -> None:
+    contaminated = _seed(tmp_path, "contaminated.txt", "Co-Authored-By: Claude <bot@example.com>\n")
+    clean = _seed(tmp_path, "clean.txt", "Co-Authored-By: Jane <jane@example.com>\n")
+
+    assert main(["--scan-file", str(contaminated)]) == 1
     assert main(["--scan-file", str(clean)]) == 0
+    assert main(["--scan-file"]) == 2
+    assert main(["--scan-file", str(tmp_path / "missing.txt")]) == 2
 
 
-def test_main_strip_file_cleans_then_passes(tmp_path: Path) -> None:
-    msg = tmp_path / "COMMIT_EDITMSG"
-    msg.write_text(
-        f"feat: x\n\nbody\n{ROBOT} Generated with Claude Code\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
-        encoding="utf-8",
+def test_strip_file_removes_whole_credit_lines_and_rejects_inline_residue(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "message.txt",
+        "feat: x\nGenerated with Claude Code\ninline robot 🤖 stays\n",
     )
-    assert main(["--strip-file", str(msg)]) == 0
-    after = msg.read_text(encoding="utf-8")
-    assert scan_text(after) == []
-    assert "feat: x" in after and "body" in after
+
+    assert main(["--strip-file", str(path)]) == 1
+    assert path.read_text(encoding="utf-8") == "feat: x\ninline robot 🤖 stays\n"
 
 
-def test_main_strip_file_rejects_nonstrippable_inline_residue(tmp_path: Path) -> None:
-    # A robot emoji embedded mid-line is not a whole strippable line → hard-reject.
-    msg = tmp_path / "COMMIT_EDITMSG"
-    msg.write_text(f"feat: shipped it {ROBOT} finally\n", encoding="utf-8")
-    assert main(["--strip-file", str(msg)]) == 1
+def test_strip_file_with_only_removable_lines_passes_after_rewrite(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "message.txt", f"feat: x\n{ROBOT}\n")
+
+    assert main(["--strip-file", str(path)]) == 0
+    assert path.read_text(encoding="utf-8") == "feat: x\n"
+
+
+def test_strip_file_leaves_non_strippable_residue_untouched(tmp_path: Path) -> None:
+    original = "robot in a sentence 🤖\n"
+    path = _seed(tmp_path, "message.txt", original)
+
+    assert main(["--strip-file", str(path)]) == 1
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_file_rule_finds_attribution_and_ignores_unreadable_paths(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/bad.py", "Generated with Copilot\n")
+    clean = _seed(tmp_path, "src/clean.py", "Mention Copilot as a product, not authorship.\n")
+    binary = tmp_path / "src/binary.py"
+    binary.write_bytes(b"Co-Authored-By: Claude\n\xff")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert {str(path) for path in rule.collect_violations()} == {"src/bad.py"}
+    assert rule.file_has_violation(clean) is False
+    assert rule.file_has_violation(tmp_path / "src/missing.py") is False
+    assert rule.file_has_violation(binary) is False
+    assert isinstance(NoLlmAttribution.from_config({}), NoLlmAttribution)

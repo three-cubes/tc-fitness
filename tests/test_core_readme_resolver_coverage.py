@@ -5,12 +5,14 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.readme_resolver_coverage import (
-    ReadmeResolverCoverage,
     build,
     directory_missing_resolver,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _mkdir(tmp_path: Path, rel: str) -> Path:
@@ -65,25 +67,26 @@ def test_resolver_file_config_driven(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-def test_exempt_dirs_config_driven(tmp_path: Path) -> None:
+def test_exempt_dirs_cannot_hide_a_missing_resolver(tmp_path: Path) -> None:
     _mkdir(tmp_path, "scratch")
-    rule = build({"exempt_dirs": ["scratch"]}, repo_root=tmp_path)
-    assert rule.collect_violations() == set()
+    with pytest.raises(ValueError, match="exempt_dirs"):
+        build({"exempt_dirs": ["scratch"]}, repo_root=tmp_path)
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _mkdir(tmp_path, "platform")
-    rule = ReadmeResolverCoverage.from_config({}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
+def test_missing_scan_root_is_skipped_while_files_are_not_candidates(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
+    _mkdir(tmp_path, "docs/architecture")
+
+    rule = build({"roots": ["missing", "docs"]}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("docs/architecture")}
 
 
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _mkdir(tmp_path, "platform")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "readme-resolver-coverage-files.txt").exists()
+def test_existing_resolver_directory_has_no_violation(tmp_path: Path) -> None:
+    _with_readme(tmp_path, "platform")
+
+    assert build({}, repo_root=tmp_path).collect_violations() == set()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

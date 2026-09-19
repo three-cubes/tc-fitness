@@ -52,14 +52,41 @@ REMEDIATION = _remediation(
 )
 
 
-def _is_pytest_mark(decorator: ast.expr, mark_name: str) -> ast.expr | None:
+def _pytest_import_names(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
+    """Return module, mark, and importorskip aliases explicitly imported from pytest."""
+    pytest_names: set[str] = set()
+    mark_names: set[str] = set()
+    importorskip_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            pytest_names.update(alias.asname or alias.name for alias in node.names if alias.name == "pytest")
+        elif isinstance(node, ast.ImportFrom) and node.module == "pytest":
+            for alias in node.names:
+                if alias.name == "mark":
+                    mark_names.add(alias.asname or alias.name)
+                elif alias.name == "importorskip":
+                    importorskip_names.add(alias.asname or alias.name)
+    return pytest_names, mark_names, importorskip_names
+
+
+def _is_pytest_mark(
+    decorator: ast.expr,
+    mark_name: str,
+    pytest_names: set[str],
+    mark_names: set[str],
+) -> ast.expr | None:
     """Return ``decorator`` if it is a ``pytest.mark.<mark_name>`` reference."""
     target = decorator.func if isinstance(decorator, ast.Call) else decorator
     if isinstance(target, ast.Attribute) and target.attr == mark_name:
-        inner = target.value
-        if isinstance(inner, ast.Attribute) and inner.attr == "mark":
+        parent = target.value
+        if isinstance(parent, ast.Name) and parent.id in mark_names:
             return decorator
-        if isinstance(inner, ast.Name) and inner.id == "mark":
+        if (
+            isinstance(parent, ast.Attribute)
+            and parent.attr == "mark"
+            and isinstance(parent.value, ast.Name)
+            and parent.value.id in pytest_names
+        ):
             return decorator
     return None
 
@@ -74,9 +101,13 @@ def _has_reason_kwarg(call: ast.Call) -> bool:
     )
 
 
-def _decorator_violates(decorator: ast.expr) -> bool:
+def _decorator_violates(
+    decorator: ast.expr,
+    pytest_names: set[str],
+    mark_names: set[str],
+) -> bool:
     for mark_name in _REASON_REQUIRED_MARKS:
-        match = _is_pytest_mark(decorator, mark_name)
+        match = _is_pytest_mark(decorator, mark_name, pytest_names, mark_names)
         if match is None:
             continue
         if not isinstance(match, ast.Call):
@@ -86,14 +117,20 @@ def _decorator_violates(decorator: ast.expr) -> bool:
     return False
 
 
-def _is_importorskip(node: ast.expr) -> ast.Call | None:
+def _is_importorskip(
+    node: ast.expr,
+    pytest_names: set[str],
+    importorskip_names: set[str],
+) -> ast.Call | None:
     if not isinstance(node, ast.Call):
         return None
     target = node.func
     if isinstance(target, ast.Attribute) and target.attr == "importorskip":
         inner = target.value
-        if isinstance(inner, ast.Name) and inner.id == "pytest":
+        if isinstance(inner, ast.Name) and inner.id in pytest_names:
             return node
+    if isinstance(target, ast.Name) and target.id in importorskip_names:
+        return node
     return None
 
 
@@ -101,12 +138,11 @@ def _importorskip_has_rationale(call: ast.Call, source_lines: list[str], lookbac
     if _has_reason_kwarg(call):
         return True
     line_idx = call.lineno - 1
-    if 0 <= line_idx < len(source_lines):
-        line = source_lines[line_idx]
-        if "#" in line:
-            after_hash = line.split("#", 1)[1].strip()
-            if after_hash:
-                return True
+    line = source_lines[line_idx]
+    if "#" in line:
+        after_hash = line.split("#", 1)[1].strip()
+        if after_hash:
+            return True
     for offset in range(1, lookback + 1):
         prev_idx = line_idx - offset
         if prev_idx < 0:
@@ -119,36 +155,43 @@ def _importorskip_has_rationale(call: ast.Call, source_lines: list[str], lookbac
     return False
 
 
-def _decorator_violations(node: ast.AST) -> list[int]:
-    if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-        return []
-    return [d.lineno for d in node.decorator_list if _decorator_violates(d)]
-
-
 def _pytestmark_candidates(value: ast.expr) -> list[ast.expr]:
     if isinstance(value, ast.List | ast.Tuple):
         return list(value.elts)
     return [value]
 
 
-def _pytestmark_violations(node: ast.AST) -> list[int]:
-    if not isinstance(node, ast.Assign):
+def _pytestmark_violations(node: ast.AST, pytest_names: set[str], mark_names: set[str]) -> list[int]:
+    if isinstance(node, ast.Assign):
+        targets: list[ast.expr] = node.targets
+        value: ast.expr | None = node.value
+    elif isinstance(node, ast.AnnAssign):
+        targets = [node.target]
+        value = node.value
+    else:
         return []
     out: list[int] = []
-    for target in node.targets:
+    for target in targets:
         if not (isinstance(target, ast.Name) and target.id == "pytestmark"):
             continue
-        for candidate in _pytestmark_candidates(node.value):
-            if _decorator_violates(candidate):
+        if value is None:
+            continue
+        for candidate in _pytestmark_candidates(value):
+            if _decorator_violates(candidate, pytest_names, mark_names):
                 out.append(candidate.lineno)
     return out
 
 
-def _importorskip_call(node: ast.AST) -> ast.Call | None:
+def _importorskip_call(
+    node: ast.AST,
+    pytest_names: set[str],
+    importorskip_names: set[str],
+) -> ast.Call | None:
     if isinstance(node, ast.Expr):
-        return _is_importorskip(node.value)
-    if isinstance(node, ast.Assign):
-        return _is_importorskip(node.value)
+        return _is_importorskip(node.value, pytest_names, importorskip_names)
+    if isinstance(node, ast.Assign | ast.AnnAssign):
+        if node.value is not None:
+            return _is_importorskip(node.value, pytest_names, importorskip_names)
     return None
 
 
@@ -158,21 +201,24 @@ def file_has_skip_without_reason(path: Path, *, importorskip_lookback: int) -> b
     Pure helper (the detection core) so tests assert on it directly: parses
     the module, then checks every skip/skipif/xfail decorator, every bare
     ``pytestmark`` assignment, and every ``importorskip`` call. A syntax /
-    decode error is treated as "no violation" (another check owns unparseable
-    files).
+    decode / read error is a violation because the configured source could not
+    be evaluated.
     """
     try:
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
     except (SyntaxError, UnicodeDecodeError, OSError):
-        return False
+        return True
     source_lines = source.splitlines()
+    pytest_names, mark_names, importorskip_names = _pytest_import_names(tree)
     for node in ast.walk(tree):
-        if _decorator_violations(node):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) and any(
+            _decorator_violates(decorator, pytest_names, mark_names) for decorator in node.decorator_list
+        ):
             return True
-        if _pytestmark_violations(node):
+        if _pytestmark_violations(node, pytest_names, mark_names):
             return True
-        call = _importorskip_call(node)
+        call = _importorskip_call(node, pytest_names, importorskip_names)
         if call is not None and not _importorskip_has_rationale(call, source_lines, importorskip_lookback):
             return True
     return False
@@ -216,7 +262,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> TestSk
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(TestSkipRationale, argv)
 
 

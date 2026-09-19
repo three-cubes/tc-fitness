@@ -11,7 +11,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.context import CheckContext
+
+pytestmark = pytest.mark.integration
 
 
 def test_python_files_indexes_and_skips_pycache(tmp_path: Path) -> None:
@@ -22,6 +26,13 @@ def test_python_files_indexes_and_skips_pycache(tmp_path: Path) -> None:
     ctx = CheckContext(repo_root=tmp_path)
     found = {p.name for p in ctx.python_files("pkg")}
     assert found == {"a.py"}
+    assert ctx.repo_root == tmp_path.resolve()
+
+
+def test_python_files_ignores_missing_roots(tmp_path: Path) -> None:
+    ctx = CheckContext(repo_root=tmp_path)
+
+    assert ctx.python_files("missing") == ()
 
 
 def test_python_files_memoised(tmp_path: Path) -> None:
@@ -96,10 +107,18 @@ def test_tree_for_returns_none_on_syntax_error(tmp_path: Path) -> None:
     assert ctx.tree_for(bad) is None
 
 
+def test_tree_for_returns_none_when_source_file_is_missing(tmp_path: Path) -> None:
+    ctx = CheckContext(repo_root=tmp_path)
+
+    assert ctx.tree_for(tmp_path / "missing.py") is None
+
+
 def test_source_for_caches_and_tolerates_missing(tmp_path: Path) -> None:
     f = tmp_path / "x.py"
     f.write_text("z = 3\n")
     ctx = CheckContext(repo_root=tmp_path)
+    assert ctx.source_for(f) == "z = 3\n"
+    f.write_text("z = 4\n")
     assert ctx.source_for(f) == "z = 3\n"
     assert ctx.source_for(tmp_path / "missing.py") is None
 

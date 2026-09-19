@@ -19,26 +19,27 @@ repo's rules. The fixtures prove:
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
 
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.runner import (
-    Colours,
     ConditionalResult,
     RunnerConfig,
-    Verdicts,
+    dispatches_in_process,
     main_cli,
     make_env_path_conditional_check,
-    print_aggregate,
-    resolve_script,
     run,
-    select_all,
-    select_gate,
+    staged_paths,
 )
+
+pytestmark = pytest.mark.integration
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -50,6 +51,7 @@ def _plain(text: str) -> str:
     (byte-identical to kairix's runner), which puts a reset escape between
     ``run [id]`` and the script name. Tests assert on the colour-free form."""
     return _ANSI_RE.sub("", text)
+
 
 # --------------------------------------------------------------------------- #
 # fixture helpers — write synthetic check modules + a catalogue into tmp_path
@@ -238,15 +240,11 @@ def test_inprocess_check_stdout_is_replayed_inline(
     assert "hello from the check" in out
 
 
-def test_inprocess_main_accepting_argv_is_called_with_empty_list(
-    checks_dir: Path, repo_root: Path
-) -> None:
+def test_inprocess_main_accepting_argv_is_called_with_empty_list(checks_dir: Path, repo_root: Path) -> None:
     # A check declaring main(argv) must be called with [] (the no-args
     # subprocess shape), NOT the runner's own sys.argv.
     (checks_dir / "check_argvy.py").write_text(
-        "def main(argv=None):\n"
-        "    assert argv == [], f'expected [], got {argv!r}'\n"
-        "    return 0\n"
+        "def main(argv=None):\n    assert argv == [], f'expected [], got {argv!r}'\n    return 0\n"
     )
     rules = (RuleEntry(id="AV", gate="av", check="argvy", summary="argv check"),)
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
@@ -263,9 +261,7 @@ def test_shell_detector_runs_as_subprocess(
 ) -> None:
     _write_sh_check(checks_dir, "check-shellgate.sh", exit_code=0)
     rules = (
-        RuleEntry(
-            id="S1", gate="s1", check="shellgate", summary="shell rule", script="check-shellgate.sh"
-        ),
+        RuleEntry(id="S1", gate="s1", check="shellgate", summary="shell rule", script="check-shellgate.sh"),
     )
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
     out = _plain(capsys.readouterr().out)
@@ -282,9 +278,7 @@ def test_shell_detector_nonzero_exit_is_a_fail(checks_dir: Path, repo_root: Path
 
 
 def test_missing_shell_script_is_a_fail_not_a_crash(checks_dir: Path, repo_root: Path) -> None:
-    rules = (
-        RuleEntry(id="S3", gate="s3", check="absent", summary="missing", script="check-absent.sh"),
-    )
+    rules = (RuleEntry(id="S3", gate="s3", check="absent", summary="missing", script="check-absent.sh"),)
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
     assert verdict.failures == ["S3"]
 
@@ -301,9 +295,7 @@ def test_parallel_subprocess_dispatch_matches_sequential_verdicts(
         RuleEntry(id="P3", gate="p3", check="p3", summary="p3", script="check-p3.sh"),
     )
 
-    verdict = run(
-        rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True
-    )
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
     out = _plain(capsys.readouterr().out)
 
     assert verdict.failures == ["P2"]
@@ -324,6 +316,255 @@ def test_parallel_replays_subprocess_output(
     run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
     out = _plain(capsys.readouterr().out)
     assert "DETECTOR-OUTPUT-MARKER" in out
+
+
+def test_parallel_mode_with_only_python_checks_needs_no_worker_results(
+    checks_dir: Path, repo_root: Path
+) -> None:
+    _write_py_check(checks_dir, "parallel_python", "return 0")
+    rules = (RuleEntry(id="PY", gate="py", check="parallel_python"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    assert verdict.ok
+    assert verdict.ran == 1
+
+
+def test_engine_core_rules_dispatch_inprocess_by_default() -> None:
+    entry = RuleEntry(id="CORE", gate="core", check="core:coverage_floor")
+
+    assert dispatches_in_process(entry)
+
+
+def test_parallel_replay_captures_stderr_from_a_real_subprocess(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = checks_dir / "stderr-only.sh"
+    script.write_text("#!/usr/bin/env bash\nprintf 'captured diagnostic\\n' >&2\n")
+    script.chmod(0o755)
+    rules = (RuleEntry(id="ERR", gate="err", check="err", script=script.name),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    captured = capsys.readouterr()
+    assert verdict.ok
+    assert "captured diagnostic" in captured.err
+
+
+def test_parallel_replay_reports_a_missing_script_as_a_failure(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rules = (RuleEntry(id="MISSING", gate="missing", check="missing", script="missing.sh"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    assert verdict.failures == ["MISSING"]
+    assert "check script not found: missing.sh" in _plain(capsys.readouterr().err)
+
+
+def test_parallel_replay_reports_a_real_child_launch_error(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = checks_dir / "missing-interpreter.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 0\n")
+    script.chmod(0o755)
+    rules = (RuleEntry(id="BAD-INTERPRETER", gate="bad-interpreter", check="bad", script=script.name),)
+
+    path = os.environ["PATH"]
+    os.environ["PATH"] = ""
+    try:
+        verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+    finally:
+        os.environ["PATH"] = path
+
+    assert verdict.failures == ["BAD-INTERPRETER"]
+    assert "could not launch missing-interpreter.sh" in _plain(capsys.readouterr().err)
+
+
+def test_parallel_replay_preserves_empty_skip_lines_from_the_conditional_factory(
+    checks_dir: Path, repo_root: Path
+) -> None:
+    env_var = f"TC_FITNESS_EMPTY_SKIP_{uuid.uuid4().hex.upper()}"
+    assert env_var not in os.environ
+    (checks_dir / "conditional.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (checks_dir / "conditional.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="EMPTY-SKIP",
+            gate="empty-skip",
+            check="conditional",
+            script="conditional.sh",
+            subprocess_arg_env=env_var,
+        ),
+    )
+    hook = make_env_path_conditional_check(
+        env_var=env_var,
+        default_rel="absent-report.xml",
+        repo_root=repo_root,
+    )
+
+    verdict = run(
+        rules,
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        parallel_subprocess=True,
+        conditional_check=hook,
+    )
+
+    assert verdict.ok
+    assert verdict.skipped == 1
+
+
+def test_parallel_conditional_subprocess_uses_a_real_environment_path(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env_var = f"TC_FITNESS_RUNTIME_PATH_{uuid.uuid4().hex.upper()}"
+    runtime_input = repo_root / "runtime-input.txt"
+    runtime_input.write_text("runtime input consumed\n")
+    script = checks_dir / "read-input.sh"
+    script.write_text('#!/usr/bin/env bash\ncat "$1"\n')
+    script.chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="RUNTIME-PATH",
+            gate="runtime-path",
+            check="read-input",
+            script=script.name,
+            subprocess_arg_env=env_var,
+        ),
+    )
+    assert env_var not in os.environ
+    os.environ[env_var] = str(runtime_input)
+    try:
+        verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+    finally:
+        del os.environ[env_var]
+
+    assert verdict.ok
+    assert "runtime input consumed" in _plain(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize(("footer_contents", "printed"), [("fix path from a file", True), ("", False)])
+def test_failed_check_uses_the_consumer_footer_file_when_nonempty(
+    checks_dir: Path,
+    repo_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    footer_contents: str,
+    printed: bool,
+) -> None:
+    footer_path = repo_root / "paved-road.txt"
+    footer_path.write_text(footer_contents)
+    _write_py_check(checks_dir, "footer_failure", "return 1")
+    rules = (RuleEntry(id="FOOTER", gate="footer", check="footer_failure"),)
+
+    def read_consumer_footer(entry: RuleEntry) -> str | None:
+        assert entry.id == "FOOTER"
+        return footer_path.read_text()
+
+    verdict = run(
+        rules,
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        paved_road_footer=read_consumer_footer,
+    )
+
+    out = _plain(capsys.readouterr().out)
+    assert verdict.failures == ["FOOTER"]
+    assert ("fix path from a file" in out) is printed
+
+
+def test_staged_mode_counts_a_builtin_conditional_skip(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env_var = f"TC_FITNESS_STAGED_SKIP_{uuid.uuid4().hex.upper()}"
+    assert env_var not in os.environ
+    script = checks_dir / "conditional.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 0\n")
+    script.chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="STAGED-SKIP",
+            gate="staged-skip",
+            check="conditional",
+            script=script.name,
+            subprocess_arg_env=env_var,
+            staged_class="always-run",
+        ),
+    )
+    hook = make_env_path_conditional_check(
+        env_var=env_var,
+        default_rel="absent-report.xml",
+        repo_root=repo_root,
+        absent_skip_lines=("skip [STAGED-SKIP] report absent",),
+    )
+
+    verdict = run(
+        rules,
+        mode="staged",
+        staged_files=["any-change.txt"],
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        conditional_check=hook,
+    )
+
+    assert verdict.ok
+    assert verdict.skipped == 1
+    assert "staged selection: 0 ran, 1 skipped" in _plain(capsys.readouterr().out)
+
+
+def test_staged_mode_deduplicates_two_rules_for_one_real_script(checks_dir: Path, repo_root: Path) -> None:
+    _write_py_check(checks_dir, "staged_shared", "return 0")
+    rules = (
+        RuleEntry(id="STAGED-FIRST", gate="staged-first", check="staged_shared", staged_class="always-run"),
+        RuleEntry(id="STAGED-SECOND", gate="staged-second", check="staged_shared", staged_class="always-run"),
+    )
+
+    verdict = run(
+        rules, mode="staged", staged_files=["changed.py"], repo_root=repo_root, checks_dir=checks_dir
+    )
+
+    assert verdict.ok
+    assert verdict.ran == 1
+
+
+def test_staged_mode_records_a_real_failing_python_check(checks_dir: Path, repo_root: Path) -> None:
+    _write_py_check(checks_dir, "staged_failure", "return 1")
+    rules = (
+        RuleEntry(id="STAGED-FAIL", gate="staged-fail", check="staged_failure", staged_class="always-run"),
+    )
+
+    verdict = run(
+        rules, mode="staged", staged_files=["changed.py"], repo_root=repo_root, checks_dir=checks_dir
+    )
+
+    assert verdict.failures == ["STAGED-FAIL"]
+
+
+def test_staged_paths_reads_a_real_staged_git_change(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    staged = tmp_path / "staged.txt"
+    staged.write_text("ready\n")
+    subprocess.run(["git", "add", "staged.txt"], cwd=tmp_path, check=True)
+
+    assert staged_paths(tmp_path) == ["staged.txt"]
+
+
+def test_staged_paths_fails_safe_outside_a_git_repository(tmp_path: Path) -> None:
+    assert staged_paths(tmp_path) == []
+
+
+def test_staged_paths_fails_safe_when_git_is_not_on_path(tmp_path: Path) -> None:
+    original_path = os.environ["PATH"]
+    os.environ["PATH"] = ""
+    try:
+        assert staged_paths(tmp_path) == []
+    finally:
+        os.environ["PATH"] = original_path
+
+
+def test_gate_mode_requires_an_identifier(repo_root: Path) -> None:
+    with pytest.raises(ValueError, match="requires gate_id"):
+        run((), mode="gate", repo_root=repo_root)
 
 
 # --------------------------------------------------------------------------- #
@@ -388,13 +629,9 @@ def test_gate_selects_one_rule_by_id(
     assert "G2" not in out
 
 
-def test_gate_unknown_id_returns_exit_2_via_main_cli(
-    checks_dir: Path, repo_root: Path
-) -> None:
+def test_gate_unknown_id_returns_exit_2_via_main_cli(checks_dir: Path, repo_root: Path) -> None:
     rules = (RuleEntry(id="X1", gate="x1", check="one", summary="one"),)
-    rc = main_cli(
-        rules, ["--gate", "nope"], repo_root=repo_root, checks_dir=checks_dir
-    )
+    rc = main_cli(rules, ["--gate", "nope"], repo_root=repo_root, checks_dir=checks_dir)
     assert rc == 2
 
 
@@ -462,9 +699,7 @@ def test_conditional_check_skips_when_input_absent_with_custom_text(
     assert "skip [COV] — coverage report not found" in out
 
 
-def test_conditional_check_runs_with_extra_args(
-    checks_dir: Path, repo_root: Path
-) -> None:
+def test_conditional_check_runs_with_extra_args(checks_dir: Path, repo_root: Path) -> None:
     # The shell detector asserts it received the runtime arg.
     (checks_dir / "check-cov2.sh").write_text(
         '#!/usr/bin/env bash\n[ "$1" = "/tmp/the-report.xml" ] && exit 0 || exit 9\n'
@@ -536,14 +771,6 @@ def test_main_cli_returns_1_on_failure(checks_dir: Path, repo_root: Path) -> Non
     assert rc == 1
 
 
-def test_resolve_script_default_and_override() -> None:
-    assert resolve_script(RuleEntry(id="X", gate="x", check="foo_bar")) == "check_foo_bar.py"
-    assert (
-        resolve_script(RuleEntry(id="X", gate="x", check="foo", script="check-foo.sh"))
-        == "check-foo.sh"
-    )
-
-
 def test_runner_config_puts_checks_dir_on_sys_path(checks_dir: Path, repo_root: Path) -> None:
     before = list(sys.path)
     try:
@@ -551,13 +778,6 @@ def test_runner_config_puts_checks_dir_on_sys_path(checks_dir: Path, repo_root: 
         assert str(checks_dir) in sys.path
     finally:
         sys.path[:] = before
-
-
-def test_verdicts_properties() -> None:
-    assert Verdicts(ran=3, failures=[]).ok is True
-    assert Verdicts(ran=3, failures=["A"]).ok is False
-    assert Verdicts(ran=3, failures=[]).exit_code == 0
-    assert Verdicts(ran=3, failures=["A"]).exit_code == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -609,7 +829,10 @@ def test_conditional_factory_skips_when_path_absent_with_exact_lines(
         env_var="MY_COV_XML",
         default_rel="coverage.xml",  # does not exist
         repo_root=tmp_path,
-        absent_skip_lines=("skip [F7] check_cov.py — coverage report not found", "   run: pytest --cov first"),
+        absent_skip_lines=(
+            "skip [F7] check_cov.py — coverage report not found",
+            "   run: pytest --cov first",
+        ),
     )
     result = hook(RuleEntry(id="F7", gate="f7", check="cov", subprocess_arg_env="MY_COV_XML"))
     assert result is not None
@@ -659,8 +882,12 @@ def test_conditional_factory_wires_into_runner_skip(
     _write_sh_check(checks_dir, "check-cov.sh", exit_code=0)
     rules = (
         RuleEntry(
-            id="COVE", gate="cove", check="cov", summary="coverage",
-            script="check-cov.sh", subprocess_arg_env="MY_COV_XML",
+            id="COVE",
+            gate="cove",
+            check="cov",
+            summary="coverage",
+            script="check-cov.sh",
+            subprocess_arg_env="MY_COV_XML",
         ),
     )
     hook = make_env_path_conditional_check(
@@ -691,12 +918,18 @@ def test_conditional_factory_per_entry_skip_line_differs_by_id(tmp_path: Path) -
         ),
     )
     f7 = RuleEntry(
-        id="F7", gate="f7", check="per_file_coverage",
-        script="check_per_file_coverage.py", subprocess_arg_env="MY_COV_XML",
+        id="F7",
+        gate="f7",
+        check="per_file_coverage",
+        script="check_per_file_coverage.py",
+        subprocess_arg_env="MY_COV_XML",
     )
     f9 = RuleEntry(
-        id="F9", gate="f9", check="per_file_coverage",
-        script="check_per_file_coverage.py", subprocess_arg_env="MY_COV_XML",
+        id="F9",
+        gate="f9",
+        check="per_file_coverage",
+        script="check_per_file_coverage.py",
+        subprocess_arg_env="MY_COV_XML",
     )
     r7 = hook(f7)
     r9 = hook(f9)
@@ -763,7 +996,11 @@ def test_main_cli_extra_flag_is_parsed_and_threaded_via_post_parse(
     _write_sh_check(checks_dir, "check-covx.sh", exit_code=1)
     rules = (
         RuleEntry(
-            id="CX", gate="cx", check="covx", summary="cov", script="check-covx.sh",
+            id="CX",
+            gate="cx",
+            check="covx",
+            summary="cov",
+            script="check-covx.sh",
             subprocess_arg_env="MY_COV_XML",
         ),
     )
@@ -795,15 +1032,17 @@ def test_main_cli_extra_flag_is_parsed_and_threaded_via_post_parse(
     assert "skip [CX] check-covx.sh — --skip-coverage" in out
 
 
-def test_main_cli_extra_flag_absent_defaults_and_dispatches(
-    checks_dir: Path, repo_root: Path
-) -> None:
+def test_main_cli_extra_flag_absent_defaults_and_dispatches(checks_dir: Path, repo_root: Path) -> None:
     # Without --skip-coverage the post_parse hook lets the rule run (and here the
     # report is absent → the factory skips on absence, not on force).
     _write_sh_check(checks_dir, "check-covy.sh", exit_code=0)
     rules = (
         RuleEntry(
-            id="CY", gate="cy", check="covy", summary="cov", script="check-covy.sh",
+            id="CY",
+            gate="cy",
+            check="covy",
+            summary="cov",
+            script="check-covy.sh",
             subprocess_arg_env="MY_COV_XML",
         ),
     )
@@ -830,9 +1069,7 @@ def test_main_cli_extra_flag_absent_defaults_and_dispatches(
     assert rc == 0  # skipped on absence (not forced); no failure registered
 
 
-def test_main_cli_without_extra_flags_is_byte_identical(
-    checks_dir: Path, repo_root: Path
-) -> None:
+def test_main_cli_without_extra_flags_is_byte_identical(checks_dir: Path, repo_root: Path) -> None:
     # The default (no extra_flags / post_parse) is unchanged from v0.3.0.
     _write_py_check(checks_dir, "plain", "return 0")
     rules = (RuleEntry(id="PL", gate="pl", check="plain", summary="plain"),)
@@ -848,9 +1085,7 @@ def test_main_cli_without_extra_flags_is_byte_identical(
 # --------------------------------------------------------------------------- #
 
 
-def test_script_path_override_resolves_outside_checks_dir(
-    tmp_path: Path, repo_root: Path
-) -> None:
+def test_script_path_override_resolves_outside_checks_dir(tmp_path: Path, repo_root: Path) -> None:
     # The override path is resolved relative to the REPO ROOT, not the checks
     # dir — taz's hermetic smoke lives at tests/smoke/hermetic.sh.
     checks_dir = repo_root / "scripts" / "checks"
@@ -861,8 +1096,12 @@ def test_script_path_override_resolves_outside_checks_dir(
     (smoke_dir / "hermetic.sh").chmod(0o755)
     rules = (
         RuleEntry(
-            id="HSMOKE", gate="hsmoke", check="hermetic", summary="hermetic smoke",
-            script="hermetic.sh", script_path_override="tests/smoke/hermetic.sh",
+            id="HSMOKE",
+            gate="hsmoke",
+            check="hermetic",
+            summary="hermetic smoke",
+            script="hermetic.sh",
+            script_path_override="tests/smoke/hermetic.sh",
         ),
     )
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
@@ -880,8 +1119,12 @@ def test_static_extra_args_always_appended(repo_root: Path) -> None:
     (checks_dir / "check-mut.sh").chmod(0o755)
     rules = (
         RuleEntry(
-            id="MUT", gate="mut", check="mut", summary="mutation ratchet",
-            script="check-mut.sh", static_extra_args=("--allow-missing-current",),
+            id="MUT",
+            gate="mut",
+            check="mut",
+            summary="mutation ratchet",
+            script="check-mut.sh",
+            static_extra_args=("--allow-missing-current",),
         ),
     )
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
@@ -900,8 +1143,12 @@ def test_env_gated_extra_arg_present_only_when_env_set(
     (checks_dir / "check-orphan.sh").chmod(0o755)
     rules = (
         RuleEntry(
-            id="ORPH", gate="orph", check="orphan", summary="orphan files",
-            script="check-orphan.sh", env_gated_extra_args=(("ORPHAN_FILES_STRICT", "--strict"),),
+            id="ORPH",
+            gate="orph",
+            check="orphan",
+            summary="orphan files",
+            script="check-orphan.sh",
+            env_gated_extra_args=(("ORPHAN_FILES_STRICT", "--strict"),),
         ),
     )
     # Env set → the gated arg appears → detector passes.
@@ -913,9 +1160,7 @@ def test_env_gated_extra_arg_present_only_when_env_set(
     assert not run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir).ok
 
 
-def test_static_and_env_gated_args_order(
-    repo_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_static_and_env_gated_args_order(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # static args come before env-gated args, both after any conditional arg.
     checks_dir = repo_root / "scripts" / "checks"
     checks_dir.mkdir(parents=True)
@@ -925,7 +1170,10 @@ def test_static_and_env_gated_args_order(
     (checks_dir / "check-both.sh").chmod(0o755)
     rules = (
         RuleEntry(
-            id="BOTH", gate="both", check="both", summary="both",
+            id="BOTH",
+            gate="both",
+            check="both",
+            summary="both",
             script="check-both.sh",
             static_extra_args=("--static",),
             env_gated_extra_args=(("GATE_ENV", "--gated"),),
@@ -958,9 +1206,7 @@ def test_dispatch_subprocess_routes_python_checks_through_subprocess(
         "    sys.exit(main())\n"
     )
     rules = (RuleEntry(id="SUBP", gate="subp", check="subp", summary="subp"),)
-    verdict = run(
-        rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, dispatch="subprocess"
-    )
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, dispatch="subprocess")
     out = _plain(capsys.readouterr().out)
     assert verdict.ok
     assert verdict.ran == 1
@@ -986,9 +1232,7 @@ def test_dispatch_subprocess_produces_same_aggregate_banner(
         RuleEntry(id="SO", gate="so", check="sp_ok", summary="ok"),
         RuleEntry(id="SB", gate="sb", check="sp_bad", summary="bad"),
     )
-    verdict = run(
-        rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, dispatch="subprocess"
-    )
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, dispatch="subprocess")
     out = _plain(capsys.readouterr().out)
     assert verdict.failures == ["SB"]
     assert "1/2 rule(s) failed: SB" in out
@@ -1004,11 +1248,7 @@ def test_main_cli_dispatch_subprocess_kwarg(checks_dir: Path, repo_root: Path) -
 def test_default_dispatch_is_inprocess(checks_dir: Path, repo_root: Path) -> None:
     # The v0.3.0 default: pure-python checks run in-process (no dispatch kwarg).
     marker = repo_root / "should_not_exist.txt"
-    (checks_dir / "check_ip.py").write_text(
-        "import os\n"
-        "def main():\n"
-        "    return 0\n"
-    )
+    (checks_dir / "check_ip.py").write_text("import os\ndef main():\n    return 0\n")
     rules = (RuleEntry(id="IP", gate="ip", check="ip", summary="ip"),)
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
     assert verdict.ok
@@ -1018,79 +1258,25 @@ def test_default_dispatch_is_inprocess(checks_dir: Path, repo_root: Path) -> Non
 # promoted ledger primitives -------------------------------------------------- #
 
 
-def test_select_all_is_public_and_filters_run_all_and_proposed() -> None:
-    rules = (
-        RuleEntry(id="A", gate="a", check="a"),
-        RuleEntry(id="B", gate="b", check="b", run_all=False),
-        RuleEntry(id="C", gate="c", check="(proposed)", status="proposed"),
-    )
-    assert [e.id for e in select_all(rules)] == ["A"]
-
-
-def test_select_gate_is_public_and_case_insensitive() -> None:
-    rules = (RuleEntry(id="F26", gate="f26", check="x"),)
-    assert [e.id for e in select_gate(rules, "f26")] == ["F26"]
-    assert select_gate(rules, "nope") == []
-
-
-def test_print_aggregate_is_public(capsys: pytest.CaptureFixture[str]) -> None:
-    print_aggregate(Verdicts(ran=2, failures=[]))
-    assert "All 2 architecture fitness functions passed" in _plain(capsys.readouterr().out)
-    print_aggregate(Verdicts(ran=2, failures=["X"]))
-    assert "1/2 rule(s) failed: X" in _plain(capsys.readouterr().out)
-
-
-def test_colours_namespace_is_public() -> None:
-    # The colours taz imports as private _GREEN/_RED/_RESET/_YELLOW are exposed
-    # as a public namespace.
-    assert Colours.GREEN == "\033[0;32m"
-    assert Colours.RED == "\033[0;31m"
-    assert Colours.YELLOW == "\033[0;33m"
-    assert Colours.RESET == "\033[0m"
-
-
-def test_underscore_aliases_still_re_exported() -> None:
-    # Back-compat: taz's private imports keep resolving until it migrates.
-    from tc_fitness.runner import (
-        _GREEN,
-        _RED,
-        _RESET,
-        _YELLOW,
-        _print_aggregate,
-        _select_all,
-        _select_gate,
-    )
-
-    assert _print_aggregate is print_aggregate
-    assert _select_all is select_all
-    assert _select_gate is select_gate
-    assert (_GREEN, _RED, _YELLOW, _RESET) == (
-        Colours.GREEN,
-        Colours.RED,
-        Colours.YELLOW,
-        Colours.RESET,
-    )
-
-
 def test_argv_exception_fields_work_in_parallel_dispatch(
     repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The same argv assembly must hold on the parallel subprocess path.
     checks_dir = repo_root / "scripts" / "checks"
     checks_dir.mkdir(parents=True)
-    (checks_dir / "check-par.sh").write_text(
-        '#!/usr/bin/env bash\n[ "$1" = "--s" ] && exit 0 || exit 6\n'
-    )
+    (checks_dir / "check-par.sh").write_text('#!/usr/bin/env bash\n[ "$1" = "--s" ] && exit 0 || exit 6\n')
     (checks_dir / "check-par.sh").chmod(0o755)
     rules = (
         RuleEntry(
-            id="PAR", gate="par", check="par", summary="par",
-            script="check-par.sh", static_extra_args=("--s",),
+            id="PAR",
+            gate="par",
+            check="par",
+            summary="par",
+            script="check-par.sh",
+            static_extra_args=("--s",),
         ),
     )
-    assert run(
-        rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True
-    ).ok
+    assert run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True).ok
 
 
 # --------------------------------------------------------------------------- #
@@ -1162,19 +1348,3 @@ def test_core_entry_in_process_even_under_subprocess_dispatch(
     assert not verdict.ok
     assert "FAIL [no-duplicate-string]" in out
     assert "check script not found" not in out
-
-
-def test_core_entry_establish_baseline_then_passes(repo_root: Path) -> None:
-    (repo_root / "src").mkdir()
-    (repo_root / "src" / "dup.py").write_text(_CORE_DUP_FIXTURE, encoding="utf-8")
-    cfg_kwargs = {
-        "repo_root": repo_root,
-        "core_check_configs": {"no_duplicate_string": {"roots": ["src"]}},
-    }
-    # Establish writes the baseline and passes…
-    assert run(_core_rule(), mode="all", establish_baseline=True, **cfg_kwargs).ok  # type: ignore[arg-type]
-    baseline = repo_root / ".architecture" / "baseline" / "no-duplicate-string-files.txt"
-    assert baseline.exists()
-    assert "src/dup.py" in baseline.read_text(encoding="utf-8")
-    # …and the subsequent gate run passes (offender grandfathered).
-    assert run(_core_rule(), mode="all", **cfg_kwargs).ok  # type: ignore[arg-type]

@@ -1,8 +1,8 @@
 """Shared strict loading and protocol primitives for runtime contract checks.
 
 The public helpers in this module deliberately use only the standard library
-for JSON. YAML remains an optional input format and is imported only when a
-consumer selects a ``.yaml`` or ``.yml`` registry.
+for JSON. YAML is parsed using the required PyYAML runtime dependency, imported
+when a consumer selects a ``.yaml`` or ``.yml`` registry.
 """
 
 from __future__ import annotations
@@ -453,8 +453,8 @@ def _load_strict_yaml(
                 source,
                 "/",
                 "yaml-dependency-missing",
-                "YAML contract selected but the optional PyYAML dependency is not installed",
-                "install three-cubes-fitness[yaml] or use a JSON contract",
+                "YAML contract selected but the required PyYAML runtime dependency is not installed",
+                "repair the three-cubes-fitness installation or use a JSON contract",
             ),
         )
 
@@ -1120,7 +1120,7 @@ def load_contract_documents(
 
 
 class RuntimeContractRule(FitnessRule):
-    """Hard-adoption base for contract checks: findings cannot be baselined."""
+    """Base for runtime contract checks backed by bound evidence documents."""
 
     name: ClassVar[str] = "runtime-contract"
     remediation: ClassVar[str] = (
@@ -1181,20 +1181,12 @@ class RuntimeContractRule(FitnessRule):
         return sort_findings((*config_findings, *self.validate_documents(documents)))
 
     def run(self) -> int:
-        """Fail on every finding; intentionally bypass per-file baselines."""
+        """Fail on every finding."""
         findings = self.collect_findings()
         if not findings:
             return 0
         render_findings(findings)
         return 1
-
-    def establish_baseline(self) -> Path:
-        """Validate active runtime documents and reject grandfathering defects."""
-        findings = self.collect_findings()
-        if findings:
-            render_findings(findings)
-            raise RuntimeError("runtime contract findings cannot establish a baseline")
-        return super().establish_baseline()
 
 
 __all__ = [

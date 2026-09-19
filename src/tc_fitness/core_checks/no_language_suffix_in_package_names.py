@@ -118,8 +118,6 @@ class NoLanguageSuffixInPackageNames(FitnessRule):
         return rule
 
     def _visible_child_dirs(self, parent: Path) -> list[Path]:
-        if not parent.is_dir():
-            return []
         return [c for c in sorted(parent.iterdir()) if c.is_dir() and not c.name.startswith(".")]
 
     def is_in_scope(self, rel: str) -> bool:
@@ -131,15 +129,25 @@ class NoLanguageSuffixInPackageNames(FitnessRule):
         """Enumerate the boundary directories (depth-1 + marker-gated depth-2)."""
         out: list[Path] = []
         for boundary in self.boundary_roots:
-            out.extend(self._visible_child_dirs(self._repo_root / boundary))
+            root = self._repo_root / boundary
+            if not root.is_dir():
+                out.append(root)
+            else:
+                out.extend(self._visible_child_dirs(root))
         for marker_root in self.marker_roots:
-            for scope in self._visible_child_dirs(self._repo_root / marker_root):
+            root = self._repo_root / marker_root
+            if not root.is_dir():
+                out.append(root)
+                continue
+            for scope in self._visible_child_dirs(root):
                 for leaf in self._visible_child_dirs(scope):
                     if (leaf / self.marker_file).is_file():
                         out.append(leaf)
         return out
 
     def file_has_violation(self, path: Path) -> bool:
+        if not path.is_dir():
+            return True
         return name_has_language_suffix(path.name, suffixes=self.forbidden_suffixes)
 
 
@@ -153,7 +161,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoLanguageSuffixInPackageNames, argv)
 
 

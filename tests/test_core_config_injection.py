@@ -18,8 +18,7 @@ The proofs:
 - the configured CORE check REPORTS the violation (the gate FAILs, the file is
   flagged) — config was injected and the right tree scanned;
 - a clean tree PASSes;
-- ``--establish-baseline`` writes ``.architecture/baseline/no-duplicate-string-files.txt``
-  and the subsequent gate run PASSes (the offender is grandfathered);
+- a configured violation is always a hard failure;
 - a ``core:`` entry dispatches IN-PROCESS even under ``dispatch = "subprocess"``
   (never the non-existent ``tc_fitness/core_checks/<module>.py`` script path);
 - a CORE entry with NO config block stays vacuous (the pre-v0.6.1 behaviour —
@@ -34,8 +33,10 @@ from pathlib import Path
 
 import pytest
 
-from tc_fitness.gate import main, run_gate
+from tc_fitness.gate import run_gate
 from tc_fitness.gate_config import load_config
+
+pytestmark = pytest.mark.integration
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -213,35 +214,5 @@ def test_core_check_dispatches_in_process_under_subprocess_mode(
 
 
 # --------------------------------------------------------------------------- #
-# --establish-baseline writes the baseline; the subsequent run passes.
+# A configured violation remains a hard failure.
 # --------------------------------------------------------------------------- #
-
-
-def test_establish_baseline_then_run_passes(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    _scaffold(repo, src_body=_DUP_BODY, core_block=_CORE_BLOCK)
-
-    # 1) Establish mode through the REAL console entrypoint.
-    rc_establish = main(["run", "--repo-root", str(repo), "--establish-baseline"])
-    establish_out = _plain(capsys.readouterr().out)
-    assert rc_establish == 0, "establish mode exits 0 (it freezes, it never gates)"
-
-    baseline = _baseline_file(repo)
-    assert baseline.exists(), "establish mode must write the per-file baseline"
-    body = baseline.read_text(encoding="utf-8")
-    assert "src/dup.py" in body, "the offender is frozen into the baseline"
-    assert "established baseline:" in establish_out
-
-    # 2) A normal run now PASSes — the offender is grandfathered, nothing net-new.
-    rc_run = main(["run", "--repo-root", str(repo)])
-    assert rc_run == 0, "after establishing, the run gates only on NET-NEW offenders"
-
-
-def test_net_new_offender_fails_after_baseline(repo: Path) -> None:
-    # Freeze src/dup.py as the baseline, then add a SECOND duplicate file: the
-    # grandfathered file is tolerated but the net-new one FAILs — proving the
-    # baseline path is wired through the configured-roots scan.
-    _scaffold(repo, src_body=_DUP_BODY, core_block=_CORE_BLOCK)
-    assert main(["run", "--repo-root", str(repo), "--establish-baseline"]) == 0
-
-    (repo / "src" / "dup2.py").write_text(_DUP_BODY, encoding="utf-8")
-    assert main(["run", "--repo-root", str(repo)]) == 1, "a net-new offender must gate"

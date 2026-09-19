@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tc_fitness.core_checks.no_real_names import NoRealNames, build, file_has_real_name, main
+import pytest
+
+from tc_fitness.core_checks.no_real_names import build, file_has_real_name
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:
@@ -61,18 +65,41 @@ def test_empty_tokens_is_noop(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is False
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "examples/a.md", "AcmeCorp")
-    rule = NoRealNames.from_config(
-        {"roots": ["examples"], "tokens": ["AcmeCorp"], "extensions": [".md"]}, repo_root=tmp_path
+def test_file_outside_root_is_still_scanned_without_scope_filter(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    outside = _seed(tmp_path, "external/examples/case.md", "AcmeCorp")
+
+    assert (
+        file_has_real_name(
+            outside,
+            tokens=["AcmeCorp"],
+            scope_segments=[],
+            repo_root=repository,
+        )
+        is True
     )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
 
 
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "examples/a.md", "AcmeCorp")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-real-names-files.txt").exists()
+def test_missing_and_binary_files_do_not_report_names(tmp_path: Path) -> None:
+    binary = tmp_path / "examples/binary.md"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_bytes(b"AcmeCorp\xff")
+
+    assert (
+        file_has_real_name(
+            tmp_path / "examples/missing.md",
+            tokens=["AcmeCorp"],
+            scope_segments=[],
+            repo_root=tmp_path,
+        )
+        is False
+    )
+    assert (
+        file_has_real_name(
+            binary,
+            tokens=["AcmeCorp"],
+            scope_segments=[],
+            repo_root=tmp_path,
+        )
+        is False
+    )

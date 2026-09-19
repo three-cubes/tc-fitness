@@ -68,6 +68,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -288,6 +289,8 @@ def collect_node_ids(
         )
     except subprocess.TimeoutExpired as exc:  # pragma: no cover - defensive
         raise SuiteRunError(f"collection timed out after {timeout}s") from exc
+    except OSError as exc:
+        raise SuiteRunError(f"configured test command unavailable: {command[0]}") from exc
     return parse_collected(result.stdout)
 
 
@@ -322,6 +325,8 @@ def run_suite(
         )
     except subprocess.TimeoutExpired as exc:
         raise SuiteRunError(f"run {spec.label!r} timed out after {timeout}s") from exc
+    except OSError as exc:
+        raise SuiteRunError(f"configured test command unavailable: {command[0]}") from exc
     outcomes = parse_outcomes(result.stdout)
     if not outcomes:
         raise SuiteRunError(
@@ -370,9 +375,8 @@ def format_failure(divergences: Sequence[Divergence]) -> str:
 class DeterministicTests(FitnessRule):
     """Gate that FAILS when a configured test suite is not run-to-run stable.
 
-    Unlike a file-scan rule this has no per-file baseline — non-determinism is
-    not a grandfatherable debt, it is a hard gate — so :meth:`run` is overridden
-    to drive the suite rather than compare a violation set against a baseline.
+    Unlike a file-scan rule this drives the configured suite directly, so
+    :meth:`run` is overridden to evaluate its process outcomes.
     """
 
     name = "deterministic-tests"
@@ -446,27 +450,32 @@ class DeterministicTests(FitnessRule):
         plan = plan_runs(self.repeats, self.order_seeds)
         need_node_ids = not self.use_randomly and any(spec.order_seed is not None for spec in plan)
         node_ids: list[str] = []
-        if need_node_ids:
-            node_ids = collect_node_ids(
-                self.test_command,
-                test_paths,
-                repo_root=self._repo_root,
-                seed=self.seed,
-                timeout=self.timeout_seconds,
-            )
-            if not node_ids:
-                print("ok [deterministic-tests] — no tests collected under the configured roots.")
-                return 0
-
         try:
+            if need_node_ids:
+                node_ids = collect_node_ids(
+                    self.test_command,
+                    test_paths,
+                    repo_root=self._repo_root,
+                    seed=self.seed,
+                    timeout=self.timeout_seconds,
+                )
+                if not node_ids:
+                    print("ok [deterministic-tests] — no tests collected under the configured roots.")
+                    return 0
             divergences = detect_nondeterminism(plan, self._runner(test_paths, node_ids))
         except SuiteRunError as exc:
+            if str(exc).startswith("configured test command unavailable:"):
+                report_finding("dependency-unavailable", ".", str(exc), status="error")
+                print(f"ERROR [deterministic-tests] — {exc}")
+                return 2
             print(f"FAIL [deterministic-tests] — could not establish determinism: {exc}")
             print()
             print(self.remediation)
             return 1
 
         if divergences:
+            for divergence in divergences:
+                report_finding("non-deterministic-test", divergence.test_id, divergence.outcomes[0][0])
             print(format_failure(divergences))
             return 1
         print(f"ok [deterministic-tests] — stable across {len(plan)} runs (seed={self.seed}).")
@@ -479,7 +488,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> Determ
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(DeterministicTests, argv)
 
 

@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_language_suffix_in_package_names
+config: {"boundary_roots":["packages"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-language-suffix-in-package-names
+          path: packages/formatter-py
+          message_contains: "name describes the work"
+dependencies: []

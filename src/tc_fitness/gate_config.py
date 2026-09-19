@@ -409,6 +409,12 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
             "next: re-run tc-fitness run"
         )
 
+    if "baseline_free" in raw:
+        raise GateConfigError(
+            f"step {step_id!r} declares removed option `baseline_free`; "
+            "fitness findings are always hard failures"
+        )
+
     env = _coerce_env(raw["env"], step_id=step_id) if "env" in raw else {}
     shard_args = (
         _coerce_str_tuple(raw["shard_args"], field_name="shard_args", step_id=step_id)

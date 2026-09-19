@@ -12,14 +12,12 @@ Because both shell out to the SAME command reading the SAME ``[tool.tc_fitness]`
 declaration, the gate has exactly one definition. There is no hand-copied pytest
 block to drift between ``scripts/ci/check.sh`` and ``ci.yml``.
 
-What it does NOT do
--------------------
-The engine orchestrates STEPS; it never owns a repo's specifics. The pytest
-scope, the ``--cov`` roots, the ruff/bandit targets, the detect-secrets baseline,
-and the consumer's fitness-check catalogue are all CONFIG (each a declared step),
-never baked into this module. Adding a step is a config edit in the consumer,
-not an engine change — that is the whole point (a reusable workflow that took
-these as *inputs* would just relocate the per-repo coupling into YAML).
+Configuration ownership
+-----------------------
+The engine owns step orchestration. Each consumer config declares its pytest
+scope, coverage roots, ruff and bandit targets, detect-secrets inputs, and
+fitness-check catalogue. Adding a repository-specific step changes that
+consumer config; shared orchestration remains in this module.
 
 Step kinds
 ----------
@@ -52,6 +50,7 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 
+from tc_fitness.catalogue import RuleEntry
 from tc_fitness.gate_config import (
     GateConfig,
     GateConfigError,
@@ -221,12 +220,14 @@ def _run_command_step(step: StepSpec, repo_root: Path, *, shard: tuple[int, int]
     return StepResult(step.id, "fail", gating=not step.continue_on_error)
 
 
-def _resolve_catalogue(ref: str) -> tuple[object, ...]:
+def _resolve_catalogue(ref: str) -> tuple[RuleEntry, ...]:
     """Import ``module.path:attr`` and return the ``tuple[RuleEntry, ...]``."""
     module_path, _, attr = ref.partition(":")
     module = import_module(module_path)
-    rules = getattr(module, attr)
-    return tuple(rules)
+    rules = tuple(getattr(module, attr))
+    if any(not isinstance(rule, RuleEntry) for rule in rules):
+        raise ValueError("catalogue entries must use tc_fitness.catalogue.RuleEntry")
+    return rules
 
 
 def _run_catalogue_step(
@@ -234,7 +235,6 @@ def _run_catalogue_step(
     repo_root: Path,
     gate_id: str | None,
     *,
-    establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
 ) -> StepResult:
@@ -255,7 +255,7 @@ def _run_catalogue_step(
     Any ``core:<module>`` entry in the catalogue receives its
     ``[tool.tc_fitness.core_checks.<module>]`` config block (read from the SAME
     repo config the gate loaded) so the CORE check scans the consumer's
-    configured tree. ``establish_baseline`` runs those entries in adoption mode.
+    configured tree.
     """
     # `kind == "catalogue"` guarantees `catalogue` is set (loader invariant).
     catalogue_ref = step.catalogue or ""
@@ -273,7 +273,7 @@ def _run_catalogue_step(
         sys.path.insert(0, repo_root_str)
     try:
         rules = _resolve_catalogue(catalogue_ref)
-    except (ImportError, AttributeError) as exc:
+    except (ImportError, AttributeError, ValueError) as exc:
         print(f"{_RED}FAIL [{step.id}]{_RESET} could not load catalogue {catalogue_ref!r}: {exc}")
         print(f'   fix: confirm the `catalogue = "module:attr"` ref resolves from {repo_root}')
         _print_fix_next(step)
@@ -288,11 +288,9 @@ def _run_catalogue_step(
         argv = ["--staged"]
     else:
         argv = ["--all"]
-    if establish_baseline:
-        argv.append("--establish-baseline")
     core_check_configs = load_core_check_configs(repo_root)
     rc = main_cli(
-        rules,  # type: ignore[arg-type]
+        rules,
         argv,
         repo_root=repo_root_for_step,
         checks_dir=checks_dir,
@@ -314,7 +312,6 @@ def _run_step(
     repo_root: Path,
     gate_id: str | None,
     *,
-    establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
     shard: tuple[int, int] | None = None,
@@ -324,7 +321,6 @@ def _run_step(
             step,
             repo_root,
             gate_id,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
         )
@@ -351,7 +347,6 @@ def run_gate(
     *,
     only: list[str] | None = None,
     gate_id: str | None = None,
-    establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
     shard: tuple[int, int] | None = None,
@@ -361,8 +356,6 @@ def run_gate(
 
     ``only`` restricts to the named step ids (in config order); ``gate_id`` is
     threaded into a catalogue step so a single fitness rule can be targeted.
-    ``establish_baseline`` runs the catalogue step's ``core:`` entries in
-    baseline-adoption mode (freeze today's offenders) instead of gating.
 
     ``staged`` selects the ``<60s`` smoke tier: catalogue steps run through the
     runner's sound per-rule ``--staged`` selection, and every step a repo has
@@ -405,7 +398,6 @@ def run_gate(
         repo_root,
         selected,
         gate_id=gate_id,
-        establish_baseline=establish_baseline,
         staged=staged,
         changed_files=changed_files,
         shard=shard,
@@ -429,7 +421,6 @@ def _run_sequential(
     selected: Sequence[StepSpec],
     *,
     gate_id: str | None,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
     shard: tuple[int, int] | None,
@@ -448,7 +439,6 @@ def _run_sequential(
             step,
             repo_root,
             gate_id,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
             shard=shard,
@@ -476,7 +466,6 @@ def _run_scheduled(
     selected: Sequence[StepSpec],
     *,
     gate_id: str | None,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
     shard: tuple[int, int] | None,
@@ -495,7 +484,6 @@ def _run_scheduled(
             repo_root,
             gate_id,
             shard=shard,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
             max_workers=cfg.max_workers,
@@ -509,8 +497,7 @@ def _run_scheduled(
                 continue
             oc = outcomes[s.id]
             if not oc.printed:
-                if oc.out:
-                    sys.stdout.write(oc.out)
+                sys.stdout.write(oc.out)
                 if oc.err:
                     sys.stderr.write(oc.err)
             outcome.results.append(oc.result)
@@ -527,7 +514,6 @@ def _execute_stage(
     gate_id: str | None,
     *,
     shard: tuple[int, int] | None,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
     max_workers: int,
@@ -545,7 +531,6 @@ def _execute_stage(
                 s,
                 repo_root,
                 gate_id,
-                establish_baseline=establish_baseline,
                 staged=staged,
                 changed_files=changed_files,
                 shard=shard,
@@ -568,7 +553,6 @@ def _execute_stage(
                 s,
                 repo_root,
                 gate_id,
-                establish_baseline=establish_baseline,
                 staged=staged,
                 changed_files=changed_files,
             )
@@ -628,7 +612,6 @@ def _capture_catalogue_step(
     repo_root: Path,
     gate_id: str | None,
     *,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
 ) -> _StepOutcome:
@@ -640,7 +623,6 @@ def _capture_catalogue_step(
             step,
             repo_root,
             gate_id,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
         )
@@ -660,15 +642,29 @@ def main(argv: list[str] | None = None) -> int:
       ``--changed-files-from PATH`` runs the same smoke tier against a CI
       supplied PR-diff file list.
     """
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "assure-coverage":
+        from tc_fitness.coverage_transaction import main as coverage_main
+
+        return coverage_main(arguments[1:])
+    if arguments and arguments[0] == "mutation":
+        from tc_fitness.mutation_assurance import main as mutation_main
+
+        return mutation_main(arguments[1:])
     parser = argparse.ArgumentParser(
         prog="tc-fitness",
         description="The single runnable quality gate — local == CI by construction.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("assure-coverage", help="fresh exact-base/candidate self-coverage transaction")
+    sub.add_parser("mutation", help="produce or verify exact-candidate native mutation assurance")
     run_p = sub.add_parser("run", help="run the repo's declared [tool.tc_fitness] gate")
+    run_p.add_argument("--contract", type=Path, help="execute a check-contract manifest case")
+    run_p.add_argument("--case", help="case id within --contract")
+    run_p.add_argument("--ledger", type=Path, help="write structured check-case evidence")
     run_p.add_argument(
         "--repo-root",
-        default=".",
+        default=None,
         help="repo root holding the gate config (default: CWD)",
     )
     run_p.add_argument(
@@ -707,15 +703,34 @@ def main(argv: list[str] | None = None) -> int:
         help="run only steps whose `tags` include NAME (e.g. smoke/full/nightly); "
         "composes with --only, --staged and --changed-files-from",
     )
-    run_p.add_argument(
-        "--establish-baseline",
-        action="store_true",
-        help="run the catalogue step's core: entries in baseline-adoption mode "
-        "(freeze today's offenders), then exit",
-    )
     args = parser.parse_args(argv)
 
-    repo_root = Path(args.repo_root).resolve()
+    contract_mode = any(value is not None for value in (args.contract, args.case, args.ledger))
+    if contract_mode:
+        if any(value is None for value in (args.contract, args.case, args.ledger)):
+            run_p.error("--contract, --case and --ledger are required together")
+        if any(
+            (
+                args.repo_root is not None,
+                args.only,
+                args.gate,
+                args.staged,
+                args.changed_files_from,
+                args.shard,
+                args.tier,
+            )
+        ):
+            run_p.error("contract arguments cannot be combined with ordinary gate options")
+        from tc_fitness.check_contract_execution import execute_contract_case
+        from tc_fitness.check_contracts import CheckContractError
+
+        try:
+            return execute_contract_case(args.contract.resolve(), args.case, args.ledger.resolve())
+        except (CheckContractError, OSError) as exc:
+            print(f"FAIL check contract: {exc}", file=sys.stderr)
+            return 2
+
+    repo_root = Path(args.repo_root or ".").resolve()
     try:
         cfg = load_config(repo_root)
     except GateConfigError as exc:
@@ -742,7 +757,6 @@ def main(argv: list[str] | None = None) -> int:
         repo_root,
         only=args.only,
         gate_id=args.gate,
-        establish_baseline=bool(args.establish_baseline),
         staged=bool(args.staged),
         changed_files=changed_files,
         shard=shard,

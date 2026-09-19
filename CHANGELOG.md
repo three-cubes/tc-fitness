@@ -10,12 +10,35 @@ schedule.
 
 The package is the single source for the helper + runner code kairix and
 tc-agent-zone previously maintained as two slowly-drifting copies. It is pure
-stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
+Python at runtime (PyYAML supplies required manifest parsing) and must never import
 `kairix` or `tc-agent-zone` — it is the shared core both depend on.
 
 ## [Unreleased]
 
+### Added
+
+- **Structured check-contract execution** — `tc-fitness run --contract --case
+  --ledger` executes a fixture through the existing CORE dispatcher and retains
+  versioned evidence binding inputs, candidate source, terminal outcomes and
+  findings. The public process helper rejects missing, stale, mismatched or
+  unexpected evidence; unavailable declared executables are explicit errors.
+
 ### Changed
+
+- **Contract assurance rejects mutable or suppressed proof** — snapshot inputs
+  and candidate source before dispatch, reject execution-time mutations and
+  baseline influence, and exercise unavailable cases through real checks using
+  a versioned per-case environment declaration. Checkov is an absolute clean-scan
+  gate: any finding, parser error, unavailable executable, malformed report or
+  scanner failure blocks. It no longer reads or writes a findings baseline; the
+  dev environment pins Checkov 3.2.531 and the integration contract runs that
+  executable against compliant and violating Bicep fixtures. Shared baseline
+  suppression remains disabled during assurance of checks that use baselines;
+  ordinary consumer baseline semantics are unchanged.
+  A reviewed per-CORE option inventory now rejects unknown aliases, adoption
+  modes and exclusion overrides in assurance while retaining normal consumer
+  configuration. Mutation reports and OSV contracts require strict missing-input
+  behaviour; expected identities and detector thresholds remain configurable.
 
 - **Commit identity guidance now separates metadata from authentication** —
   `canonical_commit_identity` validates Git author and committer metadata; it

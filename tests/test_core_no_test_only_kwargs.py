@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_test_only_kwargs import (
     NoTestOnlyKwargs,
     build,
     find_test_only_kwargs_in_file,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 _SEAM = """
 def route(intent, clock_fn=None):
@@ -48,9 +50,51 @@ def test_detection_clean(tmp_path: Path) -> None:
     assert find_test_only_kwargs_in_file(p, suffixes=("_fn",)) == []
 
 
+def test_keyword_only_seam_is_reported_but_required_parameter_is_not(tmp_path: Path) -> None:
+    body = """def route(intent, *, clock_fn=None):
+    return intent
+
+def required(clock_fn):
+    return clock_fn()
+"""
+    _seed(tmp_path, "src/router.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_required_or_non_none_seam_suffix_is_not_a_test_seam(tmp_path: Path) -> None:
+    body = "def required(*, clock_fn):\n    return clock_fn()\n"
+    body += "def production(*, clock_fn=system_clock):\n    return clock_fn()\n"
+    _seed(tmp_path, "src/router.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 0
+
+
 def test_methods_on_class_are_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "deps.py", _METHOD_EXEMPT)
     assert find_test_only_kwargs_in_file(p, suffixes=("_fn",)) == []
+
+
+def test_nested_local_function_is_still_a_free_function(tmp_path: Path) -> None:
+    body = """class Router:
+    def handle(self):
+        def select(clock_fn=None):
+            return 1
+        return select()
+"""
+    _seed(tmp_path, "src/router.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_unparseable_configured_source_is_reported(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/router.py", "def route(:\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
 
 
 def test_suffixes_are_config_driven(tmp_path: Path) -> None:
@@ -64,13 +108,13 @@ def test_suffixes_are_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in custom.collect_violations()} == {"scripts/m.py"}
 
 
-def test_exempt_keys_allow_documented_seam(tmp_path: Path) -> None:
+def test_exempt_keys_cannot_hide_a_test_only_seam(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/router.py", _SEAM)
-    rule = NoTestOnlyKwargs.from_config(
-        {"roots": ["scripts"], "exempt_keys": ["scripts/router.py::route::clock_fn"]},
-        repo_root=tmp_path,
-    )
-    assert rule.collect_violations() == set()
+    with pytest.raises(ValueError, match="exempt_keys"):
+        NoTestOnlyKwargs.from_config(
+            {"roots": ["scripts"], "exempt_keys": ["scripts/router.py::route::clock_fn"]},
+            repo_root=tmp_path,
+        )
 
 
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
@@ -78,21 +122,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/router.py", _SEAM)
     rule = NoTestOnlyKwargs.from_config({"roots": ["scripts"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"scripts/router.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "scripts/router.py", _SEAM)
-    rule = NoTestOnlyKwargs.from_config({"roots": ["scripts"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "router.py", _SEAM)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-test-only-kwargs-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

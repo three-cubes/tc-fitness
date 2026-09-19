@@ -5,12 +5,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.bicep_arm_lint import (
     BicepArmLint,
     bicep_findings,
     build,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 # A resource with `tags` declared BEFORE `sku` — out of the canonical order
 # (S6975) — plus an empty-literal `properties: {}` (S6954).
@@ -71,6 +74,26 @@ def test_detection_core_clean(tmp_path: Path) -> None:
     assert bicep_findings(p) == []
 
 
+def test_unknown_nested_fields_and_text_outside_resources_are_ignored(tmp_path: Path) -> None:
+    source = """// Resource properties are checked only inside resource blocks.
+var tags = {}
+resource store 'Microsoft.Storage/storageAccounts@2021-01-01' = {
+  scope: resourceGroup()
+  customMetadata: {
+    tags: {
+      env: 'nested'
+    }
+  }
+  tags: {
+    env: 'prod'
+  }
+}
+"""
+    path = _seed(tmp_path, "resource.bicep", source)
+
+    assert bicep_findings(path) == []
+
+
 def test_non_bicep_and_unreadable_are_ignored(tmp_path: Path) -> None:
     # A .bicep that is not valid UTF-8 yields no findings (another concern owns
     # unreadable files); a missing file likewise.
@@ -94,33 +117,9 @@ def test_extension_default_ignores_non_bicep(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-def test_run_fails_on_new_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "infra/dirty.bicep", _DIRTY)
-    rule = BicepArmLint.from_config({"roots": ["infra"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_net_new_offender_fails_after_baseline(tmp_path: Path) -> None:
-    _seed(tmp_path, "infra/dirty.bicep", _DIRTY)
-    rule = BicepArmLint.from_config({"roots": ["infra"]}, repo_root=tmp_path)
-    rule.establish_baseline()
-    assert rule.run() == 0
-    _seed(tmp_path, "infra/dirty2.bicep", _DIRTY)
-    assert rule.run() == 1, "a net-new offending .bicep must gate"
-
-
 def test_build_factory_returns_configured_rule(tmp_path: Path) -> None:
     rule = build({"roots": ["infra"], "extensions": [".bicep"]}, repo_root=tmp_path)
     assert isinstance(rule, BicepArmLint)
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "dirty.bicep", _DIRTY)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "bicep-arm-lint-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

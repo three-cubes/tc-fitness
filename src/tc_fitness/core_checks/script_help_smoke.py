@@ -26,12 +26,14 @@ intrinsic constant is the ``--help`` invocation contract itself.
 from __future__ import annotations
 
 import ast
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -161,7 +163,6 @@ class ScriptHelpSmoke(FitnessRule):
     extensions = (".py",)
 
     #: Rule-specific knobs.
-    skip_dir_segments: tuple[str, ...] = DEFAULT_SKIP_DIR_SEGMENTS
     help_timeout_seconds: int = DEFAULT_HELP_TIMEOUT_SECONDS
     python_executable: str = sys.executable
 
@@ -174,8 +175,6 @@ class ScriptHelpSmoke(FitnessRule):
     ) -> ScriptHelpSmoke:
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, ScriptHelpSmoke)  # noqa: S101  # narrowing for mypy
-        skips = config.get("skip_dir_segments")
-        rule.skip_dir_segments = tuple(skips) if skips is not None else DEFAULT_SKIP_DIR_SEGMENTS
         rule.help_timeout_seconds = int(config.get("help_timeout_seconds", DEFAULT_HELP_TIMEOUT_SECONDS))
         rule.python_executable = config.get("python_executable") or sys.executable
         return rule
@@ -184,7 +183,7 @@ class ScriptHelpSmoke(FitnessRule):
         if not super().is_in_scope(rel):
             return False
         parts = Path(rel).parts
-        if any(seg in parts for seg in self.skip_dir_segments):
+        if any(seg in parts for seg in DEFAULT_SKIP_DIR_SEGMENTS):
             return False
         return not Path(rel).name.startswith("test_")
 
@@ -195,6 +194,19 @@ class ScriptHelpSmoke(FitnessRule):
             timeout=self.help_timeout_seconds,
         )
 
+    def run(self) -> int:
+        """Reject an unavailable configured interpreter as structured evidence."""
+        if shutil.which(self.python_executable) is None:
+            report_finding(
+                "dependency-unavailable",
+                ".",
+                f"required interpreter unavailable: {self.python_executable}",
+                status="error",
+            )
+            print(f"ERROR script-help-smoke: required interpreter unavailable: {self.python_executable}")
+            return 2
+        return super().run()
+
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> ScriptHelpSmoke:
     """Factory the engine calls to bind this CORE check to a consumer's config."""
@@ -202,7 +214,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> Script
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(ScriptHelpSmoke, argv)
 
 

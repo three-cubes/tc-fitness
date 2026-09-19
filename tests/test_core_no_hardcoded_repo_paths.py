@@ -5,12 +5,14 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_hardcoded_repo_paths import (
-    NoHardcodedRepoPaths,
     build,
     file_contains_needle,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 _NEEDLE = "/data/development/myrepo/"
 _BAD = f'ROOT = "{_NEEDLE}"\n'
@@ -39,6 +41,14 @@ def test_empty_needles_flags_nothing(tmp_path: Path) -> None:
     assert file_contains_needle(p, needles=()) is False
 
 
+def test_missing_and_non_utf8_files_have_no_match(tmp_path: Path) -> None:
+    binary = tmp_path / "binary.py"
+    binary.write_bytes(_BAD.encode("utf-8") + b"\xff")
+
+    assert file_contains_needle(tmp_path / "missing.py", needles=(_NEEDLE,)) is False
+    assert file_contains_needle(binary, needles=(_NEEDLE,)) is False
+
+
 def test_no_needles_configured_is_clean(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", _BAD)
     rule = build({"roots": ["src"]}, repo_root=tmp_path)
@@ -62,29 +72,28 @@ def test_markdown_exempt_by_default(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-def test_exempt_prefix_from_config(tmp_path: Path) -> None:
+def test_exempt_prefix_cannot_hide_a_hardcoded_path(tmp_path: Path) -> None:
     _seed(tmp_path, "src/host/run.py", _BAD)
     _seed(tmp_path, "src/app/run.py", _BAD)
-    rule = build(
-        {"roots": ["src"], "needles": [_NEEDLE], "exempt_prefixes": ["src/host/"]},
-        repo_root=tmp_path,
-    )
-    assert {str(p) for p in rule.collect_violations()} == {"src/app/run.py"}
+    with pytest.raises(ValueError, match="exempt_prefixes"):
+        build(
+            {"roots": ["src"], "needles": [_NEEDLE], "exempt_prefixes": ["src/host/"]},
+            repo_root=tmp_path,
+        )
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/bad.py", _BAD)
-    rule = NoHardcodedRepoPaths.from_config({"roots": ["src"], "needles": [_NEEDLE]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "bad.py", _BAD)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-hardcoded-repo-paths-files.txt").exists()
+def test_exempt_extensions_cannot_hide_a_hardcoded_path(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/generated.cfg", _BAD)
+    with pytest.raises(ValueError, match="exempt_extensions"):
+        build(
+            {
+                "roots": ["src"],
+                "extensions": [".cfg"],
+                "needles": [_NEEDLE],
+                "exempt_extensions": [".cfg"],
+            },
+            repo_root=tmp_path,
+        )
 
 
 def test_no_repo_strings_in_executable_code() -> None:

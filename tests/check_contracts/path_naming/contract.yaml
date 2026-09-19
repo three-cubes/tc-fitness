@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:path_naming
+config: {"roots":["src"],"snake_roots":["src"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: path-naming
+          path: src/Example-Module.py
+          message_contains: "snake_case"
+dependencies: []

@@ -10,6 +10,8 @@ import pytest
 from tc_fitness.core_checks.no_llm_attribution import NoLlmAttribution
 from tc_fitness.fitness_rule import FitnessRule
 
+pytestmark = pytest.mark.integration
+
 #: An attribution signature `scan_text` flags — the kind of residue vendored test
 #: fixtures and pnpm trash dirs legitimately carry (the issue-25 repro).
 _ATTRIBUTION = "Co-Authored-By: Claude <noreply@anthropic.com>\n"
@@ -42,27 +44,12 @@ def _git_init_and_add(repo: Path, *tracked: str) -> None:
     subprocess.run(["git", "add", *tracked], cwd=repo, check=True, capture_output=True)
 
 
-def test_abstract_cannot_instantiate() -> None:
-    with pytest.raises(TypeError):
-        FitnessRule()  # type: ignore[abstract]
-
-
 def test_collect_violations_respects_config_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/bad.py", "x = 'BADWORD'\n")
     _seed(tmp_path, "other/bad.py", "x = 'BADWORD'\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
     violations = {str(p) for p in rule.collect_violations()}
     assert violations == {"src/bad.py"}  # 'other/' is out of configured scope
-
-
-def test_from_config_overrides_roots_and_exempt(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.py", "x = 'BADWORD'\n")
-    _seed(tmp_path, "src/b.py", "x = 'BADWORD'\n")
-    rule = _BadWord.from_config(
-        {"roots": ["src"], "exempt_files": ["src/b.py"]},
-        repo_root=tmp_path,
-    )
-    assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
 
 
 def test_extension_filter(tmp_path: Path) -> None:
@@ -84,29 +71,6 @@ def test_run_fails_on_net_new_violation(tmp_path: Path, capsys: pytest.CaptureFi
     _seed(tmp_path, "src/bad.py", "BADWORD\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
     assert rule.run() == 1
-
-
-def test_establish_then_violation_is_grandfathered(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/bad.py", "BADWORD\n")
-    rule = _BadWord(repo_root=tmp_path, roots=("src",))
-    rule.establish_baseline()
-    # Same offender is now grandfathered → clean.
-    assert rule.run() == 0
-    assert rule.load_baseline() == {"src/bad.py"}
-
-
-def test_grandfathered_does_not_mask_a_new_offender(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/old.py", "BADWORD\n")
-    rule = _BadWord(repo_root=tmp_path, roots=("src",))
-    rule.establish_baseline()
-    _seed(tmp_path, "src/new.py", "BADWORD\n")
-    assert rule.run() == 1  # net-new offender still fails
-
-
-def test_name_override_via_config(tmp_path: Path) -> None:
-    rule = _BadWord.from_config({"name": "renamed"}, repo_root=tmp_path)
-    rule.establish_baseline()
-    assert (tmp_path / ".architecture" / "baseline" / "renamed-files.txt").exists()
 
 
 def test_symlinked_repo_root_still_scopes(tmp_path: Path) -> None:

@@ -18,8 +18,14 @@ a non-zero hit (``covered_changed``), and FAILS the file when
 lines are all non-coverable (blank lines, comments, lines the report never
 recorded) contributes no measurable new code and is not a violation.
 
-Hard floor, by design. Unlike :mod:`coverage_floor`, this rule is baseline-free:
-new code is inherently non-grandfatherable (see :meth:`NewCodeCoverage.establish_baseline`).
+That is the backwards-compatible consumer mode. Configuring
+``exact_base_commit`` / ``candidate_commit`` instead uses strict immutable
+coverage admission: complete source-derived executable detail, clean Git
+identity, no exemptions and 100 percent changed lines. ``coverage_receipt``
+additionally binds the fresh execution and accepted-base monotonic evidence.
+Strict-mode missing inputs raise; they never enter the legacy soft-pass path.
+
+Hard floor, by design: new code that misses the threshold always fails.
 
 The floor, the report path, the trunk ref, and the scan roots are CONFIG the
 consumer supplies; nothing here names a repo, a source package, or a threshold
@@ -44,7 +50,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from tc_fitness.baseline import establish_baseline as _establish_baseline
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -80,8 +86,7 @@ REMEDIATION = _remediation(
         "cover the lines this change ADDED — ask what DEFECT CLASS the uncovered "
         "new code proxies (a missing failure-mode test for the new branch, an "
         "unexercised boundary, an untested scale bound) and write the test that "
-        "proves the new behaviour. New code is non-grandfatherable: there is no "
-        "baseline to append to, so the only way through is a real test."
+        "proves the new behaviour. The only way through is a real test."
     ),
     nxt="re-run this check to confirm the changed lines clear the floor.",
     run="python -m tc_fitness.core_checks.new_code_coverage",
@@ -252,6 +257,7 @@ class NewCodeCoverage(FitnessRule):
     #: The git command runner (DI seam) — set by ``from_config`` / ``build`` so a
     #: test can inject canned diff output without a real repo or monkeypatching.
     git_runner: GitRunner
+    exact_config: dict[str, Any] | None = None
 
     @classmethod
     def from_config(
@@ -267,6 +273,8 @@ class NewCodeCoverage(FitnessRule):
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
         rule.base_ref = str(config.get("base_ref", DEFAULT_BASE_REF))
         rule.git_runner = _default_git_runner
+        if any(key in config for key in ("exact_base_commit", "candidate_commit", "coverage_receipt")):
+            rule.exact_config = dict(config)
         return rule
 
     def _report_path(self) -> Path:
@@ -400,48 +408,38 @@ class NewCodeCoverage(FitnessRule):
         if measured is None:
             return False
         covered, coverable = measured
-        if coverable == 0:  # defensive: _measured never stores a zero-coverable file
-            return False
         return covered / coverable * 100.0 < self.floor_pct
 
     def run(self) -> int:
-        """Hard-floor gate: every below-floor changed file FAILs, none grandfathered.
+        """Hard-floor gate: every below-floor changed file fails.
 
-        Modelling note: the base ``run()`` gates the violation set against a
-        per-file baseline so a repo can freeze PRE-EXISTING offenders behind a
-        ratchet. New-code coverage is different in KIND — the "new" line set is
-        recomputed against the merge-base on every branch, so there is no stable
-        offender to freeze, and an uncovered line ADDED on THIS branch is a fresh
-        defect, never inherited debt. This override therefore consults NO
-        baseline (not even a hand-crafted one) and gates the raw violation set: a
-        HARD floor, mirroring SonarCloud's non-ratchetable "Coverage on New Code"
+        The "new" line set is recomputed against the merge-base on every branch,
+        and an uncovered line added on this branch is a current defect. This
+        method gates the raw violation set with a hard floor, mirroring
+        SonarCloud's "Coverage on New Code"
         merge condition. Returns ``0`` when the changed lines clear the floor (or
         there is no measurable new code), ``1`` otherwise.
         """
-        violations = sorted(str(p) for p in self.collect_violations())
+        if self.exact_config is not None:
+            from tc_fitness.coverage_admission import changed_line_failures
+
+            failures = changed_line_failures(self._repo_root, self.exact_config)
+            for relative, message in failures.items():
+                report_finding(self.name, relative, message)
+                print(f"FAIL [{self.name}] {relative}: {message}")
+            return int(bool(failures))
+        violations = sorted(self.collect_violations(), key=lambda path: str(path))
         if not violations:
             print(f"ok [arch:{self._name}] — new code clears the {self.floor_pct:g}% coverage floor.")
             return 0
         print(f"FAIL [arch:{self._name}] — new code below the {self.floor_pct:g}% coverage floor:")
-        for rel in violations:
-            print(f"  {rel}")
+        finding = f"new code below the {self.floor_pct:g}% coverage floor"
+        for path in violations:
+            report_finding(self.name, self._repo_relative(path).as_posix(), finding)
+            print(f"  {path}")
         print()
         print(self.remediation)
         return 1
-
-    def establish_baseline(self) -> Path:
-        """Freeze an EMPTY baseline — new-code coverage is non-grandfatherable.
-
-        Modelling note: the base class freezes today's offenders so a repo can
-        pay down PRE-EXISTING debt behind a ratchet. New-code coverage has no
-        such notion — the "new" line set is recomputed against the merge-base on
-        every branch, so a frozen path is meaningless on the next one, and a line
-        ADDED on THIS branch that runs uncovered is a FRESH defect, never
-        inherited debt. This override freezes the EMPTY set so ``--establish-baseline``
-        writes a coherent (empty) file; the hard floor is enforced by
-        :meth:`run`, which consults no baseline at all.
-        """
-        return _establish_baseline(self._name, set(), self._repo_root)
 
 
 def build(
@@ -463,7 +461,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NewCodeCoverage, argv)
 
 

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from tc_fitness.core_checks.schema_conformance import (
     build,
     file_missing_required_keys,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:
@@ -45,6 +51,19 @@ def test_json_parses_via_yaml(tmp_path: Path) -> None:
     assert file_missing_required_keys(p, required_keys=("missing",)) is True
 
 
+def test_malformed_yaml_cannot_prove_schema_conformance(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "invalid.yaml", "palette: [blue\n")
+
+    assert file_missing_required_keys(p, required_keys=("palette",)) is True
+
+
+def test_non_utf8_yaml_cannot_prove_schema_conformance(tmp_path: Path) -> None:
+    p = tmp_path / "invalid.yaml"
+    p.write_bytes(b"palette: \xff\n")
+
+    assert file_missing_required_keys(p, required_keys=("palette",)) is True
+
+
 def test_rule_scopes_roots_and_keys(tmp_path: Path) -> None:
     _seed(tmp_path, "tokens/acme.yaml", "palette: blue\n")
     _seed(tmp_path, "vendor/other.yaml", "palette: blue\n")
@@ -52,19 +71,55 @@ def test_rule_scopes_roots_and_keys(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"tokens/acme.yaml"}
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "tokens/acme.yaml", "palette: blue\n")
-    rule = build({"roots": ["tokens"], "required_keys": ["palette", "typeScale"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
+def test_python_module_entrypoint_runs_the_public_gate(tmp_path: Path) -> None:
+    source_root = Path(__file__).parents[1] / "src"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-m",
+            "tc_fitness.core_checks.schema_conformance",
+            "--repo-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(source_root)},
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "tokens/acme.yaml", "palette: blue\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "schema-conformance-files.txt").exists()
+def test_python_module_entrypoint_reports_the_public_check_result(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.core_checks.schema_conformance", "--repo-root", str(tmp_path)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_optional_yaml_dependency_absence_fails_closed_in_an_isolated_interpreter(tmp_path: Path) -> None:
+    document = _seed(tmp_path, "tokens.yaml", "palette: blue\n")
+    source_root = Path(__file__).parents[1] / "src"
+    program = (
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "from pathlib import Path; "
+        "from tc_fitness.core_checks.schema_conformance import file_missing_required_keys; "
+        "assert file_missing_required_keys(Path(sys.argv[2]), required_keys=('palette',))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", program, str(source_root), str(document)],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(source_root)},
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_no_repo_strings_in_executable_code() -> None:

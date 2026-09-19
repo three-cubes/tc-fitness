@@ -51,8 +51,8 @@ def _load_mapping(path: Path) -> dict[str, Any] | None:
 
     A decode/parse error or a non-mapping document returns ``None`` — the rule
     treats a file it cannot read as a mapping as a violation (it cannot prove
-    conformance). PyYAML is imported lazily so a consumer that never binds this
-    check need not install it.
+    conformance). PyYAML is imported lazily to keep the parser's import cost out
+    of callers that never bind this check; it is a required package dependency.
     """
     try:
         import yaml
@@ -116,7 +116,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(SchemaConformance, argv)
 
 

@@ -73,10 +73,6 @@ class NoProductionSuppressions(FitnessRule):
 
     #: Rule-specific knobs — overridable per consumer.
     suppression_patterns: tuple[str, ...] = DEFAULT_SUPPRESSION_PATTERNS
-    #: Repo-relative path prefixes whose files are exempt (tooling / tests / docs).
-    exempt_prefixes: tuple[str, ...] = ()
-    #: Basename regex marking a file as a test (exempt). Default: Python convention.
-    test_file_regex: str = DEFAULT_TEST_FILE_REGEX
 
     @classmethod
     def from_config(
@@ -89,19 +85,14 @@ class NoProductionSuppressions(FitnessRule):
         assert isinstance(rule, NoProductionSuppressions)  # noqa: S101  # narrowing for mypy
         patterns = config.get("suppression_patterns")
         rule.suppression_patterns = tuple(patterns) if patterns is not None else DEFAULT_SUPPRESSION_PATTERNS
-        prefixes = config.get("exempt_prefixes")
-        rule.exempt_prefixes = tuple(prefixes) if prefixes is not None else ()
-        rule.test_file_regex = str(config.get("test_file_regex", DEFAULT_TEST_FILE_REGEX))
         return rule
 
     def is_in_scope(self, rel: str) -> bool:
         """Extension-in-scope AND not under an exempt prefix AND not a test file."""
         if not super().is_in_scope(rel):
             return False
-        if any(rel.startswith(p) for p in self.exempt_prefixes):
-            return False
         basename = rel.rsplit("/", 1)[-1]
-        return not re.match(self.test_file_regex, basename)
+        return not re.match(DEFAULT_TEST_FILE_REGEX, basename)
 
     def file_has_violation(self, path: Path) -> bool:
         return file_contains_suppression(path, self.suppression_patterns)
@@ -113,7 +104,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> NoProd
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoProductionSuppressions, argv)
 
 

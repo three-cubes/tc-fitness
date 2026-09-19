@@ -59,6 +59,10 @@ DEFAULT_LOG_METHODS: frozenset[str] = frozenset(
 #: Direct function-call sinks.
 DEFAULT_DIRECT_SINKS: frozenset[str] = frozenset({"print"})
 
+# These builtins reduce a secret value to a non-reversible summary. Other
+# one-argument calls remain conservatively treated as preserving the value.
+_SAFE_SECRET_SUMMARIES = frozenset({"bool", "len"})
+
 REMEDIATION = _remediation(
     fix=(
         "rewrite each flagged log/print/raise call so the secret-named value is "
@@ -102,6 +106,8 @@ def _arg_references_secret(arg: ast.expr, patterns: Sequence[re.Pattern[str]]) -
             for part in arg.values
         )
     if isinstance(arg, ast.Call) and len(arg.args) == 1 and not arg.keywords:
+        if isinstance(arg.func, ast.Name) and arg.func.id in _SAFE_SECRET_SUMMARIES:
+            return False
         return _arg_references_secret(arg.args[0], patterns)
     return False
 
@@ -174,7 +180,9 @@ class NoLoggingSecrets(FitnessRule):
     extensions = (".py",)
 
     #: Rule-specific config (instance attrs; from_config overrides per consumer).
-    secret_patterns: tuple[re.Pattern[str], ...] = ()
+    secret_patterns: tuple[re.Pattern[str], ...] = tuple(
+        re.compile(pattern) for pattern in DEFAULT_SECRET_PATTERNS
+    )
     log_methods: frozenset[str] = DEFAULT_LOG_METHODS
     direct_sinks: frozenset[str] = DEFAULT_DIRECT_SINKS
 
@@ -197,11 +205,6 @@ class NoLoggingSecrets(FitnessRule):
             rule.direct_sinks = frozenset(direct_sinks)
         return rule
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        if not self.secret_patterns:
-            self.secret_patterns = tuple(re.compile(p) for p in DEFAULT_SECRET_PATTERNS)
-
     def file_has_violation(self, path: Path) -> bool:
         return module_logs_secret(
             path,
@@ -221,7 +224,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoLoggingSecrets, argv)
 
 

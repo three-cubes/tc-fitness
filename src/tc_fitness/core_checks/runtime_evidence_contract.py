@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.core_checks._runtime_contracts import (
     ContractDocuments,
@@ -17,6 +18,7 @@ from tc_fitness.core_checks._runtime_contracts import (
     canonical_json_bytes,
     is_integer_identity,
     is_sha256_digest,
+    render_findings,
     sort_findings,
 )
 from tc_fitness.lib import remediation as _remediation
@@ -747,6 +749,20 @@ class RuntimeEvidenceContract(RuntimeContractRule):
             now=datetime.now(UTC),
             max_age_seconds=self.max_age_seconds,
         )
+
+    def run(self) -> int:
+        """Emit each validated receipt defect into the structured check ledger."""
+        findings = self.collect_findings()
+        for finding in findings:
+            report_finding(
+                finding.code,
+                str(finding.source.relative_to(self._repo_root)),
+                finding.message,
+            )
+        if not findings:
+            return 0
+        render_findings(findings)
+        return 1
 
 
 def build(

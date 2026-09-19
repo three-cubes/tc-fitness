@@ -6,13 +6,16 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.suppressions_have_rationale import (
     DEFAULT_BARE_PATTERNS,
     SuppressionsHaveRationale,
     build,
     file_has_bare_suppression,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 _BARE = "x = 1  # NOSONAR\n"
 _WITH_REASON = "x = 1  # NOSONAR - internal log path; not user-controlled\n"
@@ -43,6 +46,30 @@ def test_rationale_satisfies(tmp_path: Path) -> None:
     assert file_has_bare_suppression(p, _COMPILED) is False
 
 
+@pytest.mark.parametrize(
+    "suppression",
+    [
+        "# pragma: no cover",
+        "# type: ignore[arg-type]",
+        "# nosec B603",
+    ],
+)
+def test_all_security_and_coverage_suppressions_require_rationale(tmp_path: Path, suppression: str) -> None:
+    _seed(tmp_path, "src/silenced.py", f"value = 1  {suppression}\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_unreadable_text_bytes_do_not_hide_bare_suppression(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "silenced.py"
+    source.parent.mkdir()
+    source.write_bytes(b"value = 1  # noqa: S123 \xff\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
 def test_bare_patterns_config_driven(tmp_path: Path) -> None:
     # A consumer-specific bare token.
     p = _seed(tmp_path, "src/c.py", "z = 1  # SILENCE\n")
@@ -55,21 +82,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/b.py", _BARE)
     rule = SuppressionsHaveRationale.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/b.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/b.py", _BARE)
-    rule = SuppressionsHaveRationale.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "b.py", _BARE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "suppressions-have-rationale-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

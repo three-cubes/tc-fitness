@@ -52,15 +52,14 @@ def file_missing_license(path: Path, *, markers: Sequence[str], header_lines: in
     """Pure detection helper: True iff none of ``markers`` appears in the header.
 
     Only the first ``header_lines`` lines are inspected so an in-body mention of
-    a marker word does not false-pass. A read / decode error is treated as "not
-    a violation" (a binary file under a misconfigured root is another check's
-    concern, not a missing-header one).
+    a marker word does not false-pass. A read / decode error is a violation
+    because the configured source could not be evaluated.
     """
     try:
         with path.open(encoding="utf-8") as fh:
             head = "".join(line for _, line in zip(range(header_lines), fh, strict=False))
     except (UnicodeDecodeError, OSError):
-        return False
+        return True
     return not any(marker in head for marker in markers)
 
 
@@ -102,7 +101,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(LicensePresent, argv)
 
 

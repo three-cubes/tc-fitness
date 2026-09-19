@@ -8,6 +8,7 @@ canned ``merge-base`` / ``diff`` output — no real repository, no monkeypatchin
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -21,10 +22,10 @@ from _core_check_assertions import assert_no_repo_identity
 import tc_fitness.core_checks.new_code_coverage as new_code_coverage
 from tc_fitness.core_checks.new_code_coverage import (
     build,
-    main,
-    parse_added_lines,
     parse_line_coverage,
 )
+
+pytestmark = pytest.mark.integration
 
 # --------------------------------------------------------------------------- #
 # Fixtures: a Cobertura report with per-line hits + a canned git runner.
@@ -171,6 +172,27 @@ def test_parse_line_coverage_missing_report_empty(tmp_path: Path) -> None:
     assert parse_line_coverage(tmp_path / "nope.xml") == {}
 
 
+def test_xml_parser_falls_back_to_stdlib_without_site_packages(tmp_path: Path) -> None:
+    report = _seed(tmp_path, "coverage.xml", _report({"fallback.py": {1: 1}}))
+    source_root = Path(__file__).parents[1] / "src"
+    script = (
+        "import json, sys; from pathlib import Path; "
+        "from tc_fitness.core_checks.new_code_coverage import parse_line_coverage; "
+        "print(json.dumps(parse_line_coverage(Path(sys.argv[1]))))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", script, str(report)],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(source_root)},
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert json.loads(result.stdout) == {"src/fallback.py": {"1": 1}}
+
+
 def test_parse_line_coverage_merges_duplicate_class_with_max_hits(tmp_path: Path) -> None:
     xml = (
         "<coverage><sources><source>src</source></sources><packages><package><classes>"
@@ -180,6 +202,20 @@ def test_parse_line_coverage_merges_duplicate_class_with_max_hits(tmp_path: Path
     )
     p = _seed(tmp_path, "coverage.xml", xml)
     assert parse_line_coverage(p) == {"src/a.py": {5: 4}}  # covered anywhere ⇒ covered
+
+
+def test_parse_line_coverage_handles_prefixed_and_malformed_class_records(tmp_path: Path) -> None:
+    xml = (
+        "<coverage><sources><source>src</source></sources><packages><package><classes>"
+        '<class filename="src/already.py"><lines><line number="1" hits="2"/></lines></class>'
+        '<class filename=""><lines><line number="2" hits="1"/></lines></class>'
+        '<class filename="bad.py"><lines><line number="3"/><line hits="1"/>'
+        '<line number="bad" hits="1"/><line number="4" hits="bad"/></lines></class>'
+        "</classes></package></packages></coverage>"
+    )
+    report = _seed(tmp_path, "coverage.xml", xml)
+
+    assert parse_line_coverage(report) == {"src/already.py": {1: 2}, "src/bad.py": {}}
 
 
 def test_parse_line_coverage_rejects_unsafe_xml(tmp_path: Path) -> None:
@@ -195,61 +231,6 @@ def test_parse_line_coverage_rejects_unsafe_xml(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Pure parser: added lines from a unified diff.
 # --------------------------------------------------------------------------- #
-
-
-def test_parse_added_lines_basic_hunk() -> None:
-    diff = _diff("src/a.py", 10, ["x = 1", "y = 2", "z = 3"])
-    assert parse_added_lines(diff) == {"src/a.py": {10, 11, 12}}
-
-
-def test_parse_added_lines_new_file_whole_body_is_added() -> None:
-    diff = _diff("src/new.py", 1, ["a = 1", "b = 2"], new_file=True)
-    assert parse_added_lines(diff) == {"src/new.py": {1, 2}}
-
-
-def test_parse_added_lines_deleted_file_contributes_nothing() -> None:
-    diff = (
-        "diff --git a/src/gone.py b/src/gone.py\n"
-        "deleted file mode 100644\n"
-        "index 1111111..0000000 100644\n"
-        "--- a/src/gone.py\n"
-        "+++ /dev/null\n"
-        "@@ -1,2 +0,0 @@\n"
-        "-was = 1\n"
-        "-here = 2\n"
-    )
-    assert parse_added_lines(diff) == {}
-
-
-def test_parse_added_lines_context_lines_advance_counter() -> None:
-    # A -U1 hunk: context lines advance the new-side counter so the added line
-    # lands on its true number (11), not the hunk start (10).
-    diff = (
-        "diff --git a/src/c.py b/src/c.py\n"
-        "index aaa..bbb 100644\n"
-        "--- a/src/c.py\n"
-        "+++ b/src/c.py\n"
-        "@@ -10,2 +10,3 @@ def f():\n"
-        " keep = 0\n"
-        "+added = 1\n"
-        " tail = 2\n"
-    )
-    assert parse_added_lines(diff) == {"src/c.py": {11}}
-
-
-def test_parse_added_lines_multiple_hunks_one_file() -> None:
-    diff = (
-        "diff --git a/src/m.py b/src/m.py\n"
-        "index aaa..bbb 100644\n"
-        "--- a/src/m.py\n"
-        "+++ b/src/m.py\n"
-        "@@ -0,0 +1,1 @@\n"
-        "+first\n"
-        "@@ -10,0 +12,2 @@\n"
-        "+twelfth\n"
-        "+thirteenth\n"
-    )
-    assert parse_added_lines(diff) == {"src/m.py": {1, 12, 13}}
 
 
 # --------------------------------------------------------------------------- #
@@ -288,14 +269,6 @@ def test_untracked_source_is_measured_before_first_commit(tmp_path: Path) -> Non
     rule = build(_cfg(), repo_root=repo)
 
     assert rule.run() == 1
-
-
-def test_git_output_decodes_non_utf8_bytes_losslessly() -> None:
-    raw = b"src/bad_\xff.py\0"
-    decoder = getattr(new_code_coverage, "_decode_git_output", None)
-
-    assert decoder is not None
-    assert decoder(raw) == "src/bad_\udcff.py\0"
 
 
 @pytest.mark.skipif(sys.platform == "darwin", reason="macOS rejects invalid UTF-8 filenames")
@@ -362,7 +335,7 @@ def test_stale_remote_base_is_refreshed_before_exact_merge_base(tmp_path: Path) 
 
     rule = build(_cfg(base_ref="upstream/release/next"), repo_root=tmp_path, git_runner=runner)
 
-    assert rule._changed_lines() == {"src/a.py": {2}}
+    assert rule.run() == 0
     assert calls[:3] == [
         ["remote"],
         [
@@ -394,7 +367,7 @@ def test_real_stale_remote_tracking_ref_is_advanced(tmp_path: Path) -> None:
     _git(repo, "reset", "--hard", "--quiet", stale)
     _git(repo, "update-ref", "refs/remotes/origin/main", stale)
 
-    build(_cfg(), repo_root=repo)._changed_lines()
+    assert build(_cfg(), repo_root=repo).run() == 0
 
     assert _git(repo, "rev-parse", "origin/main").stdout.strip() == fresh
 
@@ -419,11 +392,72 @@ def test_remote_refresh_failure_uses_cached_base_with_visible_diagnostic(
 
     rule = build(_cfg(), repo_root=tmp_path, git_runner=runner)
 
-    assert rule._changed_lines() == {"src/a.py": {2}}
+    assert rule.run() == 0
     diagnostic = capsys.readouterr().err
     assert "could not refresh origin/main" in diagnostic
     assert "using cached ref" in diagnostic
     assert "network unavailable" in diagnostic
+
+
+def test_invalid_remote_branch_name_does_not_fetch(tmp_path: Path) -> None:
+    def runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args == ["remote"]:
+            return _completed(args, 0, "origin\n")
+        if args[0] == "merge-base":
+            return _completed(args, 1, "")
+        raise AssertionError(f"unexpected git argv: {args}")
+
+    rule = build(_cfg(base_ref="origin/release~1"), repo_root=tmp_path, git_runner=runner)
+
+    assert rule.run() == 0
+
+
+def test_failed_merge_base_diff_and_untracked_discovery_are_soft_passes(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path)
+    _seed(repo, "coverage.xml", _report({"a.py": {1: 0}}))
+
+    def empty_base(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args == ["remote"]:
+            return _completed(args, 0, "")
+        if args[0] == "merge-base":
+            return _completed(args, 0, "  \n")
+        raise AssertionError(f"unexpected git argv: {args}")
+
+    assert build(_cfg(), repo_root=repo, git_runner=empty_base).run() == 0
+
+    def diff_failure(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args == ["remote"]:
+            return _completed(args, 0, "")
+        if args[0] == "merge-base":
+            return _completed(args, 0, "base\n")
+        if args[0] == "diff":
+            return _completed(args, 1, "")
+        raise AssertionError(f"unexpected git argv: {args}")
+
+    assert build(_cfg(), repo_root=repo, git_runner=diff_failure).run() == 0
+
+    def untracked_failure(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args[0] == "ls-files":
+            return _completed(args, 1, "")
+        return new_code_coverage._default_git_runner(args, cwd)
+
+    assert build(_cfg(), repo_root=repo, git_runner=untracked_failure).run() == 0
+
+
+def test_untracked_symlink_and_path_removed_during_scan_are_skipped(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path)
+    (repo / "src/link.py").symlink_to("a.py")
+    _seed(repo, "coverage.xml", _report({"link.py": {1: 0}, "raced.py": {1: 0}}))
+
+    def disappearing_path(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args[0] == "ls-files":
+            return _completed(args, 0, "src/link.py\0src/raced.py\0")
+        return new_code_coverage._default_git_runner(args, cwd)
+
+    rule = build(_cfg(), repo_root=repo, git_runner=disappearing_path)
+
+    assert rule.file_has_violation(repo / "src/link.py") is False
+    assert rule.run() == 0
 
 
 def test_below_floor_changed_lines_are_a_violation(tmp_path: Path) -> None:
@@ -521,24 +555,6 @@ def test_unsafe_base_ref_skips_without_touching_git(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_run_fails_hard_and_baseline_grandfathers_nothing(tmp_path: Path) -> None:
-    _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
-    diff = _diff("src/a.py", 10, ["x = 1"])
-    rule = build(_cfg(), repo_root=tmp_path, git_runner=_fake_git(diff=diff))
-    assert rule.run() == 1
-    rule.establish_baseline()
-    # Unlike coverage_floor, establishing does NOT grandfather the offender: the
-    # baseline is frozen EMPTY, so the floor stays hard and the run still FAILs.
-    assert rule.run() == 1
-    baseline = tmp_path / ".architecture" / "baseline" / "new-code-coverage-files.txt"
-    entries = [
-        ln
-        for ln in baseline.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    assert entries == []
-
-
 def test_hand_crafted_baseline_cannot_soften_the_floor(tmp_path: Path) -> None:
     # Even a MANUALLY written baseline naming the offender is ignored: run()
     # consults no baseline at all, so the hard floor holds.
@@ -549,20 +565,6 @@ def test_hand_crafted_baseline_cannot_soften_the_floor(tmp_path: Path) -> None:
     diff = _diff("src/a.py", 10, ["x = 1"])
     rule = build(_cfg(), repo_root=tmp_path, git_runner=_fake_git(diff=diff))
     assert rule.run() == 1
-
-
-def test_main_establish_baseline_writes_empty_baseline(tmp_path: Path) -> None:
-    _seed(tmp_path, "coverage.xml", _report({"a.py": {10: 0}}))
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    baseline = tmp_path / ".architecture" / "baseline" / "new-code-coverage-files.txt"
-    assert baseline.exists()
-    entries = [
-        ln
-        for ln in baseline.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    assert entries == []  # new code is non-grandfatherable
 
 
 # --------------------------------------------------------------------------- #

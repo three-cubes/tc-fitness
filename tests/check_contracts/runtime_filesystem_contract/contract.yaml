@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:runtime_filesystem_contract
+config:
+  contract_file: contract.json
+  environment: prod
+  target: service
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: missing-filesystem-contract
+          path: contract.json
+          message_contains: filesystem mapping
+dependencies: []

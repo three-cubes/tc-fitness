@@ -4,6 +4,10 @@
 run `tc-fitness run` and it runs your linters, type-check, tests, coverage,
 security scan, and architecture rules, then gives you one pass or fail.
 
+Supported platform evidence covers Linux on Python 3.12 and 3.13, plus macOS
+CLI, Git and filesystem qualification on Python 3.12. Windows is unsupported
+until it has an equivalent installed-distribution qualification lane.
+
 **The tool knows HOW to run the checks. Your repo says WHAT to check** — you list
 the checks in a `[tool.tc_fitness]` block in your `pyproject.toml`, and
 tc-fitness runs them in order and gives you a single verdict.
@@ -86,6 +90,55 @@ The full branch / commit / PR / merge procedure is canon in
 [tc-pipelines `governance/standards/development-workflow.md`](https://github.com/three-cubes/tc-pipelines/blob/main/governance/standards/development-workflow.md);
 this repo's contributor specifics live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Changed-code mutation assurance
+
+Install the locked dev extra to obtain the pinned native mutation tool. The same
+public command runs locally and in the blocking `changed-mutation` CI worker:
+
+```bash
+uv run --no-sync tc-fitness mutation check \
+  --base FULL_BASE_COMMIT --head FULL_TESTED_COMMIT \
+  --output .mutation/changed --run-id LOCAL_OR_WORKFLOW_RUN --attempt 1
+```
+
+Both commits must exist locally, the base must be an ancestor of the tested
+commit, and the tracked checkout must exactly match that commit. The tracked
+`mutation.toml` declares production roots, real test paths, a hard process
+deadline and a post-execution mutant-count admission ceiling. No exclusions,
+survivor acknowledgements, coverage-only selection or mutation suppressions are
+accepted. Each attempt needs a fresh output directory; failed evidence is kept.
+The native runner selects tests marked `unit` or `contract`; distribution E2E
+and integration qualification remain separate tasks. A missing selected test
+tier cannot satisfy mutation assurance.
+
+Selection compares production function definitions and includes their dependency
+closure. Module-level changes select the module's functions; unresolved dynamic
+dispatch expands conservatively. Native mutmut generates function-body mutants,
+not arbitrary module-initialisation edits. A required scope with no generated
+mutants fails closed. Documentation-only changes record `not-required` in
+`selection.json`; they do not manufacture a mutation-pass receipt.
+
+Every selected native mutant must have a real test association and terminal
+killed result. Survivors, untested mutants, timeouts, missing native records and
+tool errors block admission. The receipt binds both commits, Git archive digests,
+selected definitions, policy, engine, pinned tool, run and attempt. It retains
+native generated sources, result maps, test associations and diagnostic logs.
+The validator checks these artifacts rather than parsing console summaries:
+
+```bash
+uv run --no-sync tc-fitness mutation verify \
+  --base FULL_BASE_COMMIT --head FULL_TESTED_COMMIT \
+  --output .mutation/changed/run --run-id LOCAL_OR_WORKFLOW_RUN --attempt 1
+```
+
+`plan` writes selection without execution; `run` requires nonempty mutation scope.
+`check --broad` selects the whole package, also used by the scheduled broad lane.
+For broad receipt verification, pass `--broad` to `verify` too. Receipts expire
+after 24 hours. Release admission must obtain artifacts from an authorised exact
+workflow run, supply the expected identities independently, and require broad
+proof when mutation execution or test-selection logic changes. Artifact digests
+are integrity bindings, not a substitute for trusted workflow provenance.
+
 ## What to expect
 
 - **Green auto-merges — except here.** The platform default is auto-merge on a
@@ -134,18 +187,24 @@ library modules tc-fitness ships.
 
 ## The `[tool.tc_fitness]` config
 
-`tc-fitness run` is the one command both CI and your laptop invoke, so the local
-check and the CI check are the same by construction — there is no hand-copied
-pytest/lint block to drift between a `scripts/ci/check.sh` and a CI workflow.
+Consumer repositories use `tc-fitness run` as the shared static gate. This
+repository composes that gate with its own exact-commit coverage transaction:
 
 ```bash
-uv run tc-fitness run         # local: this is what `make check` becomes
+make prepare       # sync the lock and apply deterministic formatting fixes
+make smoke         # <60s staged feedback; never admissible coverage evidence
+make check         # clean committed tree + static gate + fresh base/head coverage
 ```
 
 ```yaml
-# CI: the reusable python-quality-gate.yml shrinks to
-#   checkout → setup-uv → uv run tc-fitness run
+# Self CI: matrix check-static + one exact-base/head coverage-assurance job
 ```
+
+`make check` runs preparation first and withholds evaluation if preparation
+changes a file or any other working-tree change is present. Commit the exact
+bytes to evaluate, then rerun it. Coverage evidence is written outside the
+checkout. `make check-static` runs ruff, format verification, mypy and branch
+naming without repeating the coverage transaction.
 
 You declare the check **once**, in a `[tool.tc_fitness]` block in your
 `pyproject.toml` (or a dedicated `.tc-fitness.toml`):
@@ -274,13 +333,234 @@ integration/E2E tests. The hard gate verifies that a named test invokes the
 exact executable and asserts its result and produced output; it does not support
 baselines.
 
+### Check-contract execution
+
+Execute a `tc.fitness/check-contract/v1` case through the same CORE dispatcher:
+
+```sh
+tc-fitness run --contract path/to/contract.yaml --case violation --ledger artifacts/violation.json
+```
+
+These three arguments are required together and cannot be combined with ordinary
+gate options. The fixture is copied into a temporary repository; its declared
+config and a single catalogue entry are passed to the existing runner. Fixtures
+must be contained beneath the manifest and cannot contain symlinks.
+Configuration uses fixture-relative paths and cannot select an external
+rule name. Manifest bytes, parsed configuration, fixture digest and
+candidate identity are captured before dispatch. A changed manifest, original
+fixture or candidate source invalidates the run before a ledger can be published.
+Every finding is a hard failure in contract and ordinary consumer execution;
+there is no baseline or adoption mode.
+Contract configuration also uses the reviewed per-CORE option inventory in
+`tc_fitness.check_contract_policy`. Unknown options fail closed: new aliases
+must be classified before assurance can use them. Suppression and adoption
+options are rejected when present, including false or empty values. OSV
+requires explicit `required: true`.
+Tier-marker contracts require explicit `require_module_marker: true` so
+contract assurance cannot fall back to generic function-level classification.
+Mutation `baseline_report` is a bound input report, not a suppression list.
+Normal scope, thresholds and expected identities remain detector policy inputs.
+The output directory must exist, and the ledger must be a new path outside the
+fixture. Retries retain the previous ledger and use a new output path.
+
+The command returns the observed result: 0 for pass, 1 for a check violation,
+and 2 for an execution or dependency error. An expected violation therefore still
+returns non-zero. To evaluate whether that observed result satisfies the case,
+use the process runner, which invokes the installed `tc-fitness run` entrypoint
+and validates its ledger:
+
+```python
+from pathlib import Path
+from tc_fitness.check_contract_execution import run_contract_case
+
+evidence = run_contract_case(
+    Path("path/to/contract.yaml"), "violation", Path("artifacts/violation.json")
+)
+```
+
+`CheckContractError` means the assurance case failed. Missing evidence, unexpected
+findings or exits, stale timestamps, changed inputs, and digest mismatches are
+failures. Each dependency-backed check reports its own unavailable executable as
+an `error`; the contract harness never synthesises a dependency finding or skips
+the check. That error satisfies only a case expecting its structured finding.
+
+An unavailable case can remove PATH-resolved tools from its execution environment
+without installing substitutes:
+
+```yaml
+environment:
+  schema: tc.fitness/check-environment/v1
+  path: empty
+```
+
+This optional per-case declaration accepts only `inherit` and `empty`. Omission
+means `inherit`; only the `unavailable` case may use `empty`. Its PATH points to
+an empty temporary directory during the same check dispatch and is then restored.
+Compliant and violation cases use the ordinary environment. The declaration is
+bound in the case digest and ledger. Absolute executable defaults remain absolute;
+a PATH-absence case must configure the real check to resolve its declared tool
+through PATH (for example, `python_executable: python3` for `script_help_smoke`).
+
+The `tc.fitness/check-ledger/v1` JSON binds the check and case, manifest and case
+digests, fixture contents and permissions, package version and source digest,
+execution environment, UUID and timestamps, expected and actual outcomes, and structured
+findings. `payload_digest` is SHA-256 over the UTF-8 JSON object with that field
+removed, sorted keys, compact separators, unescaped Unicode and no NaN values.
+The validator recomputes it; it is an integrity digest, not a signature.
+
+Checks emit findings through `tc_fitness.check_evidence.report_finding` at the
+actual decision point. `gate()`-based checks, including `license_present`, already
+use this interface. Custom checks must emit their own structured findings;
+console output is never parsed and detectors are never invoked twice.
+
+### Independent coverage floors
+
+The existing `core:coverage_floor` check supports strict, baseline-free admission
+by configuring `branch_floor_pct` alongside its per-file line floor:
+
+```toml
+[tool.tc_fitness.core_checks.coverage_floor]
+roots = ["src/tc_fitness"]
+coverage_report = "coverage.xml"
+floor_pct = 95
+branch_floor_pct = 95
+critical_branch_files = [
+  "src/tc_fitness/gate.py",
+  "src/tc_fitness/runner.py",
+  "src/tc_fitness/gate_config.py",
+  "src/tc_fitness/runtime_contract.py",
+]
+```
+
+This mode requires complete Cobertura file and line detail, reconciles summary
+counts, and calculates line and branch percentages independently. Critical files
+require 100% branch coverage. Missing files/details, inconsistent counts, invalid
+thresholds, exemptions and empty source scope cannot pass. Untracked Python files
+within the declared roots are included. Existing line-only consumers remain
+compatible when `branch_floor_pct` is absent.
+
+The repository's self gate measures fresh branch-aware evidence for the exact
+base and candidate commits. It enforces the absolute floors, exact-base
+changed-line coverage and non-regression in one transaction. Missing or
+uncommitted evidence is an error.
+
+### Exact-base coverage and evidence handoff
+
+The new self-assurance transaction measures both exact commits afresh:
+
+```bash
+tc-fitness assure-coverage --base-commit <full-base-sha> \
+  --candidate-commit <full-head-sha> --evidence-dir /external/new-evidence \
+  --output /external/path/result.json
+```
+
+It verifies HEAD and ancestry, creates two detached clean worktrees, runs the
+fixed self-assurance test/profile in each, and immediately compares immutable
+in-memory measurements. It enforces 95 percent line/branch floors, 100 percent
+critical-predicate branches and changed executable lines, plus non-regression
+from the fresh exact-base measurement. Neither accepted receipts/digests nor
+candidate-configured roots, tests, floors or base selectors are inputs. The
+optional JSON is output-only and cannot be imported for admission.
+
+Each detached checkout gets its own external environment provisioned with
+`uv sync --locked --all-extras`. Coverage and pytest run through that
+environment's Python; provisioning or test failure is a terminal error, never
+a fallback to the controller environment. Measurements retain the lock digest
+and actual Python, Coverage.py, pytest and uv identities. The current trusted
+engine independently parses and adjudicates the reports. Its fixed pytest
+configuration registers tier names but does not load the candidate's tier
+plugin or candidate-selected pytest configuration.
+
+The evidence directory must be outside the checkout, new or empty and not a
+symlink. Per-side provisioning logs, Python/pytest/Coverage output, XML/JSON
+and `transaction.json` survive both success and failure; error output names
+the failing side/phase and relative native log paths. Only detached worktrees
+and their temporary environments are cleaned up. The controller recognises
+complete registered contract-fixture directories using its own manifest
+validator; those fixture cases run through their public contract tests rather
+than being collected as outer pytest modules. Malformed or unregistered
+directories remain subject to ordinary collection.
+
+Possible branch arcs come from Coverage.py's analysis of bound Python source.
+JSON executed/missing arcs must partition those opportunities, and XML must
+agree on each branch's total and covered exits. Removing metadata from both
+reports cannot turn a real branch into a zero-opportunity measurement.
+
+The engine accepts full immutable IDs only. Trusted local and hosted wrappers
+resolve the Git event or default-branch merge base. The self gate does not
+select an accepted receipt or allow the candidate to choose its anchor.
+
+`core:new_code_coverage` accepts `exact_base_commit` and `candidate_commit` as
+full immutable Git object IDs (or explicit `env:NAME` bindings). This mode
+requires `floor_pct = 100`, complete Python roots and no exemptions. It rejects
+unavailable/non-ancestor bases, mismatched HEAD, dirty or untracked source,
+missing reports and missing executable-line detail. Coverage.py's own source
+analysis supplies the executable-line inventory; report omissions cannot turn
+changed executable statements into non-code. Ordinary `base_ref` consumers keep
+their existing behaviour when exact identities are absent.
+
+The receipt producer remains available to consumer repositories that use the
+receipt-admission API. It is not part of this repository's self gate:
+
+```bash
+uv run python -m tc_fitness.coverage_admission produce \
+  --base-commit "$TC_FITNESS_BASE_COMMIT" \
+  --candidate-commit "$TC_FITNESS_CANDIDATE_COMMIT" \
+  --source src/tc_fitness --config pyproject.toml \
+  --run-id "$TC_FITNESS_RUN_ID" --attempt-id "$TC_FITNESS_ATTEMPT_ID" \
+  --output "$TC_FITNESS_COVERAGE_OUTPUT" \
+  --digest-output "$TC_FITNESS_COVERAGE_DIGEST_FILE" -- -m pytest -q
+```
+
+The output directory and digest handoff must be new for each attempt; the digest
+handoff is outside the candidate checkout. The producer never replaces previous
+evidence or marks its own measurement accepted. It binds exact commits, complete
+source bytes, tracked configuration, XML/JSON digests, integer counts, timestamps,
+run/attempt identity, test command, Python and Coverage.py versions.
+
+`coverage_receipt` activates receipt admission on the existing coverage checks.
+Its configuration also supplies `coverage_receipt_digest`,
+`accepted_coverage_receipt`, `accepted_coverage_digest`, `coverage_config`,
+`run_id`, `attempt_id` and `max_age_seconds`. Digests may be literal `sha256:...`
+or `file:/absolute/external/path` / `file:env:NAME` handoffs. A digest computed
+from the receipt being checked is not an independent trust anchor.
+
+Consumer CI/storage must select and protect the **latest accepted** digest. The
+producer and validator do not implement an acceptance store, bootstrap waiver,
+signature or hostile-process sandbox. Digest binding detects changed evidence;
+it cannot authenticate an attacker who also controls the trusted handoff.
+
+Catalogue steps are hard-gating by default. The removed `baseline_free` option
+is rejected rather than silently accepted.
+
+### Pytest tier assurance
+
+Canonical pytest tier assurance uses two complementary checks. Configure
+`core:every_test_has_tier_marker` with `require_module_marker = true` to require
+one literal module declaration, `pytestmark = pytest.mark.<tier>`, using
+`unit`, `contract`, `integration` or `e2e`. In this mode, `tier_markers` cannot
+change the vocabulary. Reusing `pytestmark`, aliasing pytest's marker namespace,
+and additional explicit tier applications fail; ordinary attributes and
+non-tier marks remain valid. The generic default retains configurable tiers
+and function-level markers for existing consumers.
+
+Also run `pytest -p tc_fitness.pytest_tiers --strict-markers` (register the four
+tiers in pytest configuration). This public plugin checks actual markers at
+collection finish, including parametrised, inherited and deselected items.
+Missing tiers, two identical tier marks and multiple different tiers fail with
+the node ID and exact marker list. It catches dynamic decorators and hook-added
+tiers without interpreting Python or starting another pytest process. tc-fitness
+enables it in its own pytest `addopts`; its source self-check uses the unsuppressed
+violation set. Collection assurance checks the items that pytest collects, not
+the correctness of tier selection or code that changes markers after collection.
+
 ## Library modules
 
 tc-fitness also ships these modules (the helpers `tc-fitness run` and a repo's
 checks both build on):
 
 - **`tc_fitness.lib`** — the merged check helpers:
-  - **baseline gating** (from kairix `scripts/checks/_arch_lib.py`):
+  - **hard gating** (from kairix `scripts/checks/_arch_lib.py`):
     `gate()`, `python_files()`, `main_entry()`, `repo_relative()`, `REPO_ROOT`.
   - **agent-actionable emit / YAML** (from tc-agent-zone `scripts/checks/_lib/`):
     `actionable()`, `emit_failures()`, `emit_pass()`, `load_yaml()`, `missing_keys()`.
@@ -300,7 +580,7 @@ checks both build on):
 
 ```python
 from tc_fitness import (
-    # baseline gating (kairix surface)
+    # hard gating (kairix surface)
     gate, gate_keys, python_files, main_entry, repo_relative, REPO_ROOT,
     # agent-actionable emit / YAML (tc-agent-zone surface)
     actionable, remediation, emit_failures, emit_pass, load_yaml, missing_keys,
@@ -313,21 +593,13 @@ from tc_fitness import (
 )
 ```
 
-> **v0.2.0 is an additive, backward-compatible superset of v0.1.0.** Every
-> v0.1.0 signature and behaviour is unchanged when the new optional parameters
-> are left at their defaults. A repo pinned to `@v0.1.0` keeps working
-> unmodified; the additions (`gate_keys`, `remediation`, `actionable(..., run=)`,
-> `is_vague_reason(..., min_len=)`, `parse_overrides(..., min_len=)`) exist to
-> cover tc-agent-zone's check surface. See *What v0.2.0 adds* below.
-
-### Baseline gating
+### Hard gating
 
 ```python
 from pathlib import Path
 from tc_fitness import gate, main_entry
 
-# Low-level: gate a pre-computed violation set against
-# .architecture/baseline/<name>-files.txt
+# Low-level: fail on any current violation.
 exit_code = gate("f26-core-no-provider-imports", violations, REMEDIATION)
 
 # Convenience: scan roots, call a per-file predicate, gate the union.
@@ -361,9 +633,9 @@ if err is None:
     absent = missing_keys(data, ("name", "version"))
 ```
 
-`load_yaml` imports PyYAML lazily and returns `(None, "PyYAML missing")` when it
-isn't installed, so the dependency is optional — install the `yaml` extra only if
-you call it.
+`load_yaml` is available in every default installation. YAML-backed public
+surfaces, including check-contract manifests, therefore do not require an
+optional extra to parse their configuration.
 
 ## What v0.2.0 adds
 
@@ -402,20 +674,16 @@ print(remediation(
 # Forbidden: logger.info(f"token={token}")
 ```
 
-### `gate_keys(name, current, remediation, *, baseline_suffix="-ids.txt")` — string-keyed ratchet
+### `gate_keys(name, current, remediation)` — string-keyed hard gate
 
-13 tc-agent-zone checks ratchet a baseline whose KEY is a logical id (`-ids.txt`,
-e.g. `F30:my_tool`) or a path-glob (`-paths.txt`, e.g. `kairix/**/web/static/*`),
-NOT a working-tree file path. `gate()` keys on `Path` objects and *relativises
-absolute paths* under `repo_root` — wrong for opaque string keys. `gate_keys` is
-its string-keyed sibling: same net-new-fails / shrinks-only / grandfather
-semantics and the same exit-code contract, but keys are treated as opaque
-strings (no `Path` coercion). `baseline_suffix` selects `-ids.txt` (default) or
-`-paths.txt`.
+`gate()` keys on `Path` objects and relativises absolute paths under
+`repo_root`. `gate_keys()` is its sibling for opaque logical identifiers and
+path globs: it does not coerce them to `Path` values. Both return `1` whenever
+any current violation exists and `0` only for an empty set.
 
 ```python
-exit_code = gate_keys("f30", {"F30:my_new_tool"}, REMEDIATION)                     # → f30-ids.txt
-exit_code = gate_keys("f89", static_globs, REMEDIATION, baseline_suffix="-paths.txt")  # → f89-paths.txt
+exit_code = gate_keys("f30", {"F30:my_new_tool"}, REMEDIATION)
+exit_code = gate_keys("f89", static_globs, REMEDIATION)
 ```
 
 ### `min_len` floor override on the ratchet vagueness check
@@ -591,11 +859,11 @@ uv sync --all-extras --all-groups
 uv run pytest tests/ -q
 ```
 
-The package is self-contained: pure stdlib at runtime, PyYAML an optional extra.
-It must never import from `kairix` or `tc-agent-zone` — it is the shared core both
-depend on. `tests/test_lib.py` pins the call patterns consumers' checks depend on;
-`tests/test_ratchet.py` pins the reconciled ratchet grammar (40-char threshold;
-em-dash and hyphen; `NOSONAR` in the suppression set).
+The package has one runtime dependency, PyYAML, for its YAML-backed public
+surfaces. It must never import from `kairix` or `tc-agent-zone` — it is the
+shared core both depend on. `tests/test_lib.py` pins the call patterns consumers'
+checks depend on; `tests/test_ratchet.py` pins the reconciled ratchet grammar
+(40-char threshold; em-dash and hyphen; `NOSONAR` in the suppression set).
 
 ### Author or improve a CORE check
 

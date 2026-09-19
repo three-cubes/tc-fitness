@@ -1,0 +1,22 @@
+schema: tc.fitness/check-contract/v1
+check: core:readme_resolver_coverage
+config:
+  roots:
+  - domains
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: readme-resolver-coverage
+      path: domains/payments
+      message_contains: add a resolver README
+dependencies: []

@@ -3,21 +3,31 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from tc_fitness.core_checks.coverage_floor import (
     build,
-    main,
+    parse_coverage_details,
     parse_coverage_report,
 )
 
+pytestmark = pytest.mark.integration
 
-def _report(line_rates: dict[str, float], *, source: str = "src") -> str:
+
+def _report(line_rates: dict[str, float], *, source: str = "src", sources: list[str] | None = None) -> str:
     classes = "\n".join(f'<class filename="{name}" line-rate="{rate}"/>' for name, rate in line_rates.items())
+    source_values = sources if sources is not None else [source]
+    source_xml = "".join(f"<source>{value}</source>" for value in source_values)
     return (
         '<?xml version="1.0" ?>\n'
         '<coverage line-rate="0.5">\n'
-        f"  <sources><source>{source}</source></sources>\n"
+        f"  <sources>{source_xml}</sources>\n"
         f"  <packages><package><classes>\n{classes}\n"
         "  </classes></package></packages>\n"
         "</coverage>\n"
@@ -31,23 +41,123 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+def _strict_report(classes: dict[str, tuple[tuple[int, ...], tuple[int, int] | None]]) -> str:
+    """Build count-consistent Cobertura detail for the files materialised by a test."""
+    line_total = line_covered = branch_total = branch_covered = 0
+    rendered: list[str] = []
+    for filename, (hits, branch) in classes.items():
+        line_total += len(hits)
+        line_covered += sum(hit > 0 for hit in hits)
+        branch_attributes = ""
+        if branch is not None:
+            covered, total = branch
+            branch_total += total
+            branch_covered += covered
+            branch_attributes = (
+                f' branch="true" condition-coverage="{100 * covered / total:g}% ({covered}/{total})"'
+            )
+        line_elements = []
+        for number, hit in enumerate(hits, start=1):
+            attributes = branch_attributes if number == 1 and branch is not None else ""
+            line_elements.append(f'<line number="{number}" hits="{hit}"{attributes}/>')
+        rendered.append(
+            f'<class filename="{filename}" line-rate="{sum(hit > 0 for hit in hits) / len(hits):.4g}" '
+            f'branch-rate="{branch[0] / branch[1] if branch else 1:.4g}">'
+            f"<lines>{''.join(line_elements)}</lines></class>"
+        )
+    line_rate = line_covered / line_total if line_total else 1
+    branch_rate = branch_covered / branch_total if branch_total else 1
+    return (
+        f'<coverage line-rate="{line_rate:.4g}" branch-rate="{branch_rate:.4g}" '
+        f'lines-valid="{line_total}" lines-covered="{line_covered}" '
+        f'branches-valid="{branch_total}" branches-covered="{branch_covered}">'
+        f"<sources><source>.</source></sources><packages><package><classes>{''.join(rendered)}"
+        "</classes></package></packages></coverage>"
+    )
+
+
+def _strict_fixture(
+    tmp_path: Path,
+    classes: dict[str, tuple[str, tuple[int, ...], tuple[int, int] | None]],
+) -> Path:
+    for filename, (source, _hits, _branch) in classes.items():
+        _seed(tmp_path, filename, source)
+    report_classes = {filename: (hits, branch) for filename, (_source, hits, branch) in classes.items()}
+    return _seed(tmp_path, "coverage.xml", _strict_report(report_classes))
+
+
 def test_parse_joins_source_root(tmp_path: Path) -> None:
     p = _seed(tmp_path, "coverage.xml", _report({"a.py": 0.4, "b.py": 1.0}))
     parsed = parse_coverage_report(p)
     assert parsed == {"src/a.py": 40.0, "src/b.py": 100.0}
 
 
-def test_parse_missing_report_empty(tmp_path: Path) -> None:
-    assert parse_coverage_report(tmp_path / "nope.xml") == {}
+def test_absolute_source_root_is_normalised_to_repository_paths(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/tc_fitness/a.py", "value = 1\n")
+    report = _seed(
+        tmp_path,
+        "coverage.xml",
+        _report({"src/tc_fitness/a.py": 0.4}, source=str(tmp_path)),
+    )
+
+    assert parse_coverage_report(report, repo_root=tmp_path) == {"src/tc_fitness/a.py": 40.0}
+    rule = build({"roots": ["src/tc_fitness"], "floor_pct": 95.0}, repo_root=tmp_path)
+    assert rule.collect_violations() == {Path("src/tc_fitness/a.py")}
+
+
+def test_multiple_absolute_source_roots_resolve_existing_files(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/tc_fitness/a.py", "value = 1\n")
+    _seed(tmp_path, "scripts/helper.py", "value = 2\n")
+    report = _seed(
+        tmp_path,
+        "coverage.xml",
+        _report(
+            {"a.py": 1.0, "helper.py": 0.4},
+            sources=[str(tmp_path / "src" / "tc_fitness"), str(tmp_path / "scripts")],
+        ),
+    )
+
+    assert parse_coverage_report(report, repo_root=tmp_path) == {
+        "src/tc_fitness/a.py": 100.0,
+        "scripts/helper.py": 40.0,
+    }
+
+
+def test_missing_report_is_a_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "value = 1\n")
+    rule = build({"roots": ["src"], "floor_pct": 95.0}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("coverage.xml")}
+    assert rule.run() == 1
+
+
+def test_empty_report_is_a_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "value = 1\n")
+    _seed(tmp_path, "coverage.xml", "<coverage><sources><source>src</source></sources></coverage>")
+    rule = build({"roots": ["src"], "floor_pct": 95.0}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("coverage.xml")}
+
+
+def test_source_file_omitted_from_report_is_a_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/measured.py", "value = 1\n")
+    _seed(tmp_path, "src/omitted.py", "value = 2\n")
+    _seed(tmp_path, "coverage.xml", _report({"measured.py": 1.0}))
+    rule = build({"roots": ["src"], "floor_pct": 95.0}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("src/omitted.py")}
 
 
 def test_below_floor_is_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "a = 1\n")
+    _seed(tmp_path, "src/b.py", "b = 1\n")
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.4, "b.py": 0.95}))
     rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
 
 
 def test_floor_is_config_driven(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "a = 1\n")
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.85}))
     # floor 90 → a.py violates; floor 80 → clean.
     assert {
@@ -62,14 +172,6 @@ def test_roots_scope_the_violation_set(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()  # vendor/a.py is out of the src root
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}))
-    rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
 def test_unsafe_xml_rejected(tmp_path: Path) -> None:
     p = _seed(tmp_path, "coverage.xml", "<!DOCTYPE x>\n<coverage/>")
     try:
@@ -80,11 +182,271 @@ def test_unsafe_xml_rejected(tmp_path: Path) -> None:
         raise AssertionError("expected ValueError for DTD declaration")
 
 
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}))
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "coverage-floor-files.txt").exists()
+def test_parse_coverage_report_skips_invalid_entries_and_keeps_lowest_duplicate_rate(tmp_path: Path) -> None:
+    report = _seed(
+        tmp_path,
+        "coverage.xml",
+        """<coverage><sources><source>src</source></sources><packages><package><classes>
+        <class filename="module.py" line-rate="0.9"/>
+        <class filename="module.py" line-rate="0.4"/>
+        <class filename="module.py" line-rate="0.6"/>
+        <class filename="" line-rate="0.1"/>
+        <class filename="broken.py" line-rate="not-a-rate"/>
+        </classes></package></packages></coverage>""",
+    )
+
+    assert parse_coverage_report(report) == {"src/module.py": 40.0}
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ("<other/>", "expected a Cobertura"),
+        ("<coverage><class><lines/></class></coverage>", "missing its source filename"),
+        (
+            '<coverage><sources><source>.</source></sources><class filename="src/a.py" line-rate="1" branch-rate="1"><lines><line number="1" hits="1"/></lines></class><class filename="src/a.py" line-rate="1" branch-rate="1"><lines><line number="1" hits="1"/></lines></class></coverage>',
+            "duplicate source file",
+        ),
+        ("<coverage><sources><source>.</source></sources></coverage>", "empty coverage report"),
+    ],
+)
+def test_strict_report_rejects_incomplete_file_details(
+    tmp_path: Path,
+    document: str,
+    message: str,
+) -> None:
+    _seed(tmp_path, "src/a.py", "value = 1\n")
+    report = _seed(tmp_path, "coverage.xml", document)
+
+    with pytest.raises(ValueError, match=message):
+        parse_coverage_details(report, repo_root=tmp_path)
+
+
+def test_stdlib_xml_fallback_reads_a_real_report_without_site_packages(tmp_path: Path) -> None:
+    report = _seed(tmp_path, "coverage.xml", _report({"a.py": 0.75}))
+    source_root = Path(__file__).parents[1] / "src"
+    program = (
+        "import json, sys; "
+        "sys.path.insert(0, sys.argv[1]); "
+        "from tc_fitness.core_checks.coverage_floor import parse_coverage_report; "
+        "print(json.dumps(parse_coverage_report(__import__('pathlib').Path(sys.argv[2]))))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", program, str(source_root), str(report)],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**os.environ, "PYTHONPATH": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"src/a.py": 75.0}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("floor_pct", True),
+        ("floor_pct", "95"),
+        ("floor_pct", -1),
+        ("floor_pct", 101),
+        ("branch_floor_pct", -1),
+        ("branch_floor_pct", "95"),
+    ],
+)
+def test_strict_config_rejects_non_numeric_or_out_of_range_floors(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    _seed(tmp_path, "src/a.py", "value = 1\n")
+    with pytest.raises(ValueError, match="finite percentage"):
+        build({"roots": ["src"], "branch_floor_pct": 95, field: value}, repo_root=tmp_path)
+
+
+def test_receipt_mode_resolves_report_and_rejects_missing_execution_identity(tmp_path: Path) -> None:
+    _strict_fixture(tmp_path, {"src/a.py": ("value = 1\n", (1,), None)})
+    rule = build(
+        {
+            "roots": ["src"],
+            "branch_floor_pct": 95,
+            "coverage_receipt": "receipt.json",
+            "coverage_report": "coverage.xml",
+        },
+        repo_root=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="non-empty execution input"):
+        rule.run()
+
+
+def test_strict_noncritical_branch_floor_reports_partial_branch_paths(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _strict_fixture(
+        tmp_path,
+        {
+            "src/ordinary.py": (
+                "if enabled:\n    result = 1\nelse:\n    result = 0\n",
+                (1, 1, 1, 1),
+                (1, 2),
+            ),
+        },
+    )
+    rule = build({"roots": ["src"], "floor_pct": 95, "branch_floor_pct": 95}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+    assert "branch coverage 50% below 95%" in capsys.readouterr().out
+
+
+def test_strict_coverage_requires_complete_line_and_critical_branch_measurement(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _strict_fixture(
+        tmp_path,
+        {
+            "src/critical.py": (
+                "if enabled:\n    result = 1\nelse:\n    result = 0\n",
+                (1, 1, 0, 0),
+                (1, 2),
+            ),
+        },
+    )
+    rule = build(
+        {
+            "roots": ["src"],
+            "floor_pct": 95,
+            "branch_floor_pct": 95,
+            "critical_branch_files": ["src/critical.py"],
+        },
+        repo_root=tmp_path,
+    )
+
+    assert rule.collect_violations() == {Path("src/critical.py")}
+    assert rule.run() == 1
+    output = capsys.readouterr().out
+    assert "line coverage 50% below 95%" in output
+    assert "critical branch coverage 50% below 100%" in output
+
+
+def test_strict_coverage_accepts_complete_tree_with_all_critical_exits(tmp_path: Path) -> None:
+    _strict_fixture(
+        tmp_path,
+        {
+            "src/critical.py": (
+                "if enabled:\n    result = 1\nelse:\n    result = 0\n",
+                (1, 1, 1, 1),
+                (2, 2),
+            ),
+            "src/plain.py": ("value = 1\n", (1,), None),
+        },
+    )
+    rule = build(
+        {
+            "roots": ["src"],
+            "floor_pct": 95,
+            "branch_floor_pct": 95,
+            "critical_branch_files": ["src/critical.py"],
+        },
+        repo_root=tmp_path,
+    )
+
+    assert rule.run() == 0
+    assert rule.collect_violations() == set()
+    assert (
+        parse_coverage_details(tmp_path / "coverage.xml", repo_root=tmp_path)["src/critical.py"].branch_pct
+        == 100
+    )
+
+
+def test_strict_coverage_reports_source_omitted_from_real_report(tmp_path: Path) -> None:
+    _strict_fixture(
+        tmp_path,
+        {
+            "src/measured.py": ("value = 1\n", (1,), None),
+            "src/omitted.py": ("value = 2\n", (1,), None),
+        },
+    )
+    report = _strict_report({"src/measured.py": ((1,), None)})
+    _seed(tmp_path, "coverage.xml", report)
+    rule = build({"roots": ["src"], "floor_pct": 95, "branch_floor_pct": 95}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("src/omitted.py")}
+    assert rule.run() == 1
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"roots": ["src"], "coverage_receipt": "receipt.json"}, "independent branch coverage"),
+        ({"roots": ["src"], "branch_floor_pct": True}, "finite percentage"),
+        ({"roots": ["src"], "branch_floor_pct": 101}, "finite percentage"),
+        ({"roots": ["src"], "branch_floor_pct": float("nan")}, "finite percentage"),
+        ({"roots": ["src"], "critical_branch_files": ["src/a.py"]}, "require branch_floor_pct"),
+        ({"roots": ["src"], "branch_floor_pct": 95, "critical_branch_files": "src/a.py"}, "must be a list"),
+        (
+            {"roots": ["src"], "branch_floor_pct": 95, "critical_branch_files": ["../outside.py"]},
+            "must exist within",
+        ),
+        (
+            {"roots": ["src"], "branch_floor_pct": 95, "critical_branch_files": ["coverage.xml"]},
+            "must exist within",
+        ),
+        (
+            {"roots": ["src"], "branch_floor_pct": 95, "exempt_files": ["src/a.py"]},
+            "exempt_files is not supported",
+        ),
+        ({"roots": ["/tmp"], "branch_floor_pct": 95}, "repository-relative source roots"),
+        ({"roots": ["../outside"], "branch_floor_pct": 95}, "repository-relative source roots"),
+        ({"roots": ["missing"], "branch_floor_pct": 95}, "repository-relative source roots"),
+    ],
+)
+def test_strict_config_rejects_invalid_measurement_contracts(
+    tmp_path: Path,
+    config: dict[str, object],
+    message: str,
+) -> None:
+    _seed(tmp_path, "src/a.py", "value = 1\n")
+    with pytest.raises(ValueError, match=message):
+        build(config, repo_root=tmp_path)
+
+
+def test_strict_coverage_rejects_an_empty_source_root(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/.keep", "")
+    _seed(tmp_path, "outside.py", "value = 1\n")
+    _seed(tmp_path, "coverage.xml", _strict_report({"outside.py": ((1,), None)}))
+    rule = build({"roots": ["src"], "floor_pct": 95, "branch_floor_pct": 95}, repo_root=tmp_path)
+
+    with pytest.raises(ValueError, match="contain no Python files"):
+        rule.collect_violations()
+
+
+def test_strict_coverage_rejects_report_totals_that_disagree_with_file_detail(tmp_path: Path) -> None:
+    source = _seed(tmp_path, "src/a.py", "value = 1\n")
+    report = _seed(
+        tmp_path,
+        "coverage.xml",
+        _strict_report({"src/a.py": ((1,), None)}).replace('lines-covered="1"', 'lines-covered="0"'),
+    )
+
+    with pytest.raises(ValueError, match="totals disagree"):
+        parse_coverage_details(report, repo_root=source.parents[1])
+
+
+def test_python_module_entrypoint_accepts_a_real_coverage_report(tmp_path: Path) -> None:
+    _seed(tmp_path, "coverage.xml", _report({"a.py": 1.0}))
+    source_root = Path(__file__).parents[1] / "src"
+    result = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.core_checks.coverage_floor", "--repo-root", str(tmp_path)],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(source_root)},
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_no_repo_strings_in_executable_code() -> None:

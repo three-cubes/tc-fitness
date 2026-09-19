@@ -15,8 +15,7 @@ any numbered-doc convention.
 This rule is a CROSS-FILE invariant (a number, not a file, is the unit of
 violation), so it overrides :meth:`collect_violations` rather than implementing
 a per-file predicate: a file is "in violation" when it shares its number with
-another file. Baseline gating still applies — a net-new colliding file fails;
-pre-existing collisions can be grandfathered (then paid down).
+another file.
 """
 
 from __future__ import annotations
@@ -120,7 +119,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(AdrNumberUnique, argv)
 
 

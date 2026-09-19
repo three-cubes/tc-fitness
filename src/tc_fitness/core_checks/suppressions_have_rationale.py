@@ -59,12 +59,12 @@ def file_has_bare_suppression(path: Path, compiled: Sequence[re.Pattern[str]]) -
     """True iff any line in ``path`` matches a bare-suppression pattern.
 
     Pure helper (the detection core) so tests assert on it directly. A read
-    error is treated as "no violation".
+    error is a violation because the configured source could not be evaluated.
     """
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (UnicodeDecodeError, OSError):
+        return True
     return any(pat.search(line) for line in lines for pat in compiled)
 
 
@@ -106,7 +106,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> Suppre
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(SuppressionsHaveRationale, argv)
 
 

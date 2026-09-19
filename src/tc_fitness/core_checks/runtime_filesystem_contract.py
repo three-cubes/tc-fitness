@@ -10,6 +10,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, cast
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks._runtime_contracts import (
     ContractDocuments,
     ContractFinding,
@@ -20,6 +21,7 @@ from tc_fitness.core_checks._runtime_contracts import (
     is_component_pattern_prefix,
     is_integer_identity,
     is_path_identity_segment,
+    render_findings,
     sort_findings,
 )
 from tc_fitness.core_checks.runtime_evidence_contract import (
@@ -1668,6 +1670,20 @@ class RuntimeFilesystemContract(RuntimeContractRule):
         )
         return sort_findings((*filesystem_findings, *evidence_findings))
 
+    def run(self) -> int:
+        """Emit each declaration defect into the structured contract ledger."""
+        findings = self.collect_findings()
+        for finding in findings:
+            report_finding(
+                finding.code,
+                str(finding.source.relative_to(self._repo_root)),
+                finding.message,
+            )
+        if not findings:
+            return 0
+        render_findings(findings)
+        return 1
+
 
 def build(
     config: Mapping[str, Any],
@@ -1681,11 +1697,6 @@ def build(
 def main(argv: list[str] | None = None) -> int:
     """Run one configured filesystem contract directly from the command line."""
     parser = argparse.ArgumentParser(prog=RuntimeFilesystemContract.name)
-    parser.add_argument(
-        "--establish-baseline",
-        action="store_true",
-        help="validate the configured contract and reject baseline establishment on any finding",
-    )
     parser.add_argument(
         "--repo-root",
         type=Path,
@@ -1741,10 +1752,6 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     rule = RuntimeFilesystemContract.from_config(config, repo_root=args.repo_root)
-    if args.establish_baseline:
-        path = rule.establish_baseline()
-        print(f"established baseline: {path}")
-        return 0
     return rule.run()
 
 

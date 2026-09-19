@@ -19,10 +19,8 @@ it overrides :meth:`collect_violations` and reads ``git log`` rather than
 walking files. It is repo-agnostic — the allowlist, the name patterns, and the
 range refs are ALL consumer config; the engine ships no identities.
 
-Guard-forward (decision D2): a ``cutover_ref`` bounds enforcement to
-``cutover_ref..HEAD`` so historical commits made before the standard was adopted
-never fail. With no allowlist configured the rule is a NO-OP, so a consumer that
-hasn't opted in is never broken.
+The configured ``base_ref..head_ref`` range is evaluated in full. With no
+allowlist configured the rule is a no-op because no identity policy exists.
 """
 
 from __future__ import annotations
@@ -97,11 +95,15 @@ def _log_identities(repo_root: Path, rev_range: str) -> list[tuple[str, str, str
         return []
     rows: list[tuple[str, str, str, str, str]] = []
     for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
         parts = line.split(_SEP)
         if len(parts) == 5:
             rows.append((parts[0], parts[1], parts[2], parts[3], parts[4]))
+        else:
+            # Commit metadata can contain arbitrary control characters. If one
+            # collides with the record separator, or Git returns an empty row,
+            # do not silently omit the record from the identity gate.
+            sha = parts[0] if parts[0].strip() else "malformed git-log record"
+            rows.append((sha, "", "", "", ""))
     return rows
 
 
@@ -116,7 +118,6 @@ class CanonicalCommitIdentity(FitnessRule):
     allowed_name_patterns: tuple[re.Pattern[str], ...] = ()
     base_ref: str = DEFAULT_BASE_REF
     head_ref: str = DEFAULT_HEAD_REF
-    cutover_ref: str | None = None
 
     @classmethod
     def from_config(
@@ -131,8 +132,6 @@ class CanonicalCommitIdentity(FitnessRule):
         rule.allowed_name_patterns = tuple(re.compile(p) for p in config.get("allowed_name_patterns", ()))
         rule.base_ref = str(config.get("base_ref", DEFAULT_BASE_REF))
         rule.head_ref = str(config.get("head_ref", DEFAULT_HEAD_REF))
-        cutover = config.get("cutover_ref")
-        rule.cutover_ref = str(cutover) if cutover else None
         return rule
 
     def _configured(self) -> bool:
@@ -140,8 +139,7 @@ class CanonicalCommitIdentity(FitnessRule):
         return bool(self.allowed_emails or self.allowed_name_patterns)
 
     def _rev_range(self) -> str:
-        left = self.cutover_ref if self.cutover_ref else self.base_ref
-        return f"{left}..{self.head_ref}"
+        return f"{self.base_ref}..{self.head_ref}"
 
     def _identity_ok(self, name: str, email: str) -> bool:
         if self.allowed_emails and email not in self.allowed_emails:
@@ -199,7 +197,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(CanonicalCommitIdentity, argv)
 
 

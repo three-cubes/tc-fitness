@@ -13,15 +13,13 @@ import pytest
 from tc_fitness.core_checks._runtime_contracts import (
     CONTRACT_SCHEMA,
     ContractDocuments,
-    absolute_posix_components,
-    canonical_json_bytes,
-    component_paths_overlap,
-    is_component_prefix,
-    is_integer_identity,
-    is_sha256_digest,
+    RuntimeContractRule,
     load_contract_documents,
+    load_runtime_document,
     resolve_contract,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -38,42 +36,6 @@ def _selected_contract() -> dict[str, object]:
         "deployment": {},
         "evidence": {},
     }
-
-
-def test_canonical_json_bytes_are_stable_and_compact() -> None:
-    assert canonical_json_bytes({"z": 1, "snowman": "☃", "a": [True, None]}) == (
-        b'{"a":[true,null],"snowman":"\\u2603","z":1}'
-    )
-
-
-def test_canonical_json_bytes_reject_nan() -> None:
-    with pytest.raises(ValueError, match="Out of range float"):
-        canonical_json_bytes({"value": float("nan")})
-
-
-def test_posix_path_helpers_compare_components_not_string_prefixes() -> None:
-    profiles = absolute_posix_components("/hermes-home/profiles")
-    profile = absolute_posix_components("/hermes-home/profiles/consultant")
-    sibling = absolute_posix_components("/hermes-home/profiles-backup")
-    assert profiles == ("hermes-home", "profiles")
-    assert profile is not None and profiles is not None
-    assert is_component_prefix(profiles, profile)
-    assert component_paths_overlap(profiles, profile)
-    assert sibling is not None
-    assert not is_component_prefix(profiles, sibling)
-    assert not component_paths_overlap(profiles, sibling)
-
-
-@pytest.mark.parametrize("value", ["relative/path", "/safe/../escape", "\\windows\\path", ""])
-def test_posix_path_helpers_reject_non_absolute_or_unsafe_paths(value: str) -> None:
-    assert absolute_posix_components(value) is None
-
-
-def test_identity_helpers_reject_boolean_ids_and_noncanonical_digests() -> None:
-    assert is_integer_identity(1000)
-    assert not is_integer_identity(True)
-    assert is_sha256_digest("sha256:" + "a" * 64)
-    assert not is_sha256_digest("sha256:" + "A" * 64)
 
 
 @pytest.mark.parametrize(
@@ -114,35 +76,77 @@ def test_missing_configured_contract_is_a_finding(tmp_path: Path) -> None:
     assert {finding.code for finding in findings} == {"missing-file"}
 
 
-def test_resolve_selects_one_registry_target_without_mutating_input() -> None:
-    registry = {
-        "schema": CONTRACT_SCHEMA,
-        "environments": {
-            "prod": {
-                "targets": {
-                    "hermes": {
-                        "filesystem": {"roots": []},
-                        "access": {},
-                        "deployment": {},
-                        "evidence": {},
-                    }
-                }
-            }
-        },
-    }
-    before = canonical_json_bytes(registry)
-    selected, findings = resolve_contract(registry, environment="prod", target="hermes", source=Path("x"))
-    assert findings == ()
-    assert selected == {
-        "schema": CONTRACT_SCHEMA,
-        "environment": "prod",
-        "target": "hermes",
-        "filesystem": {"roots": []},
-        "access": {},
-        "deployment": {},
-        "evidence": {},
-    }
-    assert canonical_json_bytes(registry) == before
+@pytest.mark.parametrize(
+    ("name", "body", "code"),
+    [
+        ("contract.json", b"\xff", "invalid-utf8"),
+        ("contract.json", b"[]", "wrong-document-shape"),
+        ("contract.json", b'{"value": 1e999}', "invalid-number"),
+        ("contract.yaml", b"\xff", "invalid-utf8"),
+        ("contract.yaml", b"- item\n", "wrong-document-shape"),
+        ("contract.yaml", b"key: [unterminated\n", "invalid-yaml"),
+        ("contract.txt", b"{}", "unsupported-format"),
+    ],
+)
+def test_runtime_document_rejects_invalid_public_inputs(
+    tmp_path: Path, name: str, body: bytes, code: str
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(body)
+    value, findings, _raw = load_runtime_document(path, expected_schema=None)
+    assert value is None
+    assert code in {finding.code for finding in findings}
+
+
+def test_empty_contract_config_is_inactive(tmp_path: Path) -> None:
+    assert load_contract_documents({}, repo_root=tmp_path) == (None, ())
+
+
+def test_required_evidence_needs_a_configured_path(tmp_path: Path) -> None:
+    _write_json(tmp_path / "contract.json", _selected_contract())
+    documents, findings = load_contract_documents(
+        {"contract_file": "contract.json"}, repo_root=tmp_path, require_evidence=True
+    )
+    assert documents is None
+    assert {finding.code for finding in findings} == {"missing-config"}
+
+
+def test_symlinked_contract_cannot_escape_repository(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-contract.json"
+    _write_json(outside, _selected_contract())
+    (tmp_path / "contract.json").symlink_to(outside)
+    try:
+        documents, findings = load_contract_documents({"contract_file": "contract.json"}, repo_root=tmp_path)
+    finally:
+        outside.unlink()
+    assert documents is None
+    assert {finding.code for finding in findings} == {"unsafe-config-path"}
+
+
+def test_runtime_contract_rule_public_base_behaviour(tmp_path: Path) -> None:
+    inactive = RuntimeContractRule.from_config({}, repo_root=tmp_path)
+    assert inactive.collect_findings() == ()
+    assert inactive.validate_configuration() == ()
+    assert (
+        inactive.validate_documents(
+            ContractDocuments(
+                contract_path=tmp_path / "contract.json",
+                contract=_selected_contract(),
+                contract_bytes=b"{}",
+                evidence_path=None,
+                evidence=None,
+                evidence_bytes=None,
+            )
+        )
+        == ()
+    )
+    assert inactive.run() == 0
+    with pytest.raises(ValueError, match="not configured"):
+        inactive.load_documents()
+
+    active = RuntimeContractRule.from_config({"contract_file": "missing.json"}, repo_root=tmp_path)
+    assert active.file_has_violation(tmp_path / "anything") is False
+    assert active.run() == 1
 
 
 def test_loader_preserves_exact_source_bytes(tmp_path: Path) -> None:

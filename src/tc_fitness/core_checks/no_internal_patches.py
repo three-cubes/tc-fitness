@@ -12,7 +12,7 @@ Ported from tc-agent-zone ``scripts/checks/no_internal_patches.py`` (itself
 kairix F1) and re-expressed as a configurable, repo-agnostic rule. The AST
 anti-pattern detection is domain-intrinsic; the two sets that decide what
 "internal" means (``internal_roots`` — patching these is the smell) and what is
-a legitimate boundary fake (``exempt_roots`` — stdlib + SDK module roots) are
+a legitimate boundary fake (stdlib or an external SDK module root) is
 consumer config. The engine ships NO repo package names.
 """
 
@@ -126,12 +126,9 @@ def _root_resolves_to_internal(
     aliases: dict[str, str],
     dyn_vars: set[str],
     internal_roots: frozenset[str],
-    exempt_roots: frozenset[str],
 ) -> bool:
     if root in internal_roots or root in dyn_vars:
         return True
-    if root in exempt_roots:
-        return False
     return root in aliases and _is_internal(aliases[root], internal_roots)
 
 
@@ -140,15 +137,12 @@ def _resolves_to_internal(
     aliases: dict[str, str],
     dyn_vars: set[str],
     internal_roots: frozenset[str],
-    exempt_roots: frozenset[str],
 ) -> bool:
     if isinstance(expr, ast.Name):
         return _name_resolves_to_internal(expr.id, aliases, dyn_vars, internal_roots)
     if isinstance(expr, ast.Attribute):
         root = _attribute_root_name(expr)
-        return root is not None and _root_resolves_to_internal(
-            root, aliases, dyn_vars, internal_roots, exempt_roots
-        )
+        return root is not None and _root_resolves_to_internal(root, aliases, dyn_vars, internal_roots)
     return False
 
 
@@ -210,7 +204,6 @@ def _node_violates(
     dyn_vars: set[str],
     parent_map: dict[ast.AST, ast.AST],
     internal_roots: frozenset[str],
-    exempt_roots: frozenset[str],
 ) -> bool:
     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
         if any(
@@ -227,15 +220,14 @@ def _node_violates(
             return True
     if isinstance(node, ast.Assign) and not _is_inside_pytest_raises(parent_map, node):
         if any(
-            isinstance(t, ast.Attribute)
-            and _resolves_to_internal(t, aliases, dyn_vars, internal_roots, exempt_roots)
+            isinstance(t, ast.Attribute) and _resolves_to_internal(t, aliases, dyn_vars, internal_roots)
             for t in node.targets
         ):
             return True
     if isinstance(node, ast.Call) and _is_monkeypatch_setattr(node):
         if _first_arg_is_internal_string(node, internal_roots):
             return True
-        if node.args and _resolves_to_internal(node.args[0], aliases, dyn_vars, internal_roots, exempt_roots):
+        if node.args and _resolves_to_internal(node.args[0], aliases, dyn_vars, internal_roots):
             return True
     return False
 
@@ -244,7 +236,6 @@ def file_patches_internal(
     path: Path,
     *,
     internal_roots: frozenset[str],
-    exempt_roots: frozenset[str],
 ) -> bool:
     """Pure detection helper: True iff ``path`` exhibits any internal-patch shape.
 
@@ -253,7 +244,7 @@ def file_patches_internal(
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (SyntaxError, OSError):
+    except (SyntaxError, UnicodeDecodeError, OSError):
         return False
     aliases = _resolve_internal_aliases(tree, internal_roots)
     dyn_vars = _resolve_dynamic_module_vars(tree)
@@ -261,10 +252,7 @@ def file_patches_internal(
     for parent in ast.walk(tree):
         for child in ast.iter_child_nodes(parent):
             parent_map[child] = parent
-    return any(
-        _node_violates(node, aliases, dyn_vars, parent_map, internal_roots, exempt_roots)
-        for node in ast.walk(tree)
-    )
+    return any(_node_violates(node, aliases, dyn_vars, parent_map, internal_roots) for node in ast.walk(tree))
 
 
 class NoInternalPatches(FitnessRule):
@@ -275,10 +263,8 @@ class NoInternalPatches(FitnessRule):
     extensions = (".py",)
 
     #: Rule-specific config (instance attrs; from_config overrides per consumer).
-    #: ``internal_roots`` — package roots whose patching is the smell;
-    #: ``exempt_roots`` — stdlib + SDK roots that are legitimate boundary fakes.
+    #: ``internal_roots`` — package roots whose patching is the smell.
     internal_roots: frozenset[str] = frozenset()
-    exempt_roots: frozenset[str] = frozenset()
 
     @classmethod
     def from_config(
@@ -290,7 +276,6 @@ class NoInternalPatches(FitnessRule):
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, NoInternalPatches)  # noqa: S101  # narrowing for mypy
         rule.internal_roots = frozenset(config.get("internal_roots", ()))
-        rule.exempt_roots = frozenset(config.get("exempt_roots", ()))
         return rule
 
     def file_has_violation(self, path: Path) -> bool:
@@ -299,7 +284,6 @@ class NoInternalPatches(FitnessRule):
         return file_patches_internal(
             path,
             internal_roots=self.internal_roots,
-            exempt_roots=self.exempt_roots,
         )
 
 
@@ -313,7 +297,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoInternalPatches, argv)
 
 

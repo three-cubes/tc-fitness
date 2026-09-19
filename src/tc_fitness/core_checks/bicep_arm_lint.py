@@ -25,11 +25,9 @@ The detector is line-based — it does not parse Bicep into an AST. The Bicep CL
 doesn't expose a Python-callable AST, and a regex line walker is sufficient for
 these specific rules.
 
-Per-file baseline model
+Enforcement model
 -----------------------
-A ``.bicep`` file that carries any finding is an offender; the rule gates on
-NET-NEW offending files vs ``.architecture/baseline/<name>-files.txt`` through
-the :class:`tc_fitness.fitness_rule.FitnessRule` machinery. The consumer supplies
+A ``.bicep`` file that carries any finding is an offender. The consumer supplies
 the scan ``roots`` (where its ``.bicep`` tree lives) via
 ``[tool.tc_fitness.core_checks.bicep_arm_lint]``; the ``.bicep`` extension is the
 rule's domain-intrinsic default.
@@ -127,8 +125,6 @@ def _order_violations_for_resource(
     for j in range(1, len(seen)):
         line_no, prop = seen[j]
         _prev_line, prev_prop = seen[j - 1]
-        if prop not in PROPERTY_RANK or prev_prop not in PROPERTY_RANK:
-            continue
         if PROPERTY_RANK[prop] >= PROPERTY_RANK[prev_prop]:
             continue
         out.append(
@@ -234,7 +230,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> BicepA
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(BicepArmLint, argv)
 
 

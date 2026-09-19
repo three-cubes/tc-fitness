@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_duplicate_string import (
     NoDuplicateString,
     build,
-    main,
     module_has_duplicate,
 )
+
+pytestmark = pytest.mark.integration
 
 _DUP = """
 def a() -> None:
@@ -53,6 +56,32 @@ def test_docstring_not_counted(tmp_path: Path) -> None:
     assert module_has_duplicate(p, min_length=10, min_occurrences=3) is False
 
 
+def test_malformed_and_non_utf8_modules_are_ignored(tmp_path: Path) -> None:
+    syntax = _seed(tmp_path, "syntax.py", "value = (\n")
+    encoding = tmp_path / "encoding.py"
+    encoding.write_bytes(b'a = "a repeated message"\n\xff')
+
+    assert module_has_duplicate(syntax, min_length=1, min_occurrences=1) is False
+    assert module_has_duplicate(encoding, min_length=1, min_occurrences=1) is False
+
+
+def test_short_and_whitespace_literals_do_not_meet_minimum_length(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "short.py",
+        'first = "short"\nsecond = "short"\nthird = "short"\n'
+        'blank1 = "          "\nblank2 = "          "\nblank3 = "          "\n',
+    )
+
+    assert module_has_duplicate(path, min_length=10, min_occurrences=3) is False
+
+
+def test_modules_without_countable_string_literals_are_clean(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "numbers.py", "answer = 42\n")
+
+    assert module_has_duplicate(path, min_length=1, min_occurrences=1) is False
+
+
 def test_threshold_is_config_driven(tmp_path: Path) -> None:
     p = _seed(tmp_path, "two.py", 'a="abcdefghij"\nb="abcdefghij"\n')
     # default 3 occurrences → clean; lower to 2 via config → violation.
@@ -66,22 +95,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/dup.py", _DUP)
     rule = NoDuplicateString.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/dup.py"}
-
-
-def test_run_fails_on_new_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/dup.py", _DUP)
-    rule = NoDuplicateString.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "dup.py", _DUP)
-    # main() uses default roots () → matches all .py via extension; scope to repo.
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-duplicate-string-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

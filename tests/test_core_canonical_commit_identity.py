@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.canonical_commit_identity import (
-    CanonicalCommitIdentity,
     build,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 BOT = "295831460+three-cubes-agent[bot]@users.noreply.github.com"
 HUMAN = "dan@example.com"
@@ -80,6 +80,48 @@ def test_empty_allowlist_is_noop(tmp_path: Path) -> None:
     assert rule.run() == 0  # no allowlist configured → no-op pass
 
 
+def test_unresolvable_git_range_is_a_clean_noop(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    _commit(repo, "first")
+    rule = build({**ALLOW, "base_ref": "missing-base", "head_ref": "HEAD"}, repo_root=repo)
+
+    assert rule.collect_violations() == set()
+
+
+def test_empty_resolved_range_has_no_commits_to_check(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    head = _commit(repo, "head")
+    rule = build({**ALLOW, "base_ref": head, "head_ref": head}, repo_root=repo)
+
+    assert rule.collect_violations() == set()
+
+
+def test_commit_without_name_patterns_accepts_any_allowlisted_name(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    base = _commit(repo, "base", ae=HUMAN)
+    _commit(repo, "work", an="Unrestricted Name", ae=HUMAN)
+    rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
+
+    assert rule.collect_violations() == set()
+
+
+def test_range_check_exposes_no_file_surface(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    rule = build(ALLOW, repo_root=repo)
+
+    assert rule.enumerate_files() == []
+    assert rule.file_has_violation(tmp_path / "anything") is False
+
+
+def test_malformed_git_identity_record_fails_closed(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    base = _commit(repo, "base", ae=HUMAN)
+    _commit(repo, "control-character-name", an="Dan\x1fForged", ae=HUMAN)
+    rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
+
+    assert rule.collect_violations()
+
+
 def test_allowed_identities_pass(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     base = _commit(repo, "base", ae=BOT, an="three-cubes-agent[bot]")
@@ -130,15 +172,6 @@ def test_emoji_in_name_fails_when_name_pattern_configured(tmp_path: Path) -> Non
         repo_root=repo,
     )
     assert rule.run() == 1
-
-
-def test_cutover_ref_grandfathers_prior_commits(tmp_path: Path) -> None:
-    repo = _init(tmp_path)
-    _commit(repo, "old-rogue", an="feat-156-deploy", ae="noreply@anthropic.com")
-    cutover = _commit(repo, "cutover-line", ae=HUMAN, an="Dan")
-    _commit(repo, "clean-after", ae=HUMAN, an="Dan")
-    rule = build({**ALLOW, "cutover_ref": cutover, "head_ref": "HEAD"}, repo_root=repo)
-    assert rule.run() == 0  # the pre-cutover rogue commit is out of range
 
 
 def test_webflow_merge_committer_passes(tmp_path: Path) -> None:
@@ -198,18 +231,3 @@ def test_non_platform_bot_committer_still_fails(tmp_path: Path) -> None:
     _commit(repo, "work", an="Dan", ae=HUMAN, cn=GHA_NAME, ce=GHA_EMAIL)
     rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
     assert rule.run() == 1
-
-
-def test_main_repo_root_and_establish(tmp_path: Path) -> None:
-    repo = _init(tmp_path)
-    base = _commit(repo, "base", ae=HUMAN)
-    _commit(repo, "rogue", an="x", ae="noreply@anthropic.com")
-    # Config isn't passed through main() here, so with no allowlist it's a no-op pass.
-    assert main(["--repo-root", str(repo)]) == 0
-    # Direct rule with allowlist fails, then baseline grandfathers.
-    rule = CanonicalCommitIdentity.from_config(
-        {**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo
-    )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0

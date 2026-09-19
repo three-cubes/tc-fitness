@@ -5,12 +5,14 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.path_naming import (
-    PathNaming,
     build,
     main,
-    name_violates_convention,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str = "x\n") -> Path:
@@ -18,78 +20,6 @@ def _seed(tmp_path: Path, rel: str, body: str = "x\n") -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return p
-
-
-def test_detection_bad_kebab_md() -> None:
-    assert (
-        name_violates_convention(
-            "docs/MyNote.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset(),
-        )
-        is True
-    )
-
-
-def test_detection_good_kebab_md() -> None:
-    assert (
-        name_violates_convention(
-            "docs/my-note.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset(),
-        )
-        is False
-    )
-
-
-def test_detection_bad_snake_py() -> None:
-    assert (
-        name_violates_convention(
-            "scripts/My-Check.py",
-            kebab_roots=(),
-            snake_roots=("scripts/",),
-            allowed_names=frozenset(),
-        )
-        is True
-    )
-
-
-def test_detection_good_snake_py() -> None:
-    assert (
-        name_violates_convention(
-            "scripts/my_check.py",
-            kebab_roots=(),
-            snake_roots=("scripts/",),
-            allowed_names=frozenset(),
-        )
-        is False
-    )
-
-
-def test_allowed_name_exempt() -> None:
-    assert (
-        name_violates_convention(
-            "docs/README.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset({"README.md"}),
-        )
-        is False
-    )
-
-
-def test_path_under_no_root_is_clean() -> None:
-    assert (
-        name_violates_convention(
-            "vendor/BadName.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset(),
-        )
-        is False
-    )
 
 
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
@@ -113,19 +43,24 @@ def test_snake_root_init_allowed(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/BadNote.md")
-    rule = PathNaming.from_config({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
+def test_fixed_generated_segments_are_outside_authored_path_scope(tmp_path: Path) -> None:
+    rule = build({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
+    assert not rule.is_in_scope("docs/node_modules/BadName.md")
+    assert rule.is_in_scope("docs/BadName.md")
 
 
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/BadNote.md")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "path-naming-files.txt").exists()
+def test_enumeration_handles_missing_nonfile_cache_and_wrong_extension(tmp_path: Path) -> None:
+    _seed(tmp_path, "docs/good-name.md")
+    _seed(tmp_path, "docs/readme.txt")
+    _seed(tmp_path, "docs/__pycache__/BadName.md")
+    (tmp_path / "docs" / "directory.md").mkdir()
+    rule = build({"kebab_roots": ["missing/", "docs/"]}, repo_root=tmp_path)
+
+    assert {path.relative_to(tmp_path).as_posix() for path in rule.enumerate_files()} == {"docs/good-name.md"}
+
+
+def test_cli_executes_with_repo_root(tmp_path: Path) -> None:
+    assert main(["--repo-root", str(tmp_path)]) == 0
 
 
 def test_no_repo_strings_in_executable_code() -> None:

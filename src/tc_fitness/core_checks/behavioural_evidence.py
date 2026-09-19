@@ -7,7 +7,7 @@ This hard gate then requires a marked test to invoke that executable, check
 process success, and observe a produced artefact passed through the command.
 
 The check is deliberately opt-in and repo-neutral.  An empty configuration is
-a vacuous pass; once configured, findings cannot be baselined.
+a vacuous pass; once configured, every finding fails.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -148,7 +149,7 @@ def _path_fragment(value: ast.expr, constants: Mapping[str, str]) -> str | None:
         left = _path_fragment(value.left, constants)
         right = _path_fragment(value.right, constants)
         if right is None:
-            return left
+            return None
         return f"{left.rstrip('/')}/{right.lstrip('/')}" if left else right
     return None
 
@@ -578,18 +579,16 @@ class BehaviouralEvidence(FitnessRule):
         if not findings:
             return 0
         for finding in findings:
+            report_finding(
+                self.name,
+                finding.source.as_posix(),
+                f"{finding.pointer}: {finding.code}: {finding.message}; fix: {finding.fix}",
+            )
             print(f"{finding.source}:{finding.pointer}: {finding.code}: {finding.message}", file=sys.stderr)
             print(f"fix: {finding.fix}", file=sys.stderr)
             print("next: run the declared behavioural test, then re-run this check", file=sys.stderr)
             print("run: python -m tc_fitness.core_checks.behavioural_evidence", file=sys.stderr)
         return 1
-
-    def establish_baseline(self) -> Path:
-        findings = self.collect_findings()
-        if findings:
-            self.run()
-            raise RuntimeError("behavioural evidence findings cannot establish a baseline")
-        return super().establish_baseline()
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> BehaviouralEvidence:

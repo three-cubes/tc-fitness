@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.empty_body_intent import (
     EmptyBodyIntent,
+    _has_docstring,
     build,
-    main,
     module_has_undocumented_empty_body,
 )
+
+pytestmark = pytest.mark.integration
 
 _BARE = """
 def on_event(self, event):
@@ -65,6 +69,72 @@ def test_abstractmethod_is_exempt(tmp_path: Path) -> None:
     assert module_has_undocumented_empty_body(p, marker="Intentionally empty") is False
 
 
+@pytest.mark.parametrize(
+    ("body", "violates"),
+    [
+        ("def on_event():\n    ...\n", True),
+        ('def on_event():\n    """Protocol hook."""\n    pass\n', False),
+        ('def on_event():\n    """Protocol hook."""\n    ...\n', False),
+        ("async def on_event():\n    pass\n", True),
+    ],
+)
+def test_ellipsis_async_and_documented_empty_bodies(body: str, violates: bool, tmp_path: Path) -> None:
+    path = _seed(tmp_path, "protocol.py", body)
+
+    assert module_has_undocumented_empty_body(path, marker="Intentionally empty") is violates
+
+
+def test_nested_and_called_abstract_decorators_are_exempt(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "abstract.py",
+        "class Contract:\n"
+        "    @framework.abstractmethod\n"
+        "    def first(self):\n        ...\n"
+        "    @overload()\n"
+        "    def second(self):\n        pass\n",
+    )
+
+    assert module_has_undocumented_empty_body(path, marker="Intentionally empty") is False
+
+
+def test_non_name_decorator_and_multi_statement_bodies_are_evaluated(tmp_path: Path) -> None:
+    decorated = _seed(tmp_path, "decorated.py", "@decorators[0]\ndef empty():\n    pass\n")
+    two_statements = _seed(tmp_path, "two_statements.py", "def does_work():\n    pass\n    return 1\n")
+    three_statements = _seed(
+        tmp_path, "three_statements.py", "def also_works():\n    value = 1\n    pass\n    return value\n"
+    )
+
+    assert module_has_undocumented_empty_body(decorated, marker="Intentionally empty") is True
+    assert module_has_undocumented_empty_body(two_statements, marker="Intentionally empty") is False
+    assert module_has_undocumented_empty_body(three_statements, marker="Intentionally empty") is False
+
+
+def test_empty_function_ast_has_no_docstring() -> None:
+    function = ast.parse("def placeholder():\n    pass\n").body[0]
+    assert isinstance(function, ast.FunctionDef)
+    function.body.clear()
+
+    assert _has_docstring(function) is False
+
+
+def test_nonempty_body_and_custom_marker_comment_above_function_are_clean(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "clean.py",
+        "def has_work():\n    return 1\n\n# DELIBERATE CONTRACT HOOK\ndef protocol_hook():\n    pass\n",
+    )
+
+    assert module_has_undocumented_empty_body(path, marker="DELIBERATE CONTRACT HOOK") is False
+
+
+def test_broken_source_is_not_classified_as_an_empty_body(tmp_path: Path) -> None:
+    path = tmp_path / "broken.py"
+    path.write_bytes(b"def (:\n\xff")
+
+    assert module_has_undocumented_empty_body(path, marker="Intentionally empty") is False
+
+
 def test_marker_is_config_driven(tmp_path: Path) -> None:
     body = "def f(self):\n    # DELIBERATE NO-OP for the adapter contract.\n    pass\n"
     p = _seed(tmp_path, "m.py", body)
@@ -80,21 +150,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/b.py", _BARE)
     rule = EmptyBodyIntent.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/b.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/b.py", _BARE)
-    rule = EmptyBodyIntent.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "b.py", _BARE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "empty-body-intent-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

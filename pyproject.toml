@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "three-cubes-fitness"
 version = "0.16.1"
-description = "Shared architecture-fitness primitives + the single runnable quality gate for Three Cubes repos (kairix, tc-agent-zone): the `tc-fitness run` gate orchestrator (one binary CI and local both invoke), baseline-gating helpers, agent-actionable emit/YAML helpers, the unified ratchet grammar, the catalogue-driven repo-agnostic check runner, and the declarative seam-absorption factories + branch-naming gate."
+description = "Shared architecture-fitness primitives and the single runnable quality gate for Three Cubes repositories: hard-gating checks, agent-actionable diagnostics, the unified ratchet grammar, and catalogue-driven local/CI orchestration."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -18,12 +18,9 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
-# Pure stdlib at runtime. The `tc-fitness run` gate orchestrator uses the stdlib
-# `tomllib` (3.11+) to read the consumer's `[tool.tc_fitness]` config, so no
-# runtime dependency is added. PyYAML is an optional extra: load_yaml() degrades
-# gracefully (returns an error string) when it is absent, so consumers that
-# never touch YAML need not install it.
-dependencies = []
+# Check-contract manifests and exact-source coverage admission are shipped
+# public surfaces, so their parsers must exist in every default installation.
+dependencies = ["coverage>=7.5", "PyYAML>=6.0"]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and
@@ -32,20 +29,34 @@ tc-fitness = "tc_fitness.gate:main"
 tc-fitness-runtime-contract = "tc_fitness.runtime_contract:main"
 
 [project.optional-dependencies]
-yaml = ["PyYAML>=6.0"]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
-  "PyYAML>=6.0",
   "ruff>=0.15,<0.16",
   "mypy>=1.11",
+  "mutmut==3.6.0",
+  "checkov==3.2.531",
 ]
+
+[tool.uv]
+# Checkov 3.2.531 (and the current 3.3.19 release) declares asteval==1.0.6,
+# which is affected by GHSA-89v8-rhwq-hf77 and GHSA-9w56-46f6-3qhx.  The fixed
+# 1.0.9 release is API-compatible with Checkov's use and is exercised by the
+# real Checkov contract tests and the repository OSV scan.
+override-dependencies = ["asteval==1.0.9"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tc_fitness"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--strict-markers", "-p", "tc_fitness.pytest_tiers"]
+markers = [
+  "unit: in-process transformation or predicate with no process boundary",
+  "contract: public input/output or protocol contract using controlled local collaborators",
+  "integration: real package, filesystem, Git or child-process composition",
+  "e2e: installed distribution through its supported user entrypoint",
+]
 
 [tool.ruff]
 line-length = 110
@@ -100,7 +111,7 @@ ignore = ["E501", "RUF022"]
 # checkov_iac_security runs the trusted `checkov` binary (resolved to an absolute
 # path via shutil.which) over the consumer's config-declared scan dir, as a fixed
 # argv list with no shell — the same trusted-binary posture the gate itself uses;
-# the binary is absent-tolerant (soft-skip), so this is not attacker-controlled
+# a missing required executable fails closed. The argv is not attacker-controlled
 # input (S404 the import, S603 the call).
 "src/tc_fitness/core_checks/checkov_iac_security.py" = ["S404", "S603"]
 # osv_scanner_sca resolves the trusted scanner executable with shutil.which and
@@ -114,9 +125,16 @@ strict = true
 warn_unused_ignores = true
 files = ["src/tc_fitness"]
 
+[tool.coverage.run]
+branch = true
+source = ["src/tc_fitness"]
+
+[tool.coverage.report]
+exclude_lines = []
+partial_branches = []
+
 [[tool.mypy.overrides]]
-# PyYAML is an OPTIONAL extra (load_yaml degrades gracefully when it is absent),
-# so its stubs are not a hard dependency of the type check.
+# PyYAML is a required runtime dependency, but does not ship type stubs.
 module = ["yaml"]
 ignore_missing_imports = true
 
@@ -129,12 +147,10 @@ module = ["defusedxml", "defusedxml.*"]
 ignore_missing_imports = true
 
 # ── tc-fitness gate declaration — the engine eats its own dog food ───────────
-# The engine runs THROUGH the gate it ships: `uv run tc-fitness run` reads this
-# block and runs the engine's own quality gate (ruff / format / mypy / pytest)
-# plus its own branch-naming module — the SAME binary both CI and a local run
-# invoke, so local == CI by construction. ci.yml's `check` matrix job shrinks to
-# `setup-uv-cached → uv run tc-fitness run`, keeping the py3.12/3.13 matrix
-# caller-side while the gate's STEPS live here as config, never hand-copied YAML.
+# `uv run tc-fitness run` owns deterministic static evaluation: ruff, format,
+# strict typing and branch naming. `make check` composes that static gate with
+# one fresh exact-base/candidate coverage transaction; CI uses the same split so
+# its Python matrix never repeats the full coverage measurement.
 [tool.tc_fitness]
 name = "three-cubes-fitness self gate"
 
@@ -146,53 +162,14 @@ run = ["ruff", "check", "src", "tests"]
 fix = "run `ruff check --fix src tests`"
 next = "re-run `tc-fitness run`"
 
-# ruff format --check over the formatter-gated set (the v0.5.0 gate + the whole
-# v0.6.0 CORE-check package + every CORE check test + branch_naming). The
-# pre-existing lib/ratchet/runner/staged sources predate any formatter config; a
-# repo-wide `ruff format` pass is a separate one-time hygiene commit, so the
-# scope is held identical to ci.yml's format step — same files in, same verdict
-# out (the equivalence law: this step reports the SAME drift CI's step does).
+# Preparation formats the complete Python source and test trees. Evaluation
+# verifies the same complete surface.
 [[tool.tc_fitness.steps]]
 id = "ruff-format"
-summary = "ruff format --check (gate + v0.6.0 core modules)"
-shell = """
-ruff format --check \
-  src/tc_fitness/gate.py src/tc_fitness/gate_config.py \
-  tests/test_gate.py tests/test_gate_config.py \
-  src/tc_fitness/baseline.py src/tc_fitness/fitness_rule.py \
-  src/tc_fitness/keystone.py src/tc_fitness/core_checks/ \
-  src/tc_fitness/runtime_contract.py \
-  tests/test_baseline.py tests/test_fitness_rule.py \
-  tests/test_keystone.py tests/_core_check_assertions.py \
-  tests/test_runtime_contracts.py tests/test_runtime_contract_cli.py \
-  tests/test_release_toolchain_parity.py \
-  tests/test_core_behavioural_evidence.py \
-  tests/test_core_runtime_evidence_contract.py tests/test_core_runtime_filesystem_contract.py \
-  tests/test_core_no_duplicate_string.py \
-  tests/test_core_registry_consistency.py \
-  tests/test_core_security_freshness_design_law.py \
-  src/tc_fitness/checks/branch_naming.py \
-  $(printf 'tests/test_core_%s.py ' \
-    actionable_feedback adr_number_unique bicep_arm_lint checkov_iac_security \
-    ci_consumes_shared_gate ci_fanin_parity \
-    ci_silencers_have_rationale cognitive_complexity contract_change_has_test coverage_floor \
-    coverage_includes_branches deterministic_tests empty_body_intent \
-    engine_version_floor \
-    every_test_has_tier_marker harness_canon_reference \
-    license_present mutation_survival_ratchet new_code_coverage \
-    no_commented_out_code \
-    no_env_monkeypatch no_hardcoded_repo_paths no_internal_monkeypatch \
-    no_internal_patches no_internal_patches_ts \
-    no_language_suffix_in_package_names no_llm_attribution no_logging_secrets \
-    no_noop_test_scripts no_production_suppressions no_real_names osv_scanner_sca \
-    no_test_doubles_in_runtime_tiers no_test_imports_in_prod no_test_only_kwargs path_naming \
-    posix_path_serialisation readme_resolver_coverage schema_conformance \
-    script_help_smoke shellcheck_disable_with_reason sonar_ignore_rationale \
-    suppressions_have_rationale test_skip_rationale untrusted_automation_boundary \
-    unused_params_named)
-"""
-fix = "run `ruff format` over the listed files"
-next = "re-run `tc-fitness run`"
+summary = "ruff format --check src tests"
+run = ["ruff", "format", "--check", "src", "tests"]
+fix = "run `make prepare`"
+next = "re-run `make check`"
 
 # mypy --strict over the package. `strict = true` + `files = ["src/tc_fitness"]`
 # live in [tool.mypy], so a bare `mypy` is already the strict, scoped check.
@@ -207,18 +184,6 @@ skip_when_staged = true
 fix = "resolve the type error mypy reports"
 next = "re-run `tc-fitness run`"
 
-# pytest with coverage — the engine's self-test suite (the same command ci.yml
-# ran), producing coverage.xml for the downstream Sonar handoff. Dropped from
-# the `--staged` <60s smoke (skip_when_staged): the full coverage run is the
-# expensive full-tree leg the smoke deliberately defers to the merge gate.
-[[tool.tc_fitness.steps]]
-id = "pytest"
-summary = "pytest (with coverage)"
-run = ["pytest", "-q", "--cov=tc_fitness", "--cov-report=term-missing", "--cov-report=xml"]
-skip_when_staged = true
-fix = "fix the failing test or the code under test"
-next = "re-run `tc-fitness run`"
-
 # The engine's OWN branch-naming gate, run against the gate. branch_naming is an
 # engine-shipped module (`tc_fitness.checks.branch_naming`) with a `python -m`
 # entrypoint; it gates the LIVE branch name (not a per-file baseline), so it is
@@ -229,4 +194,4 @@ id = "branch-naming"
 summary = "branch_naming (engine's own convention gate)"
 run = ["python", "-m", "tc_fitness.checks.branch_naming"]
 fix = "rename the branch to the Linear <user>/<team>-<number>-<slug> shape"
-next = "re-run `tc-fitness run`"
+next = "re-run `make check-static`"

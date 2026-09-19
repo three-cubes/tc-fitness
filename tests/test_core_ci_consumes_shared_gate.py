@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
+
+import pytest
 
 from tc_fitness.core_checks.ci_consumes_shared_gate import (
     CiConsumesSharedGate,
     build,
-    main,
-    satisfying_mechanism,
     workflow_files,
 )
+
+pytestmark = pytest.mark.integration
 
 # A workflow that satisfies the reusable arm: a `uses:` reference to the pinned
 # canonical python-quality-gate reusable.
@@ -69,23 +70,6 @@ def test_workflow_files_enumerates_only_yaml(tmp_path: Path) -> None:
 
 def test_workflow_files_missing_dir_is_empty(tmp_path: Path) -> None:
     assert workflow_files(tmp_path / ".github" / "workflows") == []
-
-
-def test_satisfying_mechanism_prefers_reusable() -> None:
-    reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
-    engine = re.compile(r"\btc-fitness run\b")
-    # Carries BOTH: a comment mentioning `tc-fitness run` above the `uses:` line.
-    both = "# runs tc-fitness run under the hood\n" + _VIA_REUSABLE
-    hit = satisfying_mechanism(both, reusable_pattern=reusable, engine_pattern=engine)
-    assert hit is not None
-    mechanism, _line_no, _line = hit
-    assert "reusable-workflow" in mechanism
-
-
-def test_satisfying_mechanism_none_on_fork() -> None:
-    reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
-    engine = re.compile(r"\btc-fitness run\b")
-    assert satisfying_mechanism(_FORKED_GATE, reusable_pattern=reusable, engine_pattern=engine) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -148,20 +132,6 @@ def test_skip_on_empty_workflows_dir(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_warn_only_reports_but_passes(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
-    _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
-    assert build({"warn_only": True}, repo_root=tmp_path).run() == 0
-    out = capsys.readouterr().out
-    assert "FAIL" in out  # the fork is still reported loudly
-    assert "warn-only" in out
-
-
-def test_baseline_ok_alias_is_warn_mode(tmp_path: Path) -> None:
-    # `baseline_ok` is the accepted alias for `warn_only` — same soft-mode effect.
-    _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
-    assert build({"baseline_ok": True}, repo_root=tmp_path).run() == 0
-
-
 # --------------------------------------------------------------------------- #
 # Config knobs.
 # --------------------------------------------------------------------------- #
@@ -210,26 +180,17 @@ def test_from_config_binds_all_knobs(tmp_path: Path) -> None:
             "workflows_dir": "ci",
             "reusable_pattern": r"acme/pipe\.yml@",
             "engine_pattern": r"\bacme-gate\b",
-            "warn_only": True,
         },
         repo_root=tmp_path,
     )
     assert rule.workflows_dir == "ci"
     assert rule.reusable_pattern == r"acme/pipe\.yml@"
     assert rule.engine_pattern == r"\bacme-gate\b"
-    assert rule.warn_only is True
 
 
 # --------------------------------------------------------------------------- #
 # CLI + engine-conformance parity with the sibling CORE checks.
 # --------------------------------------------------------------------------- #
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _write_workflow(tmp_path, "ci.yml", _VIA_REUSABLE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "ci-consumes-shared-gate-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

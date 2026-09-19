@@ -5,12 +5,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.posix_path_serialisation import (
     PosixPathSerialisation,
     build,
-    main,
     module_has_os_native_serialisation,
 )
+
+pytestmark = pytest.mark.integration
 
 _BAD = "rel = str(path.relative_to(root))\n"
 _OK_AS_POSIX = "rel = path.relative_to(root).as_posix()\n"
@@ -45,9 +48,23 @@ def test_detection_clean_str_without_relative_to(tmp_path: Path) -> None:
     assert module_has_os_native_serialisation(p) is False
 
 
-def test_syntax_error_is_not_a_violation(tmp_path: Path) -> None:
+def test_only_relative_to_calls_inside_str_arguments_are_rejected(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/paths.py", "str()\np.relative_to(root)\nstr(p.relative_to(root))\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_syntax_error_is_not_clean_evidence(tmp_path: Path) -> None:
     p = _seed(tmp_path, "broken.py", "def (:\n")
-    assert module_has_os_native_serialisation(p) is False
+    assert module_has_os_native_serialisation(p) is True
+
+
+def test_unparseable_configured_source_is_reported(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/broken.py", "def route(:\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
 
 
 def test_excluded_segment_is_config_driven(tmp_path: Path) -> None:
@@ -58,10 +75,10 @@ def test_excluded_segment_is_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
 
 
-def test_excluded_segments_overridable(tmp_path: Path) -> None:
+def test_excluded_segments_cannot_hide_a_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "src/vendor/bad.py", _BAD)
-    rule = build({"roots": ["src"], "excluded_segments": ["vendor"]}, repo_root=tmp_path)
-    assert rule.collect_violations() == set()
+    with pytest.raises(ValueError, match="excluded_segments"):
+        build({"roots": ["src"], "excluded_segments": ["vendor"]}, repo_root=tmp_path)
 
 
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
@@ -69,21 +86,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/bad.py", _BAD)
     rule = PosixPathSerialisation.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/bad.py"}
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/bad.py", _BAD)
-    rule = PosixPathSerialisation.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "bad.py", _BAD)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "posix-path-serialisation-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

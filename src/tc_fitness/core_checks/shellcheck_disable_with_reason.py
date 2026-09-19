@@ -7,10 +7,10 @@ has become a real bug. An inline rationale (or one on the immediately preceding
 to the Python suppression-rationale rule.
 
 Ported from kairix ``scripts/checks/check_shellcheck_disable_with_reason.py``
-(F33) and re-expressed as a configurable, repo-agnostic, baseline-gated rule.
+(F33) and re-expressed as a configurable, repo-agnostic rule.
 The disable-directive shape, the rationale markers, and the minimum rationale
 length are the rule's own shape (``DEFAULT_*``), overridable via config; the
-consumer supplies ``roots`` / ``exempt_files``. No repo paths are baked in.
+consumer supplies ``roots``. No repo paths are baked in.
 """
 
 from __future__ import annotations
@@ -114,12 +114,12 @@ def file_has_unjustified_disable(
     """True iff ``path`` has a shellcheck-disable lacking a same/preceding-line reason.
 
     Pure helper (the detection core) so tests assert on it directly. A read
-    error is treated as "no violation".
+    error is a violation because the configured source could not be evaluated.
     """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (UnicodeDecodeError, OSError):
-        return False
+        return True
     for idx, line in enumerate(lines):
         m = _DISABLE_RE.search(line)
         if (
@@ -163,7 +163,8 @@ class ShellcheckDisableWithReason(FitnessRule):
         out: list[Path] = []
         for root in self._roots:
             root_path = self._repo_root / root
-            if not root_path.exists():
+            if not root_path.is_dir():
+                out.append(root_path)
                 continue
             for path in root_path.rglob("*"):
                 if not path.is_file() or "__pycache__" in path.parts:
@@ -177,6 +178,8 @@ class ShellcheckDisableWithReason(FitnessRule):
         return True
 
     def file_has_violation(self, path: Path) -> bool:
+        if path in {self._repo_root / root for root in self._roots} and not path.is_dir():
+            return True
         return file_has_unjustified_disable(
             path,
             markers=self.rationale_markers,
@@ -190,7 +193,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> Shellc
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(ShellcheckDisableWithReason, argv)
 
 

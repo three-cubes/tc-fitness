@@ -10,8 +10,7 @@ the robot emoji (U+1F916) that tools append to commit/PR metadata.
 Unlike most CORE checks, the banned set here is **intrinsic, not repo config**:
 the attribution *signatures* are provider-neutral and universal, so the engine
 ships them as sensible defaults (a consumer only supplies the scan ``roots`` /
-``extensions`` and, where a legitimate in-source use exists, an ``exempt_files``
-entry or a grandfathering baseline).
+``extensions``).
 
 Two surfaces share ONE detector, :func:`scan_text`:
 
@@ -21,8 +20,7 @@ Two surfaces share ONE detector, :func:`scan_text`:
   messages and PR title/body — so the pattern set is single-sourced and can
   never drift between the local hook, CI, and the fitness gate.
 
-Guard-forward (decision D2): pre-cutover residue is grandfathered via the
-per-file baseline (``--establish-baseline``); only NET-NEW residue fails.
+Every attribution finding is a hard failure.
 """
 
 from __future__ import annotations
@@ -144,11 +142,10 @@ def strip_text(text: str) -> tuple[str, list[str]]:
     """
     kept: list[str] = []
     dropped: list[str] = []
+    trailing_newlines = len(text) - len(text.rstrip("\n"))
     for line in text.splitlines():
         (dropped if _is_strippable_line(line) else kept).append(line)
-    cleaned = "\n".join(kept).rstrip("\n")
-    if text.endswith("\n"):
-        cleaned += "\n"
+    cleaned = "\n".join(kept).rstrip("\n") + ("\n" * trailing_newlines)
     return cleaned, dropped
 
 
@@ -188,7 +185,7 @@ def _report(path: Path, hits: list[Hit]) -> None:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry.
 
-    File/repo mode (the fitness gate): ``--establish-baseline`` / ``--repo-root``.
+    File/repo mode (the fitness gate): ``--repo-root``.
 
     Message mode (the single seam the commit-msg hook and CI leg share):
 

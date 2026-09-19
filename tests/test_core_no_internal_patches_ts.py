@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_internal_patches_ts import (
-    NoInternalPatchesTs,
     build,
     file_mocks_internal_ts,
-    main,
 )
+
+pytestmark = pytest.mark.integration
 
 _INTERNAL = frozenset({"mcp-x", "mcp-kairix"})
 _EXEMPT_EXACT = frozenset({"fs", "axios", "console"})
@@ -24,9 +26,7 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
 
 
 def _flags(p: Path) -> bool:
-    return file_mocks_internal_ts(
-        p, internal_packages=_INTERNAL, exempt_exact=_EXEMPT_EXACT, exempt_prefixes=_EXEMPT_PREFIXES
-    )
+    return file_mocks_internal_ts(p, internal_packages=_INTERNAL)
 
 
 def test_flags_relative_mock(tmp_path: Path) -> None:
@@ -60,21 +60,50 @@ def test_mock_in_comment_is_clean(tmp_path: Path) -> None:
     assert _flags(p) is False
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "pkg/a.test.ts", "vi.mock('../../src/client.js');\n")
-    rule = NoInternalPatchesTs.from_config(
-        {"roots": ["pkg"], "internal_packages": ["mcp-x"], "exempt_specifiers": ["fs"]}, repo_root=tmp_path
+def test_unknown_package_mock_and_unresolved_spy_are_not_internal(tmp_path: Path) -> None:
+    p = _seed(
+        tmp_path,
+        "a.test.ts",
+        "vi.mock('lodash/fp');\nvi.spyOn(unimported, 'map');\n",
     )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
+
+    assert _flags(p) is False
 
 
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "a.test.ts", "vi.mock('../../src/client.js');\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-internal-patches-ts-files.txt").exists()
+def test_named_import_alias_resolves_internal_spy_target(tmp_path: Path) -> None:
+    p = _seed(
+        tmp_path,
+        "a.test.ts",
+        "import { client as cli } from 'mcp-x/client';\nvi.spyOn(cli, 'send');\n",
+    )
+
+    assert _flags(p) is True
+
+
+def test_default_and_namespace_imports_resolve_spy_sources(tmp_path: Path) -> None:
+    internal = _seed(
+        tmp_path,
+        "default.test.ts",
+        "import client from 'mcp-x/client';\nvi.spyOn(client, 'send');\n",
+    )
+    external = _seed(
+        tmp_path,
+        "namespace.test.ts",
+        "import * as maps from 'lodash/fp';\nvi.spyOn(maps, 'map');\n",
+    )
+    exempt_prefix = _seed(
+        tmp_path,
+        "sdk.test.ts",
+        "import * as sdk from '@azure/openai';\nvi.spyOn(sdk, 'send');\n",
+    )
+
+    assert _flags(internal) is True
+    assert _flags(external) is False
+    assert _flags(exempt_prefix) is False
+
+
+def test_missing_source_is_ignored(tmp_path: Path) -> None:
+    assert _flags(tmp_path / "missing.test.ts") is False
 
 
 def test_non_test_ts_out_of_scope(tmp_path: Path) -> None:

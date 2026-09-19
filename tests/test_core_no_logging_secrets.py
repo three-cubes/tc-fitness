@@ -5,15 +5,18 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_logging_secrets import (
     DEFAULT_DIRECT_SINKS,
     DEFAULT_LOG_METHODS,
     DEFAULT_SECRET_PATTERNS,
     NoLoggingSecrets,
     build,
-    main,
     module_logs_secret,
 )
+
+pytestmark = pytest.mark.integration
 
 _PATTERNS = tuple(re.compile(p) for p in DEFAULT_SECRET_PATTERNS)
 
@@ -65,8 +68,9 @@ def test_redacted_summary_is_clean(tmp_path: Path) -> None:
     )
 
 
-def test_non_secret_name_is_clean(tmp_path: Path) -> None:
-    p = _seed(tmp_path, "m.py", "logger.info(client_id)\n")
+def test_length_of_secret_is_a_redacted_summary(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "m.py", 'logger.info("token length: %d", len(token))\n')
+
     assert (
         module_logs_secret(
             p, patterns=_PATTERNS, log_methods=DEFAULT_LOG_METHODS, direct_sinks=DEFAULT_DIRECT_SINKS
@@ -75,22 +79,95 @@ def test_non_secret_name_is_clean(tmp_path: Path) -> None:
     )
 
 
-def test_exempt_file_skipped_via_config(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/boundary.py", "logging.info(api_key)\n")
-    rule = build({"roots": ["src"], "exempt_files": ["src/boundary.py"]}, repo_root=tmp_path)
-    assert rule.collect_violations() == set()
+@pytest.mark.parametrize(
+    "source",
+    [
+        'logger.info("credentials %s", user.credentials)\n',
+        'logger.info("token=%s", token=token)\n',
+        "print(password)\n",
+        "sys.stderr.write(str(private_key))\n",
+        'logger.info("token=%s", redact(token))\n',
+        "raise RuntimeError(token)\n",
+    ],
+)
+def test_secret_preserving_sinks_are_flagged(tmp_path: Path, source: str) -> None:
+    p = _seed(tmp_path, "m.py", source)
+
+    assert (
+        module_logs_secret(
+            p, patterns=_PATTERNS, log_methods=DEFAULT_LOG_METHODS, direct_sinks=DEFAULT_DIRECT_SINKS
+        )
+        is True
+    )
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/leak.py", "logging.info(api_key)\n")
-    rule = NoLoggingSecrets.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
+def test_non_sink_calls_non_call_raises_and_non_secret_wrappers_are_clean(tmp_path: Path) -> None:
+    p = _seed(
+        tmp_path,
+        "m.py",
+        'send(token)\nlogger.info("token state: %s", bool(token))\nraise error\n',
+    )
+
+    assert (
+        module_logs_secret(
+            p, patterns=_PATTERNS, log_methods=DEFAULT_LOG_METHODS, direct_sinks=DEFAULT_DIRECT_SINKS
+        )
+        is False
+    )
 
 
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "leak.py", "logging.info(api_key)\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-logging-secrets-files.txt").exists()
+def test_unknown_stream_write_is_not_treated_as_process_output(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "m.py", "stream.write(token)\n")
+
+    assert (
+        module_logs_secret(
+            p, patterns=_PATTERNS, log_methods=DEFAULT_LOG_METHODS, direct_sinks=DEFAULT_DIRECT_SINKS
+        )
+        is False
+    )
+
+
+def test_bad_and_unreadable_source_is_ignored(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.py"
+    bad_syntax = _seed(tmp_path, "syntax.py", "logger.info(\n")
+    invalid_encoding = tmp_path / "encoding.py"
+    invalid_encoding.write_bytes(b"print(token)\n\xff")
+
+    for path in (missing, bad_syntax, invalid_encoding):
+        assert (
+            module_logs_secret(
+                path, patterns=_PATTERNS, log_methods=DEFAULT_LOG_METHODS, direct_sinks=DEFAULT_DIRECT_SINKS
+            )
+            is False
+        )
+
+
+def test_sink_names_and_secret_patterns_are_configurable(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "src/message.py", "audit.emit(secret_value)\n")
+    rule = build(
+        {
+            "roots": ["src"],
+            "secret_patterns": [r"^secret_value$"],
+            "log_methods": ["emit"],
+            "direct_sinks": [],
+        },
+        repo_root=tmp_path,
+    )
+
+    assert rule.file_has_violation(path) is True
+
+
+def test_direct_constructor_uses_default_secret_patterns(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "module.py", "logger.info(private_key)\n")
+
+    assert NoLoggingSecrets(repo_root=tmp_path).file_has_violation(path) is True
+
+
+def test_non_secret_name_is_clean(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "m.py", "logger.info(client_id)\n")
+    assert (
+        module_logs_secret(
+            p, patterns=_PATTERNS, log_methods=DEFAULT_LOG_METHODS, direct_sinks=DEFAULT_DIRECT_SINKS
+        )
+        is False
+    )

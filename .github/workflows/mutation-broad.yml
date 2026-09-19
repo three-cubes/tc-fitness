@@ -1,0 +1,46 @@
+name: Broad mutation assurance
+
+on:
+  schedule:
+    - cron: "23 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Broad package mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+      - name: Locked mutation toolchain
+        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
+        with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
+          python-version: "3.12"
+          sync-args: "--all-extras"
+      - name: Run broad package mutation
+        env:
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: >-
+          uv run --no-sync --no-build tc-fitness mutation check --broad
+          --base "$HEAD_SHA" --head "$HEAD_SHA"
+          --output .mutation/broad --run-id "$RUN_ID" --attempt "$ATTEMPT"
+      - name: Retain native broad results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: broad-mutation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .mutation/broad
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

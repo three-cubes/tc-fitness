@@ -5,15 +5,16 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.script_help_smoke import (
     ScriptHelpSmoke,
     build,
-    extract_declared_flags,
-    main,
     script_help_violates,
 )
+
+pytestmark = pytest.mark.integration
 
 _GOOD_CLI = """
 import argparse
@@ -56,13 +57,6 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-def test_extract_declared_flags() -> None:
-    import ast
-
-    tree = ast.parse(_GOOD_CLI)
-    assert extract_declared_flags(tree) == ("--agent", "--out-dir")
-
-
 def test_good_cli_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "scripts/good.py", _GOOD_CLI)
     assert script_help_violates(p, python=sys.executable, timeout=10) is False
@@ -71,6 +65,36 @@ def test_good_cli_passes(tmp_path: Path) -> None:
 def test_broken_cli_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
     assert script_help_violates(p, python=sys.executable, timeout=10) is True
+
+
+def test_import_time_work_that_exceeds_timeout_is_flagged(tmp_path: Path) -> None:
+    slow_cli = """
+import argparse
+import time
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--agent")
+    parser.parse_args()
+
+if __name__ == "__main__":
+    time.sleep(1)
+    main()
+"""
+    script = _seed(tmp_path, "scripts/slow.py", slow_cli)
+
+    assert script_help_violates(script, python=sys.executable, timeout=0.01) is True
+
+
+@pytest.mark.parametrize("body", ["def main():\n  pass\n", "def main(:\n"])
+def test_missing_or_unparseable_cli_source_is_not_a_violation(tmp_path: Path, body: str) -> None:
+    script = _seed(tmp_path, "scripts/not-a-cli.py", body)
+
+    assert script_help_violates(script, python=sys.executable, timeout=1) is False
+
+
+def test_missing_cli_path_is_not_a_violation(tmp_path: Path) -> None:
+    assert script_help_violates(tmp_path / "missing.py", python=sys.executable, timeout=1) is False
 
 
 def test_non_cli_is_not_in_scope(tmp_path: Path) -> None:
@@ -85,25 +109,20 @@ def test_rule_scopes_roots_and_skips_tests(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/broken.py", _BROKEN_CLI)  # out of roots
     rule = ScriptHelpSmoke.from_config({"roots": ["scripts"], "help_timeout_seconds": 10}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"scripts/broken.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
-    rule = ScriptHelpSmoke.from_config({"roots": ["scripts"], "help_timeout_seconds": 10}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "scripts/broken.py", _BROKEN_CLI)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "script-help-smoke-files.txt").exists()
+    assert rule.is_in_scope("outside/readme.txt") is False
 
 
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), ScriptHelpSmoke)
+
+
+def test_unavailable_configured_interpreter_returns_structured_error(tmp_path: Path) -> None:
+    rule = build(
+        {"roots": ["scripts"], "python_executable": str(tmp_path / "missing-python")},
+        repo_root=tmp_path,
+    )
+
+    assert rule.run() == 2
 
 
 def test_no_repo_strings_in_executable_code() -> None:
