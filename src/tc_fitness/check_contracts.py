@@ -282,6 +282,37 @@ def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckCont
     )
 
 
+def registered_contract_directory(
+    path: Path, registered_checks: tuple[str, ...]
+) -> CheckContract | None:
+    """Return the manifest only when ``path`` is a complete bound fixture registry.
+
+    Test discovery uses this as an authority boundary. A directory name, an
+    invalid manifest, a copied manifest, or a missing/escaping fixture cannot
+    hide authored tests from pytest or the tier gate.
+    """
+    if not path.is_dir() or path.is_symlink():
+        return None
+    manifest = path / "contract.yaml"
+    try:
+        contract = load_check_contract(manifest)
+    except (CheckContractError, OSError):
+        return None
+    if contract.check != f"core:{path.name}" or contract.check not in registered_checks:
+        return None
+    for case in contract.cases:
+        relative = Path(case.fixture)
+        fixture = path / relative
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or not fixture.is_dir()
+            or fixture.is_symlink()
+        ):
+            return None
+    return contract
+
+
 def validate_contract_registry(
     core_checks: tuple[str, ...], contracts_root: Path
 ) -> tuple[CheckContract, ...]:
@@ -330,5 +361,6 @@ __all__ = [
     "FindingExpectation",
     "OutcomeExpectation",
     "load_check_contract",
+    "registered_contract_directory",
     "validate_contract_registry",
 ]

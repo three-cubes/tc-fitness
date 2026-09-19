@@ -17,15 +17,17 @@ from pathlib import Path
 
 import pytest
 
+from tc_fitness.check_contracts import registered_contract_directory
+from tc_fitness.core_checks import CORE_CHECKS
 from tc_fitness.core_checks.every_test_has_tier_marker import DEFAULT_TIER_MARKERS
 
 _COLLECTED_ITEMS = pytest.StashKey[list[pytest.Item]]()
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
-    """Treat each contract-manifest directory as fixture data, not an outer test tree."""
+    """Exclude only complete manifest-bound fixture registries from outer discovery."""
     del config
-    if (collection_path / "contract.yaml").is_file():
+    if registered_contract_directory(collection_path, CORE_CHECKS) is not None:
         return True
     return None
 

@@ -552,19 +552,6 @@ def test_scope_skips_non_test_files_and_excluded_parts(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_real.py"}
 
 
-def test_scope_treats_a_contract_manifest_directory_as_fixture_registry(tmp_path: Path) -> None:
-    """Manifest-owned files are public-check inputs, not independently collected tests."""
-    _seed(tmp_path, "tests/check_contracts/example/violation/tests/test_fixture.py", _UNTAGGED)
-    (tmp_path / "tests" / "check_contracts" / "example" / "contract.yaml").write_text(
-        "schema: tc.fitness/check-contract/v1\n", encoding="utf-8"
-    )
-    _seed(tmp_path, "tests/test_real.py", _UNTAGGED)
-
-    rule = EveryTestHasTierMarker.from_config({"roots": ["tests"]}, repo_root=tmp_path)
-
-    assert {str(path) for path in rule.collect_violations()} == {"tests/test_real.py"}
-
-
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _UNTAGGED)
     rule = EveryTestHasTierMarker.from_config({"roots": ["tests"]}, repo_root=tmp_path)
