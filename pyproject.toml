@@ -147,59 +147,14 @@ run = ["ruff", "check", "src", "tests"]
 fix = "run `ruff check --fix src tests`"
 next = "re-run `tc-fitness run`"
 
-# ruff format --check over the formatter-gated set (the v0.5.0 gate + the whole
-# v0.6.0 CORE-check package + every CORE check test + branch_naming). The
-# pre-existing lib/ratchet/runner/staged sources predate any formatter config; a
-# repo-wide `ruff format` pass is a separate one-time hygiene commit, so the
-# scope is held identical to ci.yml's format step — same files in, same verdict
-# out (the equivalence law: this step reports the SAME drift CI's step does).
+# Preparation formats the complete Python source and test trees. Evaluation
+# verifies the same complete surface.
 [[tool.tc_fitness.steps]]
 id = "ruff-format"
-summary = "ruff format --check (gate + v0.6.0 core modules)"
-shell = """
-ruff format --check \
-  src/tc_fitness/gate.py src/tc_fitness/gate_config.py \
-  tests/test_gate.py tests/test_gate_config.py \
-  src/tc_fitness/baseline.py src/tc_fitness/fitness_rule.py \
-  src/tc_fitness/keystone.py src/tc_fitness/core_checks/ \
-  src/tc_fitness/runtime_contract.py src/tc_fitness/pytest_tiers.py \
-  src/tc_fitness/check_contracts.py src/tc_fitness/check_contract_policy.py \
-  src/tc_fitness/check_contract_execution.py src/tc_fitness/check_evidence.py \
-  tests/test_baseline.py tests/test_fitness_rule.py \
-  tests/test_keystone.py tests/_core_check_assertions.py \
-  tests/test_runtime_contracts.py tests/test_runtime_contract_cli.py \
-  tests/test_check_contracts.py \
-  tests/test_check_contract_execution.py tests/test_check_evidence.py \
-  tests/test_check_contract_assurance.py tests/test_check_contract_policy.py \
-  tests/test_check_contract_default_install.py \
-  tests/test_release_toolchain_parity.py \
-  tests/test_core_behavioural_evidence.py \
-  tests/test_core_runtime_evidence_contract.py tests/test_core_runtime_filesystem_contract.py \
-  tests/test_core_no_duplicate_string.py \
-  tests/test_core_registry_consistency.py \
-  tests/test_core_security_freshness_design_law.py \
-  src/tc_fitness/checks/branch_naming.py \
-  $(printf 'tests/test_core_%s.py ' \
-    actionable_feedback adr_number_unique bicep_arm_lint checkov_iac_security \
-    ci_consumes_shared_gate ci_fanin_parity \
-    ci_silencers_have_rationale cognitive_complexity contract_change_has_test coverage_floor \
-    coverage_includes_branches deterministic_tests empty_body_intent \
-    engine_version_floor \
-    every_test_has_tier_marker harness_canon_reference \
-    license_present mutation_survival_ratchet new_code_coverage \
-    no_commented_out_code \
-    no_env_monkeypatch no_hardcoded_repo_paths no_internal_monkeypatch \
-    no_internal_patches no_internal_patches_ts \
-    no_language_suffix_in_package_names no_llm_attribution no_logging_secrets \
-    no_noop_test_scripts no_production_suppressions no_real_names osv_scanner_sca \
-    no_test_doubles_in_runtime_tiers no_test_imports_in_prod no_test_only_kwargs path_naming \
-    posix_path_serialisation readme_resolver_coverage schema_conformance \
-    script_help_smoke shellcheck_disable_with_reason sonar_ignore_rationale \
-    suppressions_have_rationale test_skip_rationale untrusted_automation_boundary \
-    unused_params_named)
-"""
-fix = "run `ruff format` over the listed files"
-next = "re-run `tc-fitness run`"
+summary = "ruff format --check src tests"
+run = ["ruff", "format", "--check", "src", "tests"]
+fix = "run `make prepare`"
+next = "re-run `make check`"
 
 # mypy --strict over the package. `strict = true` + `files = ["src/tc_fitness"]`
 # live in [tool.mypy], so a bare `mypy` is already the strict, scoped check.

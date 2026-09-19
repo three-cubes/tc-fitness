@@ -161,7 +161,9 @@ def gate(
     # Default path: byte-identical to v0.1.0 (no counts banner change).
     remaining = len(baseline)
     if remaining > 0:
-        print(f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered file(s) still present in baseline.")
+        print(
+            f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered file(s) still present in baseline."
+        )
     else:
         print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
     return 0
@@ -250,7 +252,9 @@ def gate_keys(
     # Default path: byte-identical to v0.2.0 (no counts banner change).
     remaining = len(baseline)
     if remaining > 0:
-        print(f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered key(s) still present in baseline.")
+        print(
+            f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered key(s) still present in baseline."
+        )
     else:
         print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
     return 0

@@ -1068,13 +1068,22 @@ def run_contract_case(manifest: Path, case_id: str, ledger: Path) -> dict[str, A
     process = subprocess.run(
         [
             str(Path(sysconfig.get_path("scripts")) / "tc-fitness"),
-            "run", "--contract", str(manifest.resolve()),
-            "--case", case_id, "--ledger", str(ledger.resolve()),
+            "run",
+            "--contract",
+            str(manifest.resolve()),
+            "--case",
+            case_id,
+            "--ledger",
+            str(ledger.resolve()),
         ],
         check=False,
     )
     return validate_contract_ledger(
-        manifest, case_id, ledger, process_exit=process.returncode, started_after=started,
+        manifest,
+        case_id,
+        ledger,
+        process_exit=process.returncode,
+        started_after=started,
     )
 
 
