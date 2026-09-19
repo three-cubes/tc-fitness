@@ -37,6 +37,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_contracts import CheckContractError, load_check_contract
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -314,11 +315,36 @@ class EveryTestHasTierMarker(FitnessRule):
         return Path(rel).name.startswith("test_")
 
     def file_has_violation(self, path: Path) -> bool:
+        if self._is_registered_contract_fixture(path):
+            return False
         return file_missing_tier_marker(
             path,
             tiers=frozenset(self.tier_markers),
             require_module_marker=self.require_module_marker,
         )
+
+    def _is_registered_contract_fixture(self, path: Path) -> bool:
+        """Treat a manifest-bound case tree as test data, never test code.
+
+        A directory name alone cannot hide a test. The nearest contract must
+        parse under the public schema, bind its directory/check identity, and
+        explicitly name the case fixture containing ``path``.
+        """
+        resolved = path.resolve()
+        for parent in resolved.parents:
+            if parent == self._repo_root.parent:
+                break
+            manifest = parent / "contract.yaml"
+            if not manifest.is_file():
+                continue
+            try:
+                contract = load_check_contract(manifest)
+            except CheckContractError:
+                return False
+            if contract.check != f"core:{parent.name}":
+                return False
+            return any(resolved.is_relative_to((parent / case.fixture).resolve()) for case in contract.cases)
+        return False
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> EveryTestHasTierMarker:
