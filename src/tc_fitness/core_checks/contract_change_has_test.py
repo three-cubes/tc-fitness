@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from tc_fitness.baseline import establish_baseline as _establish_baseline
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -210,13 +211,18 @@ class ContractChangeHasTest(FitnessRule):
         ``0`` when the change set is clean (or there is no contract change),
         ``1`` otherwise.
         """
-        violations = sorted(str(p) for p in self.collect_violations())
+        violations = sorted(self.collect_violations(), key=lambda path: str(path))
         if not violations:
             print(f"ok [arch:{self._name}] — every contract-surface change carries a test change.")
             return 0
         print(f"FAIL [arch:{self._name}] — contract surface changed with no test change:")
-        for rel in violations:
-            print(f"  {rel}")
+        for path in violations:
+            report_finding(
+                self.name,
+                self._repo_relative(path).as_posix(),
+                "contract surface changed with no test change",
+            )
+            print(f"  {path}")
         print()
         print(self.remediation)
         return 1
