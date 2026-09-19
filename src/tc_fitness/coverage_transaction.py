@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
@@ -224,6 +225,49 @@ def _candidate_failures(snapshot: Path, report: Path, base: str, candidate: str)
     return failures
 
 
+def _measure_side(
+    snapshot: Path,
+    commit: str,
+    output: Path,
+    execution: str,
+    evidence_dir: Path,
+    *,
+    environment_dir: Path,
+) -> tuple[Measurement | None, TransactionError | None]:
+    """Run one isolated side and return its error without hiding the other side's result."""
+    try:
+        return (
+            _fresh_measurement(snapshot, commit, output, execution, environment_dir=environment_dir),
+            None,
+        )
+    except CoverageExecutionError as exc:
+        return (
+            None,
+            TransactionError(
+                str(exc),
+                side=output.name,
+                phase=exc.phase,
+                stdout_log=exc.stdout_log.relative_to(evidence_dir).as_posix(),
+                stderr_log=exc.stderr_log.relative_to(evidence_dir).as_posix(),
+            ),
+        )
+    except TransactionError as exc:
+        return None, exc
+    except Exception as exc:
+        (output / "controller.stdout.log").write_text("")
+        (output / "controller.stderr.log").write_text(str(exc) + "\n")
+        return (
+            None,
+            TransactionError(
+                str(exc),
+                side=output.name,
+                phase="measurement",
+                stdout_log=output.name + "/controller.stdout.log",
+                stderr_log=output.name + "/controller.stderr.log",
+            ),
+        )
+
+
 def assure_coverage(root: Path, *, base: str, candidate: str, evidence_dir: Path) -> CoverageTransaction:
     """Measure both immutable commits now under the engine-owned self profile.
 
@@ -256,43 +300,40 @@ def _execute_coverage(root: Path, *, base: str, candidate: str, evidence_dir: Pa
     with tempfile.TemporaryDirectory(prefix="tc-fitness-coverage-transaction-") as directory:
         scratch = Path(directory)
         snapshots: list[Path] = []
-        measurements = []
         try:
             if any(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is None for value in (base, candidate)):
                 raise ValueError("coverage transaction requires explicit full immutable commit IDs")
             exact_checkout(root, base, candidate)
+            sides = []
             for label, commit in (("base", base), ("candidate", candidate)):
                 snapshot = scratch / label
                 git(root, "worktree", "add", "--detach", str(snapshot), commit)
                 snapshots.append(snapshot)
                 output = evidence_dir / label
                 output.mkdir()
-                try:
-                    measurements.append(
-                        _fresh_measurement(
-                            snapshot, commit, output, execution, environment_dir=scratch / (label + "-venv")
-                        )
+                sides.append((snapshot, commit, output, scratch / (label + "-venv")))
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="tc-fitness-coverage"
+            ) as executor:
+                futures = [
+                    executor.submit(
+                        _measure_side,
+                        snapshot,
+                        commit,
+                        output,
+                        execution,
+                        evidence_dir,
+                        environment_dir=environment_dir,
                     )
-                except CoverageExecutionError as exc:
-                    raise TransactionError(
-                        str(exc),
-                        side=label,
-                        phase=exc.phase,
-                        stdout_log=exc.stdout_log.relative_to(evidence_dir).as_posix(),
-                        stderr_log=exc.stderr_log.relative_to(evidence_dir).as_posix(),
-                    ) from exc
-                except TransactionError:
-                    raise
-                except Exception as exc:
-                    (output / "controller.stdout.log").write_text("")
-                    (output / "controller.stderr.log").write_text(str(exc) + "\n")
-                    raise TransactionError(
-                        str(exc),
-                        side=label,
-                        phase="measurement",
-                        stdout_log=label + "/controller.stdout.log",
-                        stderr_log=label + "/controller.stderr.log",
-                    ) from exc
+                    for snapshot, commit, output, environment_dir in sides
+                ]
+                # Collect in base/candidate order even when candidate finishes first.
+                outcomes = [future.result() for future in futures]
+            errors = [error for _, error in outcomes if error is not None]
+            if errors:
+                raise errors[0]
+            measurements = [measurement for measurement, _ in outcomes if measurement is not None]
             before, after = measurements
             failures = _candidate_failures(
                 snapshots[1], evidence_dir / "candidate/measurement/coverage.xml", base, candidate
