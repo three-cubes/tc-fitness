@@ -13,12 +13,21 @@ a sandbox against a plugin that disables assurance or changes markers later.
 from __future__ import annotations
 
 from collections.abc import Generator, Iterable, Sequence
+from pathlib import Path
 
 import pytest
 
 from tc_fitness.core_checks.every_test_has_tier_marker import DEFAULT_TIER_MARKERS
 
 _COLLECTED_ITEMS = pytest.StashKey[list[pytest.Item]]()
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Treat each contract-manifest directory as fixture data, not an outer test tree."""
+    del config
+    if (collection_path / "contract.yaml").is_file():
+        return True
+    return None
 
 
 def effective_tier_violations(items: Iterable[pytest.Item]) -> tuple[str, ...]:

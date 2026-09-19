@@ -21,6 +21,7 @@ from tc_fitness.core_checks._runtime_contracts import (
     is_component_pattern_prefix,
     is_integer_identity,
     is_path_identity_segment,
+    render_findings,
     sort_findings,
 )
 from tc_fitness.core_checks.runtime_evidence_contract import (
@@ -1671,13 +1672,17 @@ class RuntimeFilesystemContract(RuntimeContractRule):
 
     def run(self) -> int:
         """Emit each declaration defect into the structured contract ledger."""
-        for finding in self.collect_findings():
+        findings = self.collect_findings()
+        for finding in findings:
             report_finding(
                 finding.code,
                 str(finding.source.relative_to(self._repo_root)),
                 finding.message,
             )
-        return super().run()
+        if not findings:
+            return 0
+        render_findings(findings)
+        return 1
 
 
 def build(

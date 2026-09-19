@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from tc_fitness.check_contracts import load_check_contract
 from tc_fitness.runner import run_contract_case
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,15 +24,15 @@ EXTERNAL_CONTRACTS = {
     "script_help_smoke": ("compliant", "violation", "unavailable"),
 }
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.contract
 
 
 def _install_protocol_tool_doubles(tools: Path) -> None:
-    """Install deterministic scanner protocols; these are not live scanner proof."""
+    """Install protocol-unit scanner collaborators; they never establish live proof."""
     tools.mkdir()
     (tools / "checkov").write_text(
         "#!/bin/sh\n"
-        'if [ -f "$2/violation.marker" ]; then\n'
+        'if grep -q "publicNetworkAccess: \'Enabled\'" "$2/main.bicep"; then\n'
         '  printf \'%s\\n\' \'{"results":{"failed_checks":[{"check_id":"CKV_FIXTURE_1","file_path":"infra/main.bicep","resource":"fixture","check_name":"fixture violation","file_line_range":[1,1]}]},"summary":{"parsing_errors":0}}\'\n'
         "else\n"
         '  printf \'%s\\n\' \'{"results":{"failed_checks":[]},"summary":{"parsing_errors":0}}\'\n'
@@ -39,7 +42,7 @@ def _install_protocol_tool_doubles(tools: Path) -> None:
     (tools / "osv-scanner").write_text(
         "#!/bin/sh\n"
         'if [ "$1" = "--version" ]; then printf "%s\\n" "osv-scanner version: 2.2.4"; exit 0; fi\n'
-        'if [ -f "violation.marker" ]; then\n'
+        'if grep -q "fixture-vulnerable" uv.lock; then\n'
         '  printf \'%s\\n\' \'{"results":[{"packages":[{"vulnerabilities":[{"id":"GHSA-fixture"}]}]}]}\'\n'
         "  exit 1\n"
         "fi\n"
@@ -74,3 +77,42 @@ def test_external_contract_batch_is_complete_and_runs_through_the_public_cli(
             assert result["check"] == f"core:{name}"
             assert result["case_id"] == case_id
             assert result["actual"]["status"] == result["expected"]["status"]
+
+
+@pytest.mark.parametrize("name", ["checkov_iac_security", "osv_scanner_sca"])
+def test_scanner_protocol_contracts_are_explicitly_non_admissible(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Controlled scanner protocols cannot be mistaken for live qualification."""
+    contract_root = CONTRACTS_ROOT / name
+    contract = load_check_contract(contract_root / "contract.yaml")
+
+    assert contract.evidence_class == "protocol-unit"
+    assert contract.live_qualification == "required-unmet"
+    assert not contract.release_admission
+    assert not list((contract_root / "violation").glob("*.marker"))
+    tools = tmp_path / "protocol-tools"
+    _install_protocol_tool_doubles(tools)
+    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    ledger = run_contract_case(contract_root / "contract.yaml", "violation", tmp_path / "ledger.json")
+    assert ledger["evidence_class"] == "protocol-unit"
+    assert ledger["live_qualification"] == "required-unmet"
+    assert not ledger["release_admission"]
+
+
+def test_contract_fixture_registry_is_not_collected_as_an_outer_test_suite() -> None:
+    """Only registry drivers are tests; files below a contract manifest are fixture data."""
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "--strict-markers", "-q", "tests"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "tests/check_contracts/deterministic_tests/compliant/tests/test_stable.py" not in result.stdout
+    assert (
+        "tests/test_check_contracts_external_batch.py::test_external_contract_batch_is_complete"
+        in result.stdout
+    )

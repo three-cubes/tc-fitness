@@ -15,7 +15,9 @@ Detection (AST walk per file):
   2. Otherwise every ``test_*`` function must carry a matching
      ``@pytest.mark.<tier>`` decorator.
   3. A file with no ``test_*`` functions (a fixtures/support module) passes.
-  4. With ``require_module_marker``, every test module must declare exactly one
+  4. Files below a directory carrying ``contract.yaml`` are public-contract
+       fixture data, so are not independently classified as repository tests.
+  5. With ``require_module_marker``, every test module must declare exactly one
      module-level tier; function-level markers alone do not satisfy the rule.
 
 Canonical mode checks a deliberately small source grammar, not Python's
@@ -312,6 +314,11 @@ class EveryTestHasTierMarker(FitnessRule):
         parts = Path(rel).parts
         if any(part in self.excluded_parts for part in parts):
             return False
+        candidate = self._repo_root / rel
+        while candidate != self._repo_root:
+            if (candidate / "contract.yaml").is_file():
+                return False
+            candidate = candidate.parent
         return Path(rel).name.startswith("test_")
 
     def file_has_violation(self, path: Path) -> bool:

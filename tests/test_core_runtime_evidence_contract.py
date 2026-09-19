@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
+import threading
+import time
 import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.catalogue import RuleEntry
+from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.core_checks._runtime_contracts import CONTRACT_SCHEMA, EVIDENCE_SCHEMA, canonical_json_bytes
 from tc_fitness.core_checks.runtime_evidence_contract import (
@@ -467,3 +472,54 @@ def test_nul_path_is_an_actionable_finding(tmp_path: Path, capsys: object, locat
         (tmp_path / "evidence.json").write_bytes(canonical_json_bytes(evidence))
     assert build(config, repo_root=tmp_path).run() == 1
     assert "fix:" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+def test_fifo_invalid_then_valid_evidence_cannot_split_status_from_findings(tmp_path: Path) -> None:
+    """One immutable finding tuple prevents a second FIFO read from changing the verdict."""
+    _seed(tmp_path)
+    valid = (tmp_path / "evidence.json").read_bytes()
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.unlink()
+    os.mkfifo(evidence_path)
+    valid_written = threading.Event()
+
+    def writer() -> None:
+        with evidence_path.open("wb", buffering=0) as pipe:
+            pipe.write(b"{}")
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            try:
+                descriptor = os.open(evidence_path, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+                time.sleep(0.01)
+                continue
+            with os.fdopen(descriptor, "wb", closefd=True) as pipe:
+                pipe.write(valid)
+            valid_written.set()
+            return
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    rules = (
+        RuleEntry(
+            id="runtime-evidence-contract",
+            gate="runtime-evidence-contract",
+            check="core:runtime_evidence_contract",
+            summary="runtime evidence matches the deployment attempt",
+        ),
+    )
+    with capture_check_evidence() as evidence:
+        verdict = run(
+            rules,
+            repo_root=tmp_path,
+            core_check_configs={"runtime_evidence_contract": _config()},
+        )
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert not valid_written.is_set()
+    assert not verdict.ok
+    assert evidence.findings
+    assert evidence.results[0].status == "fail"
