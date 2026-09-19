@@ -375,20 +375,50 @@ def emit_pass(message: str, stream: Any = None) -> None:
     print(message, file=out)
 
 
-def load_yaml(path: Path) -> tuple[Any, str | None]:
+def load_yaml(path: Path, *, reject_duplicate_keys: bool = False) -> tuple[Any, str | None]:
     """Load YAML returning ``(data, error)``.
 
-    Returns ``({} or scalar, None)`` on success; ``(None, error-str)`` on a
-    missing PyYAML dependency or a parse failure. Callers decide whether the
-    error is fatal. PyYAML is imported lazily so consumers that never call this
-    helper need not install the ``yaml`` extra.
+    Returns ``({} or scalar, None)`` on success or ``(None, error-str)`` when
+    the required dependency is unavailable or parsing fails.
+    ``reject_duplicate_keys`` selects the strict mapping loader used by
+    schema-bound manifest consumers, where last-write-wins would hide a
+    conflicting declaration.
     """
     try:
         import yaml
     except ImportError:
         return None, "PyYAML missing"
+
     try:
-        return yaml.safe_load(path.read_text()) or {}, None
+        text = path.read_text()
+        if not reject_duplicate_keys:
+            return yaml.safe_load(text) or {}, None
+
+        def construct_mapping(loader: Any, node: Any, deep: bool = False) -> dict[Any, Any]:
+            loader.flatten_mapping(node)
+            mapping: dict[Any, Any] = {}
+            for key_node, value_node in node.value:
+                key = loader.construct_object(key_node, deep=deep)
+                if key in mapping:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"duplicate YAML mapping key: {key!r}",
+                        key_node.start_mark,
+                    )
+                mapping[key] = loader.construct_object(value_node, deep=deep)
+            return mapping
+
+        strict_loader = type(
+            "StrictLoader",
+            (yaml.SafeLoader,),
+            {"construct_mapping": construct_mapping},
+        )
+        loader = strict_loader(text)
+        try:
+            return loader.get_single_data() or {}, None
+        finally:
+            loader.dispose()
     except yaml.YAMLError as e:
         return None, f"invalid YAML — {e}"
 

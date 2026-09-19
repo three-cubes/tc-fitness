@@ -145,13 +145,15 @@ def _validate_case_set(cases: tuple[ContractCase, ...], dependencies: tuple[str,
         raise CheckContractError(
             "dependency-backed contracts require an unavailable case with status: error and exit: nonzero"
         )
+    if not unavailable.expected.findings:
+        raise CheckContractError("unavailable case must expect at least one stable finding")
 
 
 def load_check_contract(path: Path) -> CheckContract:
     """Load and validate one check-contract manifest."""
     if not path.is_file():
         raise CheckContractError(f"contract manifest does not exist: {path}")
-    value, error = load_yaml(path)
+    value, error = load_yaml(path, reject_duplicate_keys=True)
     if error is not None:
         raise CheckContractError(f"{path}: {error}")
     raw = _mapping(value, str(path))

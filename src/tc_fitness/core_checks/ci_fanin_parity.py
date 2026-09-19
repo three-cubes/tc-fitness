@@ -63,8 +63,8 @@ REMEDIATION = _remediation(
 def _load_jobs(workflow_text: str) -> dict[str, Any]:
     """Parse the workflow and return its ``jobs`` mapping ({} on any failure).
 
-    PyYAML is imported lazily (it is an optional extra): when absent the rule
-    degrades to "nothing to assert" rather than crashing the gate.
+    PyYAML is imported lazily so an incomplete installation degrades to
+    "nothing to assert" rather than crashing the gate.
     """
     try:
         import yaml

@@ -361,9 +361,9 @@ if err is None:
     absent = missing_keys(data, ("name", "version"))
 ```
 
-`load_yaml` imports PyYAML lazily and returns `(None, "PyYAML missing")` when it
-isn't installed, so the dependency is optional — install the `yaml` extra only if
-you call it.
+`load_yaml` is available in every default installation. YAML-backed public
+surfaces, including check-contract manifests, therefore do not require an
+optional extra to parse their configuration.
 
 ## What v0.2.0 adds
 
@@ -591,11 +591,11 @@ uv sync --all-extras --all-groups
 uv run pytest tests/ -q
 ```
 
-The package is self-contained: pure stdlib at runtime, PyYAML an optional extra.
-It must never import from `kairix` or `tc-agent-zone` — it is the shared core both
-depend on. `tests/test_lib.py` pins the call patterns consumers' checks depend on;
-`tests/test_ratchet.py` pins the reconciled ratchet grammar (40-char threshold;
-em-dash and hyphen; `NOSONAR` in the suppression set).
+The package has one runtime dependency, PyYAML, for its YAML-backed public
+surfaces. It must never import from `kairix` or `tc-agent-zone` — it is the
+shared core both depend on. `tests/test_lib.py` pins the call patterns consumers'
+checks depend on; `tests/test_ratchet.py` pins the reconciled ratchet grammar
+(40-char threshold; em-dash and hyphen; `NOSONAR` in the suppression set).
 
 ### Author or improve a CORE check
 
