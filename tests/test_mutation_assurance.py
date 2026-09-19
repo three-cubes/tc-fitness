@@ -33,10 +33,13 @@ def _consumer(root: Path, *, weak: bool = False) -> tuple[str, str]:
     (root / "src").mkdir()
     (root / "tests").mkdir()
     (root / "src/admission.py").write_text("def accepts(age):\n    return age > 18\n")
-    tests = "from admission import accepts\n\ndef test_admission():\n" + (
-        "    assert isinstance(accepts(20), bool)\n"
-        if weak
-        else "    assert accepts(17) is False\n    assert accepts(18) is True\n    assert accepts(19) is True\n"
+    tests = (
+        "import pytest\nfrom admission import accepts\n\npytestmark = pytest.mark.unit\n\ndef test_admission():\n"
+        + (
+            "    assert isinstance(accepts(20), bool)\n"
+            if weak
+            else "    assert accepts(17) is False\n    assert accepts(18) is True\n    assert accepts(19) is True\n"
+        )
     )
     (root / "tests/test_admission.py").write_text(tests)
     (root / "mutation.toml").write_text(
@@ -322,7 +325,7 @@ def test_native_deadline_retains_error_instead_of_a_killed_mutant(tmp_path: Path
     root = tmp_path / "consumer"
     base, _ = _consumer(root)
     (root / "tests/test_admission.py").write_text(
-        "import time\nfrom admission import accepts\n\ndef test_admission():\n    time.sleep(10)\n    assert accepts(18)\n"
+        "import time\nimport pytest\nfrom admission import accepts\n\npytestmark = pytest.mark.unit\n\ndef test_admission():\n    time.sleep(10)\n    assert accepts(18)\n"
     )
     policy = root / "mutation.toml"
     policy.write_text(policy.read_text().replace("timeout_seconds = 60", "timeout_seconds = 1"))
@@ -393,7 +396,7 @@ def test_native_snapshot_preserves_tracked_executable_dependencies(tmp_path: Pat
     test = root / "tests/test_admission.py"
     test.write_text(
         "import subprocess\n"
-        + test.read_text()
+        + test.read_text().replace("pytest.mark.unit", "pytest.mark.contract")
         + "\ndef test_native_dependency():\n    subprocess.run(['./scripts/ready'], check=True)\n"
     )
     _git(root, "add", ".")
@@ -419,3 +422,32 @@ def test_git_export_attributes_cannot_hide_changed_production(tmp_path: Path) ->
     result = _command(root, base, head, tmp_path / "plan.json", "plan")
     assert result.returncode == 2, result.stdout
     assert "archive" in json.loads(result.stdout)["message"]
+
+
+def test_mutation_uses_contract_unit_tests_not_distribution_e2e(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    (root / "tests/test_distribution.py").write_text(
+        "import pytest\npytestmark = pytest.mark.e2e\n\ndef test_distribution():\n    raise RuntimeError('not a mutation test tier')\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: separate distribution qualification")
+    head = _git(root, "rev-parse", "HEAD")
+    result = _command(root, base, head, tmp_path / "evidence")
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = json.loads((tmp_path / "evidence/receipt.json").read_text())
+    assert receipt["status"] == "pass"
+    assert receipt["mutants"]
+
+
+def test_e2e_only_tests_cannot_claim_unit_contract_mutation_proof(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    source = root / "tests/test_admission.py"
+    source.write_text(source.read_text().replace("pytest.mark.unit", "pytest.mark.e2e"))
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: absent mutation test tier")
+    head = _git(root, "rev-parse", "HEAD")
+    result = _command(root, base, head, tmp_path / "evidence")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert _command(root, base, head, tmp_path / "evidence", "verify").returncode == 2

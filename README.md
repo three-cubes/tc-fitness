@@ -107,6 +107,9 @@ commit, and the tracked checkout must exactly match that commit. The tracked
 deadline and a post-execution mutant-count admission ceiling. No exclusions,
 survivor acknowledgements, coverage-only selection or mutation suppressions are
 accepted. Each attempt needs a fresh output directory; failed evidence is kept.
+The native runner selects tests marked `unit` or `contract`; distribution E2E
+and integration qualification remain separate tasks. A missing selected test
+tier cannot satisfy mutation assurance.
 
 Selection compares production function definitions and includes their dependency
 closure. Module-level changes select the module's functions; unresolved dynamic
