@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -143,6 +144,187 @@ class TestParser:
         assert True
 """
 
+_TIER_ALIAS_DECORATOR = """
+import pytest
+
+pytestmark = pytest.mark.unit
+tier = pytest.mark.integration
+
+@tier
+def test_parser() -> None:
+    assert True
+"""
+
+_PYTEST_PARAM_TIER_MARK = """
+import pytest
+
+pytestmark = pytest.mark.unit
+tier = pytest.mark.integration
+
+@pytest.mark.parametrize("value", [pytest.param(1, marks=tier)])
+def test_parser(value: int) -> None:
+    assert value == 1
+"""
+
+_FUNCTION_PYTESTMARK_MUTATION = """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+def test_parser() -> None:
+    assert True
+
+test_parser.pytestmark = pytest.mark.integration
+"""
+
+_POST_DEFINITION_DECORATION = """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+def test_parser() -> None:
+    assert True
+
+test_parser = pytest.mark.integration(test_parser)
+"""
+
+_NAMED_EXPRESSION_BINDING = """
+import pytest
+
+pytestmark = pytest.mark.unit
+if (pytestmark := pytest.mark.integration):
+    pass
+
+def test_parser() -> None:
+    assert True
+"""
+
+_FOR_LOOP_BINDING = """
+import pytest
+
+pytestmark = pytest.mark.unit
+for pytestmark in [pytest.mark.integration]:
+    pass
+
+def test_parser() -> None:
+    assert True
+"""
+
+_OTHER_PYTESTMARK_BINDINGS = {
+    "function-parameter": """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+def helper(pytestmark: object) -> object:
+    return pytestmark
+
+def test_parser() -> None:
+    assert True
+""",
+    "definition-name": """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+def pytestmark() -> None:
+    pass
+
+def test_parser() -> None:
+    assert True
+""",
+    "import-alias": """
+import math as pytestmark
+import pytest
+
+pytestmark = pytest.mark.unit
+
+def test_parser() -> None:
+    assert True
+""",
+    "with-target": """
+from contextlib import nullcontext
+import pytest
+
+pytestmark = pytest.mark.unit
+
+with nullcontext() as pytestmark:
+    pass
+
+def test_parser() -> None:
+    assert True
+""",
+    "except-target": """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+try:
+    raise RuntimeError
+except RuntimeError as pytestmark:
+    pass
+
+def test_parser() -> None:
+    assert True
+""",
+    "match-capture": """
+import pytest
+
+pytestmark = pytest.mark.unit
+
+match 1:
+    case pytestmark:
+        pass
+
+def test_parser() -> None:
+    assert True
+""",
+    "comprehension-target": """
+import pytest
+
+pytestmark = pytest.mark.unit
+values = [pytestmark for pytestmark in range(1)]
+
+def test_parser() -> None:
+    assert True
+""",
+    "delete-target": """
+import pytest
+
+pytestmark = pytest.mark.unit
+del pytestmark
+
+def test_parser() -> None:
+    assert True
+""",
+    "mapping-rest-capture": """
+import pytest
+
+pytestmark = pytest.mark.unit
+match {}:
+    case {**pytestmark}:
+        pass
+
+def test_parser() -> None:
+    assert True
+""",
+}
+
+_RUNTIME_TIER_PROOF = """
+import pytest
+
+TIER_MARKERS = {"unit", "contract", "integration", "e2e"}
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    offenders = []
+    for item in session.items:
+        effective_tiers = [marker.name for marker in item.iter_markers() if marker.name in TIER_MARKERS]
+        if len(effective_tiers) != 1:
+            offenders.append(f"{item.nodeid}: {effective_tiers}")
+    if offenders:
+        raise pytest.UsageError("items must have exactly one effective tier: " + "; ".join(offenders))
+"""
+
 _NO_TESTS = """
 import pytest
 
@@ -258,6 +440,39 @@ def test_canonical_mode_rejects_class_tier_declaration(tmp_path: Path) -> None:
     _assert_canonical_rule_and_collection_reject(tmp_path, _CLASS_TIER_DECLARATION)
 
 
+def test_canonical_mode_rejects_tier_alias_decorator(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _TIER_ALIAS_DECORATOR)
+
+
+def test_canonical_mode_rejects_pytest_param_tier_mark(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _PYTEST_PARAM_TIER_MARK)
+
+
+def test_canonical_mode_rejects_function_pytestmark_mutation(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _FUNCTION_PYTESTMARK_MUTATION)
+
+
+def test_canonical_mode_rejects_post_definition_decoration(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _POST_DEFINITION_DECORATION)
+
+
+def test_canonical_mode_rejects_named_expression_binding(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _NAMED_EXPRESSION_BINDING)
+
+
+def test_canonical_mode_rejects_for_loop_binding(tmp_path: Path) -> None:
+    _assert_canonical_rule_and_collection_reject(tmp_path, _FOR_LOOP_BINDING)
+
+
+@pytest.mark.parametrize("body", _OTHER_PYTESTMARK_BINDINGS.values(), ids=_OTHER_PYTESTMARK_BINDINGS)
+def test_canonical_mode_rejects_other_pytestmark_binding_contexts(tmp_path: Path, body: str) -> None:
+    path = _seed(tmp_path, "tests/test_x.py", body)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+    assert rule.collect_violations() == {path.relative_to(tmp_path)}
+
+
 def test_file_without_tests_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _NO_TESTS)
     assert file_missing_tier_marker(p, tiers=_TIERS) is False
@@ -311,6 +526,31 @@ def test_repository_tests_are_all_classified_by_tier() -> None:
         repo_root=Path(__file__).parent.parent,
     )
     assert rule.run() == 0
+
+
+def test_repository_items_have_one_effective_tier(tmp_path: Path) -> None:
+    plugin = _seed(tmp_path, "tier_runtime_self_proof.py", _RUNTIME_TIER_PROOF)
+    environment = os.environ | {
+        "PYTHONPATH": str(plugin.parent) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
+    collection = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "tier_runtime_self_proof",
+            "tests",
+        ],
+        check=False,
+        capture_output=True,
+        cwd=Path(__file__).parent.parent,
+        env=environment,
+        text=True,
+    )
+    assert collection.returncode == 0, collection.stdout + collection.stderr
 
 
 def test_no_repo_strings_in_executable_code() -> None:
