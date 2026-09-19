@@ -101,7 +101,7 @@ ignore = ["E501", "RUF022"]
 # checkov_iac_security runs the trusted `checkov` binary (resolved to an absolute
 # path via shutil.which) over the consumer's config-declared scan dir, as a fixed
 # argv list with no shell — the same trusted-binary posture the gate itself uses;
-# the binary is absent-tolerant (soft-skip), so this is not attacker-controlled
+# a missing required executable fails closed. The argv is not attacker-controlled
 # input (S404 the import, S603 the call).
 "src/tc_fitness/core_checks/checkov_iac_security.py" = ["S404", "S603"]
 # osv_scanner_sca resolves the trusted scanner executable with shutil.which and
@@ -169,6 +169,7 @@ ruff format --check \
   tests/test_runtime_contracts.py tests/test_runtime_contract_cli.py \
   tests/test_check_contracts.py \
   tests/test_check_contract_execution.py tests/test_check_evidence.py \
+  tests/test_check_contract_assurance.py \
   tests/test_check_contract_default_install.py \
   tests/test_release_toolchain_parity.py \
   tests/test_core_behavioural_evidence.py \

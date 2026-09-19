@@ -286,6 +286,11 @@ These three arguments are required together and cannot be combined with ordinary
 gate options. The fixture is copied into a temporary repository; its declared
 config and a single catalogue entry are passed to the existing runner. Fixtures
 must be contained beneath the manifest, without symlinks or suppression baselines.
+Configuration must use fixture-relative paths and cannot select a baseline or
+an external rule name. Manifest bytes, parsed configuration, fixture digest and
+candidate identity are captured before dispatch. A changed manifest, original
+fixture or candidate source, or a baseline created by the executing fixture,
+invalidates the run before a ledger can be published.
 The output directory must exist, and the ledger must be a new path outside the
 fixture. Retries retain the previous ledger and use a new output path.
 
@@ -306,12 +311,30 @@ evidence = run_contract_case(
 
 `CheckContractError` means the assurance case failed. Missing evidence, unexpected
 findings or exits, stale timestamps, changed inputs, and digest mismatches are
-failures. An unavailable declared executable is an `error`, and satisfies only a
-case that explicitly expects that error and its `dependency-unavailable` finding.
+failures. Each dependency-backed check reports its own unavailable executable as
+an `error`; the contract harness never synthesises a dependency finding or skips
+the check. That error satisfies only a case expecting its structured finding.
+
+An unavailable case can remove PATH-resolved tools from its execution environment
+without installing substitutes:
+
+```yaml
+environment:
+  schema: tc.fitness/check-environment/v1
+  path: empty
+```
+
+This optional per-case declaration accepts only `inherit` and `empty`. Omission
+means `inherit`; only the `unavailable` case may use `empty`. Its PATH points to
+an empty temporary directory during the same check dispatch and is then restored.
+Compliant and violation cases use the ordinary environment. The declaration is
+bound in the case digest and ledger. Absolute executable defaults remain absolute;
+a PATH-absence case must configure the real check to resolve its declared tool
+through PATH (for example, `python_executable: python3` for `script_help_smoke`).
 
 The `tc.fitness/check-ledger/v1` JSON binds the check and case, manifest and case
 digests, fixture contents and permissions, package version and source digest,
-execution UUID and timestamps, expected and actual outcomes, and structured
+execution environment, UUID and timestamps, expected and actual outcomes, and structured
 findings. `payload_digest` is SHA-256 over the UTF-8 JSON object with that field
 removed, sorted keys, compact separators, unescaped Unicode and no NaN values.
 The validator recomputes it; it is an integrity digest, not a signature.

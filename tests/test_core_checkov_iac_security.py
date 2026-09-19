@@ -8,16 +8,17 @@ no internal patching.
 from __future__ import annotations
 
 import ast
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 from tc_fitness.core_checks.checkov_iac_security import (
     CheckovIacSecurity,
     build,
     finding_key,
-    main,
     net_new_findings,
     parse_failed,
     parsing_error_count,
@@ -85,18 +86,37 @@ def test_evaluate_flags_net_new_with_injected_runner(tmp_path: Path) -> None:
     assert "CKV_AZURE_1" in errors[0]
 
 
-def test_evaluate_soft_skips_when_runner_returns_none(tmp_path: Path) -> None:
-    rule = CheckovIacSecurity(tmp_path, runner=lambda _sd: None)
-    passed, errors, meta = rule.evaluate()
-    assert passed
+def test_evaluate_rejects_unavailable_real_scanner(tmp_path: Path) -> None:
+    output = tmp_path / "evaluation.json"
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import json, sys; "
+            "from tc_fitness.core_checks.checkov_iac_security import CheckovIacSecurity; "
+            "Path(sys.argv[2]).write_text(json.dumps(CheckovIacSecurity(Path(sys.argv[1])).evaluate()))",
+            str(tmp_path),
+            str(output),
+        ],
+        env={**os.environ, "PATH": ""},
+        check=False,
+    )
+    assert process.returncode == 0
+    passed, errors, meta = json.loads(output.read_text())
+    assert not passed
     assert errors == []
-    assert meta["skipped"] is True
+    assert meta["unavailable"] is True
 
 
-def test_run_soft_skip_returns_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    rule = CheckovIacSecurity(tmp_path, runner=lambda _sd: None)
-    assert rule.run() == 0
-    assert "soft-skip" in capsys.readouterr().out
+def test_public_run_returns_error_when_real_scanner_is_unavailable(tmp_path: Path) -> None:
+    process = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.core_checks.checkov_iac_security", "--repo-root", str(tmp_path)],
+        env={**os.environ, "PATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode == 2
 
 
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
@@ -132,15 +152,23 @@ def test_build_factory_returns_instance(tmp_path: Path) -> None:
     assert isinstance(rule, CheckovIacSecurity)
 
 
-def test_main_gate_and_establish_are_deterministic_without_binary(tmp_path: Path) -> None:
-    # main() uses the real checkov binary (runner=None). tc-fitness ships zero
-    # runtime deps, so on CI checkov is absent → soft-skip (rc 0); establish then
-    # writes an empty key baseline. An empty scan tree keeps the verdict stable
-    # even where checkov IS installed (no resources → no findings).
-    (tmp_path / "infra").mkdir()
-    assert main(["--repo-root", str(tmp_path)]) == 0
-    assert main(["--establish-baseline", "--repo-root", str(tmp_path)]) == 0
-    assert (tmp_path / ".architecture" / "baseline" / "checkov-iac-security-findings.txt").exists()
+def test_public_adoption_cannot_create_evidence_without_scanner(tmp_path: Path) -> None:
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tc_fitness.core_checks.checkov_iac_security",
+            "--repo-root",
+            str(tmp_path),
+            "--establish-baseline",
+        ],
+        env={**os.environ, "PATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode == 2
+    assert not (tmp_path / ".architecture" / "baseline").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:
