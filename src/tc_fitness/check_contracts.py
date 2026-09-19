@@ -282,9 +282,7 @@ def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckCont
     )
 
 
-def registered_contract_directory(
-    path: Path, registered_checks: tuple[str, ...]
-) -> CheckContract | None:
+def registered_contract_directory(path: Path, registered_checks: tuple[str, ...]) -> CheckContract | None:
     """Return the manifest only when ``path`` is a complete bound fixture registry.
 
     Test discovery uses this as an authority boundary. A directory name, an
@@ -303,12 +301,7 @@ def registered_contract_directory(
     for case in contract.cases:
         relative = Path(case.fixture)
         fixture = path / relative
-        if (
-            relative.is_absolute()
-            or ".." in relative.parts
-            or not fixture.is_dir()
-            or fixture.is_symlink()
-        ):
+        if relative.is_absolute() or ".." in relative.parts or not fixture.is_dir() or fixture.is_symlink():
             return None
     return contract
 
