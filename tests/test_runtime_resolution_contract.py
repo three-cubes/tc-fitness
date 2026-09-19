@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,15 @@ def _selected(**values: object) -> dict[str, object]:
         "target": "service",
         **values,
     }
+
+
+def _assert_actionable(findings: tuple[ContractFinding, ...], source: Path) -> None:
+    """A denial must locate the document and give a nonempty cause and repair."""
+    assert findings
+    for finding in findings:
+        assert finding.source == source
+        assert isinstance(finding.message, str) and finding.message.strip()
+        assert isinstance(finding.fix, str) and finding.fix.strip()
 
 
 @pytest.mark.parametrize(
@@ -317,6 +327,7 @@ def test_invalid_nested_reference_use_retains_its_pointer(tmp_path: Path, placeh
     )
     assert resolved is None
     assert len(findings) == 1
+    _assert_actionable(findings, tmp_path / "registry.json")
     finding = findings[0]
     if isinstance(placeholder, dict) and "fallback" in placeholder:
         assert (finding.pointer, finding.code) == ("/deployment/a~1b~0c/0", "invalid-external-reference-use")
@@ -361,6 +372,7 @@ def test_already_selected_contract_cannot_override_requested_identity(
     assert resolved is None
     assert [(f.source, f.pointer, f.code) for f in findings] == [(source, f"/{key}", "selection-mismatch")]
     assert wrong in findings[0].fix
+    _assert_actionable(findings, source)
 
 
 @pytest.mark.parametrize("environments", [None, [], "prod", 42])
@@ -375,6 +387,7 @@ def test_present_but_malformed_environment_registry_is_not_a_selected_contract(
     )
     assert resolved is None
     assert [(f.pointer, f.code) for f in findings] == [("/environments", "invalid-environments")]
+    _assert_actionable(findings, tmp_path / "registry.json")
 
 
 @pytest.mark.parametrize(
@@ -392,6 +405,7 @@ def test_registry_requires_both_nonempty_selectors(
     )
     assert resolved is None
     assert [(f.pointer, f.code) for f in findings] == [("/environments", "missing-selection")]
+    _assert_actionable(findings, tmp_path / "registry.json")
 
 
 @pytest.mark.parametrize("environment_value", [None, [], "prod"])
@@ -406,6 +420,7 @@ def test_unknown_environment_reports_escaped_selector_location(
     )
     assert resolved is None
     assert [(f.pointer, f.code) for f in findings] == [("/environments/a~1b~0c", "unknown-environment")]
+    _assert_actionable(findings, tmp_path / "registry.json")
 
 
 @pytest.mark.parametrize("targets", [None, [], {}, {"a/b~c": None}, {"a/b~c": []}])
@@ -420,6 +435,7 @@ def test_unknown_target_does_not_select_another_target(tmp_path: Path, targets: 
     assert [(f.pointer, f.code) for f in findings] == [
         ("/environments/prod/targets/a~1b~0c", "unknown-target")
     ]
+    _assert_actionable(findings, tmp_path / "registry.json")
 
 
 @pytest.mark.parametrize("key", ["schema", "environment", "target"])
@@ -434,6 +450,7 @@ def test_target_local_reserved_identity_cannot_conflict_with_registry(tmp_path: 
     assert [(f.pointer, f.code) for f in findings] == [
         (f"/environments/prod/targets/service/{key}", "selection-conflict")
     ]
+    _assert_actionable(findings, tmp_path / "registry.json")
 
 
 def test_target_local_matching_reserved_identity_is_accepted(tmp_path: Path) -> None:
@@ -460,6 +477,7 @@ def test_external_reference_table_must_be_a_mapping(tmp_path: Path, declarations
         ("/external_references", "invalid-external-references"),
         ("/value/$external_ref", "undefined-external-reference"),
     ]
+    _assert_actionable(findings, tmp_path / "registry.json")
 
 
 @pytest.mark.parametrize(
@@ -506,3 +524,169 @@ def test_external_symlink_cannot_escape_the_contract_directory(tmp_path: Path) -
     )
     assert resolved is None
     assert {f.code for f in findings} == {"unsafe-external-reference", "undefined-external-reference"}
+    _assert_actionable(findings, directory / "registry.json")
+
+
+@pytest.mark.parametrize("declared_path", ["nested/../external.json", "nested/../../contract/external.json"])
+def test_external_parent_segments_are_forbidden_even_when_resolution_returns_inside_root(
+    tmp_path: Path, declared_path: str
+) -> None:
+    directory = tmp_path / "contract"
+    directory.mkdir()
+    (directory / "nested").mkdir()
+    (directory / "external.json").write_text('{"value":"reachable"}', encoding="utf-8")
+    source = directory / "registry.json"
+    resolved, findings = resolve_contract(
+        _selected(
+            external_references={"chosen": {"file": declared_path, "pointer": "/value"}},
+            value={"$external_ref": "chosen"},
+        ),
+        environment="prod",
+        target="service",
+        source=source,
+    )
+    assert resolved is None
+    assert [(f.pointer, f.code) for f in findings] == [
+        ("/external_references/chosen/file", "unsafe-external-reference"),
+        ("/value/$external_ref", "undefined-external-reference"),
+    ]
+    _assert_actionable(findings, source)
+
+
+@pytest.mark.parametrize(("pointer", "expected"), [("/~0", "tilde"), ("/~1", "slash"), ("/a~1", "suffix")])
+def test_terminal_json_pointer_escape_selects_the_literal_document_key(
+    tmp_path: Path, pointer: str, expected: str
+) -> None:
+    (tmp_path / "external.json").write_text('{"~":"tilde","/":"slash","a/":"suffix"}', encoding="utf-8")
+    resolved, findings = resolve_contract(
+        _selected(
+            external_references={"chosen": {"file": "external.json", "pointer": pointer}},
+            value={"$external_ref": "chosen"},
+        ),
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+    assert findings == ()
+    assert resolved == _selected(value=expected)
+
+
+@pytest.mark.parametrize(("index", "expected"), [(0, "value-0"), (10, "value-10")])
+def test_canonical_array_indices_include_zero_and_multiple_digits(
+    tmp_path: Path, index: int, expected: str
+) -> None:
+    (tmp_path / "external.json").write_text(
+        '{"values":["value-0",1,2,3,4,5,6,7,8,9,"value-10"]}', encoding="utf-8"
+    )
+    resolved, findings = resolve_contract(
+        _selected(
+            external_references={"chosen": {"file": "external.json", "pointer": f"/values/{index}"}},
+            value={"$external_ref": "chosen"},
+        ),
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+    assert findings == ()
+    assert resolved == _selected(value=expected)
+
+
+@pytest.mark.parametrize(
+    ("index", "code"),
+    [
+        (sys.maxsize - 1, "external-pointer-missing"),
+        (sys.maxsize, "external-pointer-missing"),
+        (sys.maxsize + 1, "invalid-external-pointer"),
+    ],
+)
+def test_array_index_size_boundary_distinguishes_missing_from_unrepresentable(
+    tmp_path: Path, index: int, code: str
+) -> None:
+    external = tmp_path / "external.json"
+    external.write_text('{"values":[]}', encoding="utf-8")
+    pointer = f"/values/{index}"
+    resolved, findings = resolve_contract(
+        _selected(
+            external_references={"chosen": {"file": "external.json", "pointer": pointer}},
+            value={"$external_ref": "chosen"},
+        ),
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+    assert resolved is None
+    assert {f.code for f in findings} == {code, "undefined-external-reference"}
+    selected = tuple(f for f in findings if f.code == code)
+    assert len(selected) == 1 and selected[0].pointer == pointer
+    _assert_actionable(selected, external)
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        None,
+        {"file": "external.json"},
+        {"file": "../outside.json", "pointer": "/value"},
+        {"file": "broken.json", "pointer": "/value"},
+    ],
+)
+def test_bad_external_reference_does_not_prevent_loading_a_later_valid_reference(
+    tmp_path: Path, first: object
+) -> None:
+    (tmp_path / "external.json").write_text('{"value":"available"}', encoding="utf-8")
+    (tmp_path / "broken.json").write_text('{"value":', encoding="utf-8")
+    contract = _selected(
+        external_references={"bad": first, "good": {"file": "external.json", "pointer": "/value"}},
+        values=[{"$external_ref": "bad"}, {"$external_ref": "good"}],
+    )
+    resolved, findings = resolve_contract(
+        contract, environment="prod", target="service", source=tmp_path / "registry.json"
+    )
+    assert resolved is None
+    assert [f.pointer for f in findings if f.code == "undefined-external-reference"] == [
+        "/values/0/$external_ref"
+    ]
+    assert all(f.message and f.fix for f in findings)
+
+
+def test_pointer_continues_through_object_fields_after_selecting_an_array_element(tmp_path: Path) -> None:
+    (tmp_path / "external.json").write_text('{"values":[{"id":"selected"}]}', encoding="utf-8")
+    resolved, findings = resolve_contract(
+        _selected(
+            external_references={"chosen": {"file": "external.json", "pointer": "/values/0/id"}},
+            value={"$external_ref": "chosen"},
+        ),
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+    assert findings == ()
+    assert resolved == _selected(value="selected")
+
+
+def test_unused_declaration_before_selected_reference_does_not_stop_loading(tmp_path: Path) -> None:
+    (tmp_path / "external.json").write_text('{"value":"selected"}', encoding="utf-8")
+    resolved, findings = resolve_contract(
+        _selected(
+            external_references={
+                "unused": {"file": "missing.json", "pointer": "/value"},
+                "chosen": {"file": "external.json", "pointer": "/value"},
+            },
+            value={"$external_ref": "chosen"},
+        ),
+        environment="prod",
+        target="service",
+        source=tmp_path / "registry.json",
+    )
+    assert findings == ()
+    assert resolved == _selected(value="selected")
+
+
+def test_root_reference_placeholder_with_siblings_is_located_at_the_document_root(tmp_path: Path) -> None:
+    source = tmp_path / "registry.json"
+    resolved, findings = resolve_contract(
+        _selected(**{"$external_ref": "chosen"}), environment="prod", target="service", source=source
+    )
+    assert resolved is None
+    assert [(f.pointer, f.code) for f in findings] == [("/", "invalid-external-reference-use")]
+    _assert_actionable(findings, source)
