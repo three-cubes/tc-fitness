@@ -252,8 +252,6 @@ class CoverageFloor(FitnessRule):
 
     @cached_property
     def _coverage(self) -> dict[str, float]:
-        if self.branch_floor_pct is not None:
-            return {path: counts.line_pct for path, counts in self._details.items()}
         return parse_coverage_report(self._report_path(), repo_root=self._repo_root)
 
     @cached_property
@@ -290,10 +288,6 @@ class CoverageFloor(FitnessRule):
             if messages:
                 failures[relative] = "; ".join(messages)
         return failures
-
-    def _below_floor(self) -> dict[str, float]:
-        """Map of report-relative path → coverage for files under the floor."""
-        return {path: pct for path, pct in self._coverage.items() if pct < self.floor_pct}
 
     def enumerate_files(self) -> list[Path]:
         """Enumerate the below-floor files named in the coverage report.
