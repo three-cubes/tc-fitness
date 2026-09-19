@@ -680,22 +680,6 @@ def test_public_producer_main_returns_digest_for_completed_measurement(
 
 
 @pytest.mark.parametrize("check", ["coverage_floor", "new_code_coverage"])
-def test_strict_coverage_cannot_enter_baseline_adoption(tmp_path: Path, check: str) -> None:
-    config = repository(tmp_path)
-    if check == "coverage_floor":
-        config["branch_floor_pct"] = 95
-    with capture_check_evidence() as evidence:
-        run(
-            (RuleEntry(id=check, gate=check, check="core:" + check),),
-            repo_root=tmp_path,
-            core_check_configs={check: config},
-            establish_baseline=True,
-        )
-    assert evidence.results[0].status == "error"
-    assert not (tmp_path / ".architecture/baseline").exists()
-
-
-@pytest.mark.parametrize("check", ["coverage_floor", "new_code_coverage"])
 def test_contract_policy_admits_reviewed_coverage_evidence_inputs(tmp_path: Path, check: str) -> None:
     from tc_fitness.check_contract_policy import validate_contract_configuration
 

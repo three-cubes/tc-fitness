@@ -21,17 +21,8 @@ debt, so :meth:`run` drives the two arms directly rather than ratcheting a
 violation set against a baseline (the same posture as the harness_canon_reference
 and deterministic_tests CORE checks).
 
-Warn → hard adoption path
-=========================
-A repo mid-onboarding — one that has not yet converged its CI onto the shared
-gate — adopts the check in WARN mode first: set ``warn_only = true`` (its alias
-``baseline_ok = true`` has the identical effect) in the check's config block. In
-WARN mode the check STILL reports the fork loudly but exits ``0``, so the repo
-lands the check in its catalogue without a day-one red build, converges its CI,
-then flips the flag off to hard-enforce. The default is HARD: a fork exits ``1``.
-
 Repo-agnostic: every knob (the workflows directory, the reusable-reference
-regex, the engine-invocation regex, the warn flag) arrives through the
+regex, and the engine-invocation regex) arrives through the
 consumer's ``[tool.tc_fitness.core_checks.ci_consumes_shared_gate]`` config
 block. The engine bakes in no consumer identity — only the shared-gate surface
 every fleet CI is expected to reference.
@@ -79,9 +70,7 @@ REMEDIATION = _remediation(
         "(pin a tag, never @main), OR (b) add a job step that runs `tc-fitness run` "
         "(the shared engine). Do NOT fork a private quality gate — converge up to "
         "the shared standard. See the tc-pipelines "
-        "governance/standards/improving-fitness-gates.md standard for the "
-        "converge-up + adoption path; onboard in WARN mode first with "
-        "`warn_only = true`."
+        "governance/standards/improving-fitness-gates.md standard."
     ),
     nxt="re-run this check to confirm CI now consumes the shared gate.",
     run="python -m tc_fitness.core_checks.ci_consumes_shared_gate",
@@ -137,15 +126,13 @@ class CiConsumesSharedGate(FitnessRule):
 
     name = "ci-consumes-shared-gate"
     remediation = REMEDIATION
-    #: Not a file-scan rule — the enumeration hooks stay empty so the base
-    #: --establish-baseline mode writes an empty baseline harmlessly.
+    #: Not a file-scan rule — the enumeration hooks stay empty.
     extensions = ()
 
     #: Rule-specific config (instance attrs; from_config overrides per consumer).
     workflows_dir: str = DEFAULT_WORKFLOWS_DIR
     reusable_pattern: str = DEFAULT_REUSABLE_PATTERN
     engine_pattern: str = DEFAULT_ENGINE_PATTERN
-    warn_only: bool = False
 
     @classmethod
     def from_config(
@@ -154,15 +141,16 @@ class CiConsumesSharedGate(FitnessRule):
         *,
         repo_root: Path | None = None,
     ) -> CiConsumesSharedGate:
+        removed = sorted({"warn_only", "baseline_ok"} & set(config))
+        if removed:
+            raise ValueError(
+                f"{', '.join(removed)} is not supported: a forked CI gate is always a hard failure"
+            )
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, CiConsumesSharedGate)  # noqa: S101  # narrowing for mypy
         rule.workflows_dir = str(config.get("workflows_dir", DEFAULT_WORKFLOWS_DIR))
         rule.reusable_pattern = str(config.get("reusable_pattern", DEFAULT_REUSABLE_PATTERN))
         rule.engine_pattern = str(config.get("engine_pattern", DEFAULT_ENGINE_PATTERN))
-        # WARN mode: either flag name puts the check in report-but-pass mode.
-        # `warn_only` is canonical; `baseline_ok` is its accepted alias so a repo
-        # that has "baselined" its current forked CI adopts the same soft mode.
-        rule.warn_only = bool(config.get("warn_only", False)) or bool(config.get("baseline_ok", False))
         return rule
 
     def file_has_violation(self, path: Path) -> bool:  # pragma: no cover - not used
@@ -243,14 +231,6 @@ class CiConsumesSharedGate(FitnessRule):
         print()
         print(self.remediation)
 
-        if self.warn_only:
-            print()
-            print(
-                f"warn-only [{self._name}] — reported above but NOT failing the build "
-                f"(warn_only adoption mode). Converge CI onto the shared gate, then "
-                f"remove warn_only to hard-enforce."
-            )
-            return 0
         return 1
 
 
@@ -264,7 +244,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(CiConsumesSharedGate, argv)
 
 

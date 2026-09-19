@@ -11,7 +11,6 @@ from tc_fitness.core_checks.test_skip_rationale import (
     TestSkipRationale,
     build,
     file_has_skip_without_reason,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -259,21 +258,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/test_b.py", _BARE_SKIP)
     rule = TestSkipRationale.from_config({"roots": ["tests"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_a.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "tests/test_a.py", _BARE_SKIP)
-    rule = TestSkipRationale.from_config({"roots": ["tests"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "test_a.py", _BARE_SKIP)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "test-skip-rationale-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

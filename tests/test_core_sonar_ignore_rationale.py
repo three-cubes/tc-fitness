@@ -12,7 +12,6 @@ from tc_fitness.core_checks.sonar_ignore_rationale import (
     SonarIgnoreRationale,
     build,
     file_has_unjustified_ignore,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -131,21 +130,6 @@ def test_invalid_utf8_configured_sonar_file_is_reported(tmp_path: Path) -> None:
     rule = build({}, repo_root=tmp_path)
 
     assert rule.run() == 1
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "sonar-project.properties", _BARE)
-    rule = SonarIgnoreRationale.from_config({}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "sonar-project.properties", _BARE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "sonar-ignore-rationale-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

@@ -9,7 +9,6 @@ import pytest
 from tc_fitness.core_checks.no_duplicate_string import (
     NoDuplicateString,
     build,
-    main,
     module_has_duplicate,
 )
 
@@ -96,22 +95,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/dup.py", _DUP)
     rule = NoDuplicateString.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/dup.py"}
-
-
-def test_run_fails_on_new_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/dup.py", _DUP)
-    rule = NoDuplicateString.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "dup.py", _DUP)
-    # main() uses default roots () → matches all .py via extension; scope to repo.
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-duplicate-string-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

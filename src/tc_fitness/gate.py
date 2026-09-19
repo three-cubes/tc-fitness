@@ -46,12 +46,10 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 
-from tc_fitness.baseline import baseline_free_execution
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.gate_config import (
     GateConfig,
@@ -62,7 +60,7 @@ from tc_fitness.gate_config import (
     load_core_check_configs,
     plan_stages,
 )
-from tc_fitness.runner import Colours, dispatches_in_process, main_cli, paths_from_file
+from tc_fitness.runner import Colours, main_cli, paths_from_file
 
 _RED = Colours.RED
 _GREEN = Colours.GREEN
@@ -237,7 +235,6 @@ def _run_catalogue_step(
     repo_root: Path,
     gate_id: str | None,
     *,
-    establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
 ) -> StepResult:
@@ -258,7 +255,7 @@ def _run_catalogue_step(
     Any ``core:<module>`` entry in the catalogue receives its
     ``[tool.tc_fitness.core_checks.<module>]`` config block (read from the SAME
     repo config the gate loaded) so the CORE check scans the consumer's
-    configured tree. ``establish_baseline`` runs those entries in adoption mode.
+    configured tree.
     """
     # `kind == "catalogue"` guarantees `catalogue` is set (loader invariant).
     catalogue_ref = step.catalogue or ""
@@ -266,9 +263,6 @@ def _run_catalogue_step(
     print(f"{_YELLOW}run [{step.id}]{_RESET} {label}")
 
     repo_root_for_step = repo_root
-    if step.baseline_free and establish_baseline:
-        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance cannot establish baselines")
-        return StepResult(step.id, "fail")
     checks_dir = (repo_root / step.checks_dir).resolve() if step.checks_dir is not None else None
 
     # Make the catalogue module importable from the repo root (the consumer's
@@ -278,8 +272,7 @@ def _run_catalogue_step(
     if added:
         sys.path.insert(0, repo_root_str)
     try:
-        with baseline_free_execution() if step.baseline_free else nullcontext():
-            rules = _resolve_catalogue(catalogue_ref)
+        rules = _resolve_catalogue(catalogue_ref)
     except (ImportError, AttributeError, ValueError) as exc:
         print(f"{_RED}FAIL [{step.id}]{_RESET} could not load catalogue {catalogue_ref!r}: {exc}")
         print(f'   fix: confirm the `catalogue = "module:attr"` ref resolves from {repo_root}')
@@ -295,23 +288,17 @@ def _run_catalogue_step(
         argv = ["--staged"]
     else:
         argv = ["--all"]
-    if establish_baseline:
-        argv.append("--establish-baseline")
     core_check_configs = load_core_check_configs(repo_root)
-    if step.baseline_free and any(not dispatches_in_process(rule) for rule in rules):
-        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance requires in-process checks")
-        return StepResult(step.id, "fail")
-    with baseline_free_execution() if step.baseline_free else nullcontext():
-        rc = main_cli(
-            rules,
-            argv,
-            repo_root=repo_root_for_step,
-            checks_dir=checks_dir,
-            dispatch=step.dispatch,
-            parallel_subprocess=step.parallel,
-            core_check_configs=core_check_configs,
-            staged_files=changed_files,
-        )
+    rc = main_cli(
+        rules,
+        argv,
+        repo_root=repo_root_for_step,
+        checks_dir=checks_dir,
+        dispatch=step.dispatch,
+        parallel_subprocess=step.parallel,
+        core_check_configs=core_check_configs,
+        staged_files=changed_files,
+    )
     if rc == 0:
         print(f"{_GREEN}PASS [{step.id}]{_RESET} {label}")
         return StepResult(step.id, "pass")
@@ -325,7 +312,6 @@ def _run_step(
     repo_root: Path,
     gate_id: str | None,
     *,
-    establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
     shard: tuple[int, int] | None = None,
@@ -335,7 +321,6 @@ def _run_step(
             step,
             repo_root,
             gate_id,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
         )
@@ -362,7 +347,6 @@ def run_gate(
     *,
     only: list[str] | None = None,
     gate_id: str | None = None,
-    establish_baseline: bool = False,
     staged: bool = False,
     changed_files: list[str] | None = None,
     shard: tuple[int, int] | None = None,
@@ -372,8 +356,6 @@ def run_gate(
 
     ``only`` restricts to the named step ids (in config order); ``gate_id`` is
     threaded into a catalogue step so a single fitness rule can be targeted.
-    ``establish_baseline`` runs the catalogue step's ``core:`` entries in
-    baseline-adoption mode (freeze today's offenders) instead of gating.
 
     ``staged`` selects the ``<60s`` smoke tier: catalogue steps run through the
     runner's sound per-rule ``--staged`` selection, and every step a repo has
@@ -416,7 +398,6 @@ def run_gate(
         repo_root,
         selected,
         gate_id=gate_id,
-        establish_baseline=establish_baseline,
         staged=staged,
         changed_files=changed_files,
         shard=shard,
@@ -440,7 +421,6 @@ def _run_sequential(
     selected: Sequence[StepSpec],
     *,
     gate_id: str | None,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
     shard: tuple[int, int] | None,
@@ -459,7 +439,6 @@ def _run_sequential(
             step,
             repo_root,
             gate_id,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
             shard=shard,
@@ -487,7 +466,6 @@ def _run_scheduled(
     selected: Sequence[StepSpec],
     *,
     gate_id: str | None,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
     shard: tuple[int, int] | None,
@@ -506,7 +484,6 @@ def _run_scheduled(
             repo_root,
             gate_id,
             shard=shard,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
             max_workers=cfg.max_workers,
@@ -537,7 +514,6 @@ def _execute_stage(
     gate_id: str | None,
     *,
     shard: tuple[int, int] | None,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
     max_workers: int,
@@ -555,7 +531,6 @@ def _execute_stage(
                 s,
                 repo_root,
                 gate_id,
-                establish_baseline=establish_baseline,
                 staged=staged,
                 changed_files=changed_files,
                 shard=shard,
@@ -578,7 +553,6 @@ def _execute_stage(
                 s,
                 repo_root,
                 gate_id,
-                establish_baseline=establish_baseline,
                 staged=staged,
                 changed_files=changed_files,
             )
@@ -638,7 +612,6 @@ def _capture_catalogue_step(
     repo_root: Path,
     gate_id: str | None,
     *,
-    establish_baseline: bool,
     staged: bool,
     changed_files: list[str] | None,
 ) -> _StepOutcome:
@@ -650,7 +623,6 @@ def _capture_catalogue_step(
             step,
             repo_root,
             gate_id,
-            establish_baseline=establish_baseline,
             staged=staged,
             changed_files=changed_files,
         )
@@ -726,12 +698,6 @@ def main(argv: list[str] | None = None) -> int:
         help="run only steps whose `tags` include NAME (e.g. smoke/full/nightly); "
         "composes with --only, --staged and --changed-files-from",
     )
-    run_p.add_argument(
-        "--establish-baseline",
-        action="store_true",
-        help="run the catalogue step's core: entries in baseline-adoption mode "
-        "(freeze today's offenders), then exit",
-    )
     args = parser.parse_args(argv)
 
     contract_mode = any(value is not None for value in (args.contract, args.case, args.ledger))
@@ -747,7 +713,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.changed_files_from,
                 args.shard,
                 args.tier,
-                args.establish_baseline,
             )
         ):
             run_p.error("contract arguments cannot be combined with ordinary gate options")
@@ -787,7 +752,6 @@ def main(argv: list[str] | None = None) -> int:
         repo_root,
         only=args.only,
         gate_id=args.gate,
-        establish_baseline=bool(args.establish_baseline),
         staged=bool(args.staged),
         changed_files=changed_files,
         shard=shard,

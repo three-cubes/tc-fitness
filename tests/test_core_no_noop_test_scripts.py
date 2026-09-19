@@ -12,7 +12,6 @@ from _core_check_assertions import assert_no_repo_identity
 from tc_fitness.core_checks.no_noop_test_scripts import (
     NoNoopTestScripts,
     build,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -158,21 +157,6 @@ def test_skip_parts_are_config_driven(tmp_path: Path) -> None:
     _seed_pkg(tmp_path, "agentic/pkg/package.json", "todo")
     rule = NoNoopTestScripts.from_config({"prod_package_prefixes": ["agentic/"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"agentic/pkg/package.json"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed_pkg(tmp_path, "agentic/pkg/package.json", "echo 'no tests yet'")
-    rule = NoNoopTestScripts.from_config({"prod_package_prefixes": ["agentic/"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed_pkg(tmp_path, "package.json", "todo")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-noop-test-scripts-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

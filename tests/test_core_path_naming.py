@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.path_naming import (
-    PathNaming,
     build,
     main,
     name_violates_convention,
@@ -47,23 +46,8 @@ def test_snake_root_init_allowed(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/BadNote.md")
-    rule = PathNaming.from_config({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "docs/BadNote.md")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "path-naming-files.txt").exists()
-
-
 def test_fixed_generated_segments_are_outside_authored_path_scope(tmp_path: Path) -> None:
-    rule = PathNaming.from_config({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
+    rule = build({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
     assert not rule.is_in_scope("docs/node_modules/BadName.md")
     assert rule.is_in_scope("docs/BadName.md")
 
@@ -73,7 +57,7 @@ def test_enumeration_handles_missing_nonfile_cache_and_wrong_extension(tmp_path:
     _seed(tmp_path, "docs/readme.txt")
     _seed(tmp_path, "docs/__pycache__/BadName.md")
     (tmp_path / "docs" / "directory.md").mkdir()
-    rule = PathNaming.from_config({"kebab_roots": ["missing/", "docs/"]}, repo_root=tmp_path)
+    rule = build({"kebab_roots": ["missing/", "docs/"]}, repo_root=tmp_path)
 
     assert {path.relative_to(tmp_path).as_posix() for path in rule.enumerate_files()} == {"docs/good-name.md"}
 

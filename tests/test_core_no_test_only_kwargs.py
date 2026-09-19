@@ -11,7 +11,6 @@ from tc_fitness.core_checks.no_test_only_kwargs import (
     NoTestOnlyKwargs,
     build,
     find_test_only_kwargs_in_file,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -123,21 +122,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/router.py", _SEAM)
     rule = NoTestOnlyKwargs.from_config({"roots": ["scripts"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"scripts/router.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "scripts/router.py", _SEAM)
-    rule = NoTestOnlyKwargs.from_config({"roots": ["scripts"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "router.py", _SEAM)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-test-only-kwargs-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

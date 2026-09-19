@@ -1,7 +1,7 @@
 """three-cubes-fitness — shared architecture-fitness primitives.
 
 The merged core consumed by Three Cubes repos (kairix, tc-agent-zone). It carries
-the baseline-gating helpers and agent-actionable emit/YAML helpers (:mod:`lib`),
+the hard-gating helpers and agent-actionable emit/YAML helpers (:mod:`lib`),
 the unified ratchet grammar (:mod:`ratchet`), and — from v0.3.0 — the
 catalogue-driven, repo-agnostic RUNNER (:mod:`runner`, :mod:`context`,
 :mod:`staged`, :mod:`catalogue`) that both repos point their ``run_checks.py`` at.
@@ -21,16 +21,6 @@ from __future__ import annotations
 
 from importlib import metadata as _metadata
 
-from tc_fitness.baseline import (
-    BASELINE_DIRNAME,
-    BASELINE_SUFFIX,
-    baseline_dir,
-    baseline_path,
-    establish_baseline,
-    load_baseline,
-    parse_baseline_text,
-    render_baseline,
-)
 from tc_fitness.catalogue import (
     PROPOSED_STATUS,
     RuleEntry,
@@ -64,13 +54,8 @@ from tc_fitness.gate_config import (
 )
 from tc_fitness.keystone import (
     CatalogueConsistencyReport,
-    ShrinkResult,
     added_since_tag,
-    baseline_shrink_only,
     catalogue_check_consistency,
-    find_net_new_violations,
-    load_all_baselines,
-    net_new_violations_forbidden,
     reconcile_catalogue,
     resolve_previous_tag,
     staged_added_files,
@@ -232,15 +217,6 @@ __all__ = [
     # canonical Semgrep policy materialisation
     "OWASP_INSECURE_FILE_PERMISSIONS_RULE_ID",
     "materialize_owasp_permissions_policy",
-    # v0.6.0 — per-file baseline I/O
-    "BASELINE_SUFFIX",
-    "BASELINE_DIRNAME",
-    "baseline_dir",
-    "baseline_path",
-    "parse_baseline_text",
-    "load_baseline",
-    "render_baseline",
-    "establish_baseline",
     # v0.6.0 — FitnessRule ABC + CORE-check convention
     "FitnessRule",
     "run_core_check",
@@ -249,14 +225,9 @@ __all__ = [
     "discover_core_check_modules",
     "core_check_consistency",
     # v0.6.0 — keystone drift-enders
-    "load_all_baselines",
-    "find_net_new_violations",
-    "net_new_violations_forbidden",
     "staged_added_files",
     "added_since_tag",
-    "ShrinkResult",
     "resolve_previous_tag",
-    "baseline_shrink_only",
     "CatalogueConsistencyReport",
     "reconcile_catalogue",
     "catalogue_check_consistency",

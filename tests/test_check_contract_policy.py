@@ -186,18 +186,6 @@ def test_validator_rejects_a_check_without_reviewed_configuration(tmp_path: Path
         )
 
 
-def test_disabling_adoption_flags_keeps_the_real_ci_violation(tmp_path: Path) -> None:
-    manifest = contract_for(
-        tmp_path, "core:ci_consumes_shared_gate", {"warn_only": False, "baseline_ok": False}
-    )
-    workflow = tmp_path / "compliant" / ".github" / "workflows" / "ci.yml"
-    workflow.parent.mkdir(parents=True)
-    workflow.write_text("jobs:\n  quality:\n    steps:\n      - run: pytest\n")
-    ledger = tmp_path / "ledger.json"
-    assert invoke(manifest, "compliant", ledger, timeout=10).returncode == 1
-    assert json.loads(ledger.read_text())["actual"]["status"] == "fail"
-
-
 def test_test_filename_override_cannot_exempt_real_production_suppression(tmp_path: Path) -> None:
     manifest = contract_for(
         tmp_path, "core:no_production_suppressions", {"roots": ["src"], "test_file_regex": ".*"}
@@ -292,31 +280,11 @@ def test_real_complexity_threshold_remains_a_detector_policy_input(tmp_path: Pat
         validate_contract_ledger(manifest, case, ledger, process_exit=expected_exit, started_after=started)
 
 
-@pytest.mark.parametrize("option", ["warn_only", "baseline_ok"])
-def test_ordinary_consumer_keeps_explicit_adoption_behaviour(tmp_path: Path, option: str) -> None:
-    workflow = tmp_path / ".github" / "workflows" / "ci.yml"
-    workflow.parent.mkdir(parents=True)
-    workflow.write_text("jobs:\n  quality:\n    steps:\n      - run: pytest\n")
-    (tmp_path / "consumer_checks.py").write_text(
-        "from tc_fitness.catalogue import RuleEntry\n"
-        "ENTRIES = (RuleEntry(id='ci', gate='ci', check='core:ci_consumes_shared_gate'),)\n"
-    )
-    config = tmp_path / ".tc-fitness.toml"
-    header = (
-        "[[steps]]\nid = 'ci'\ncatalogue = 'consumer_checks:ENTRIES'\n[core_checks.ci_consumes_shared_gate]\n"
-    )
-    command = [str(Path(sys.executable).with_name("tc-fitness")), "run", "--repo-root", str(tmp_path)]
-    config.write_text(header + f"{option} = false\n")
-    assert subprocess.run(command, capture_output=True, check=False, timeout=10).returncode == 1
-    config.write_text(header + f"{option} = true\n")
-    assert subprocess.run(command, capture_output=True, check=False, timeout=10).returncode == 0
-
-
 def test_normal_scope_and_license_policy_still_detect_the_violation(tmp_path: Path) -> None:
     manifest = contract_for(
         tmp_path,
         "core:license_present",
-        {"roots": ["src"], "markers": ["SPDX-License-Identifier:"], "header_lines": 5, "exempt_files": []},
+        {"roots": ["src"], "markers": ["SPDX-License-Identifier:"], "header_lines": 5},
     )
     for case, code in (("compliant", 0), ("violation", 1)):
         ledger = tmp_path / f"{case}.json"

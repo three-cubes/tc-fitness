@@ -11,7 +11,6 @@ from tc_fitness.core_checks.no_production_suppressions import (
     NoProductionSuppressions,
     build,
     file_contains_suppression,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -78,21 +77,6 @@ def test_suppression_patterns_config_driven(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
     assert rule.file_has_violation(p) is True
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/app.py", _SUPPRESSED)
-    rule = NoProductionSuppressions.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "app.py", _SUPPRESSED)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-production-suppressions-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

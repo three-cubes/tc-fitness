@@ -8,10 +8,8 @@ import pytest
 
 from tc_fitness.core_checks.license_present import (
     DEFAULT_MARKERS,
-    LicensePresent,
     build,
     file_missing_license,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -68,18 +66,3 @@ def test_configured_header_window_controls_visibility(tmp_path: Path) -> None:
     _seed(tmp_path, "src/late.py", "# no license here\n# Copyright 2026\n")
 
     assert {str(path) for path in rule.collect_violations()} == {"src/late.py"}
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/m.py", "x = 1\n")
-    rule = LicensePresent.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "m.py", "x = 1\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "license-present-files.txt").exists()

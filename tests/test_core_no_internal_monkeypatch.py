@@ -11,7 +11,6 @@ from tc_fitness.core_checks.no_internal_monkeypatch import (
     NoInternalMonkeypatch,
     build,
     file_has_internal_patch,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -228,23 +227,6 @@ def test_packages_are_config_driven(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_x.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "tests/test_x.py", _PATCH_DECORATOR)
-    rule = NoInternalMonkeypatch.from_config(
-        {"roots": ["tests"], "internal_packages": ["myapp"]}, repo_root=tmp_path
-    )
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "test_x.py", _PATCH_DECORATOR)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-internal-monkeypatch-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

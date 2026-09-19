@@ -158,21 +158,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/c.py"}
 
 
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/c.py", _COMPLEX)
-    rule = CognitiveComplexity.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "c.py", _COMPLEX)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "cognitive-complexity-files.txt").exists()
-
-
 def test_main_accepts_repo_root_and_scans_it(tmp_path: Path) -> None:
     _seed(tmp_path, "src/complex.py", _COMPLEX)
     assert main(["--repo-root", str(tmp_path)]) == 0

@@ -13,7 +13,6 @@ import pytest
 from tc_fitness.core_checks.schema_conformance import (
     build,
     file_missing_required_keys,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -70,21 +69,6 @@ def test_rule_scopes_roots_and_keys(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/other.yaml", "palette: blue\n")
     rule = build({"roots": ["tokens"], "required_keys": ["palette", "typeScale"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"tokens/acme.yaml"}
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "tokens/acme.yaml", "palette: blue\n")
-    rule = build({"roots": ["tokens"], "required_keys": ["palette", "typeScale"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "tokens/acme.yaml", "palette: blue\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "schema-conformance-files.txt").exists()
 
 
 def test_python_module_entrypoint_runs_the_public_gate(tmp_path: Path) -> None:

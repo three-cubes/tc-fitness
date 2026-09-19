@@ -24,7 +24,6 @@ from tc_fitness.core_checks.deterministic_tests import (
     SuiteRunError,
     build,
     collect_node_ids,
-    main,
     run_suite,
     shuffled_order,
 )
@@ -264,10 +263,3 @@ def test_real_process_without_pytest_outcomes_is_rejected(tmp_path: Path) -> Non
             use_randomly=False,
             timeout=5,
         )
-
-
-def test_main_establish_baseline_is_noop_zero(tmp_path: Path, capsys: object) -> None:
-    # A determinism gate has no per-file baseline; establish mode is a harmless
-    # zero-exit no-op (nothing to grandfather), keeping the adoption contract.
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0

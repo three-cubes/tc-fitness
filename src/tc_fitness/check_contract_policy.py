@@ -13,7 +13,7 @@ from collections.abc import Mapping
 
 from tc_fitness.check_contracts import CheckContractError
 
-_FILE_OPTIONS = frozenset({"roots", "extensions", "exempt_files", "name"})
+_FILE_OPTIONS = frozenset({"roots", "extensions", "name"})
 _COVERAGE_EVIDENCE_OPTIONS = frozenset(
     {
         "exact_base_commit",
@@ -59,9 +59,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
         {"allowed_emails", "allowed_name_patterns", "base_ref", "head_ref", "cutover_ref"}
     ),
     "checkov_iac_security": frozenset({"scan_dir", "framework", "timeout"}),
-    "ci_consumes_shared_gate": frozenset(
-        {"workflows_dir", "reusable_pattern", "engine_pattern", "warn_only", "baseline_ok"}
-    ),
+    "ci_consumes_shared_gate": frozenset({"workflows_dir", "reusable_pattern", "engine_pattern"}),
     "ci_fanin_parity": frozenset({"workflow", "aggregator_name", "informational_marker"}),
     "ci_silencers_have_rationale": frozenset(
         {"rationale_tokens", "silencer_patterns", "window", "workflows_dir", "scan_files"}
@@ -106,7 +104,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "no_test_only_kwargs": frozenset({"seam_suffixes", "exempt_keys"}),
     "osv_scanner_sca": frozenset({"scanner_version", "lockfiles", "required", "timeout"}),
     "path_naming": frozenset({"kebab_roots", "snake_roots", "allowed_names", "exempt_segments"}),
-    "pattern_chokepoint": frozenset({"patterns"}),
+    "pattern_chokepoint": frozenset({"patterns", "chokepoint_files"}),
     "posix_path_serialisation": frozenset({"excluded_segments"}),
     "readme_resolver_coverage": frozenset({"resolver_file", "exempt_dirs"}),
     "runtime_evidence_contract": _RUNTIME_OPTIONS,
@@ -173,8 +171,6 @@ def validate_contract_configuration(check: str, config: Mapping[str, object]) ->
     for key, value in config.items():
         if key in _EXCLUSIONS and value != []:
             raise CheckContractError(f"contract configuration {key} must be an empty exclusion list")
-        if key in {"warn_only", "baseline_ok"} and value is not False:
-            raise CheckContractError(f"contract configuration {key} must be false")
         if key in {"cutover_ref", "informational_marker", "test_file_regex"}:
             raise CheckContractError(f"contract configuration cannot use adoption option {key}")
     if name == "mutation_survival_ratchet" and config.get("allow_missing_current") is not False:

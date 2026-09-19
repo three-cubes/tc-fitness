@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.ci_fanin_parity import (
-    CiFaninParity,
     build,
     main,
     workflow_fanin_is_dishonest,
@@ -324,21 +323,6 @@ def test_invalid_configured_workflow_fails_through_rule_and_cli(
     }
     assert main(["--repo-root", str(tmp_path)]) == 1
     assert "ci-fanin-parity" in capsys.readouterr().out
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, ".github/workflows/ci.yml", _DANGLING)
-    rule = CiFaninParity.from_config({}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, ".github/workflows/ci.yml", _DANGLING)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "ci-fanin-parity-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

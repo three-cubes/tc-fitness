@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from _core_check_assertions import assert_no_repo_identity
 
-from tc_fitness.core_checks.contract_change_has_test import build, main
+from tc_fitness.core_checks.contract_change_has_test import build
 
 pytestmark = pytest.mark.integration
 
@@ -241,36 +241,6 @@ def test_unsafe_base_ref_skips_without_touching_git(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Hard floor: a contract change without a test is non-grandfatherable.
 # --------------------------------------------------------------------------- #
-
-
-def test_run_fails_hard_and_baseline_grandfathers_nothing(tmp_path: Path) -> None:
-    git = _fake_git(changed=["src/tc_fitness/fitness_rule.py"])
-    rule = build(_cfg(), repo_root=tmp_path, git_runner=git)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    # Establishing does NOT grandfather the offender: the baseline is frozen
-    # EMPTY, so the gate stays hard and the run still FAILs.
-    assert rule.run() == 1
-    baseline = tmp_path / ".architecture" / "baseline" / "contract-change-has-test-files.txt"
-    entries = [
-        ln
-        for ln in baseline.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    assert entries == []
-
-
-def test_main_establish_baseline_writes_empty_baseline(tmp_path: Path) -> None:
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    baseline = tmp_path / ".architecture" / "baseline" / "contract-change-has-test-files.txt"
-    assert baseline.exists()
-    entries = [
-        ln
-        for ln in baseline.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    assert entries == []  # a missing test for a contract change is non-grandfatherable
 
 
 # --------------------------------------------------------------------------- #

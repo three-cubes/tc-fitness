@@ -7,11 +7,10 @@ block explaining WHY the rule is ignored — not just THAT it is. A bare or
 TODO-only comment block does not count.
 
 Ported from kairix ``scripts/checks/check_sonar_ignore_rationale.py`` (F14) and
-re-expressed as a configurable, repo-agnostic, baseline-gated rule. The Sonar
+re-expressed as a configurable, repo-agnostic rule. The Sonar
 properties filename and the rule-key pattern are the rule's own shape
 (``DEFAULT_SONAR_FILE`` / ``DEFAULT_RULE_KEY_PATTERN``), overridable via config.
-The file is the unit baselined, so this rule slots into the standard
-``--establish-baseline`` adoption flow like every other CORE check.
+Every unjustified ignore directive is a hard finding.
 """
 
 from __future__ import annotations
@@ -146,7 +145,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> SonarI
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(SonarIgnoreRationale, argv)
 
 

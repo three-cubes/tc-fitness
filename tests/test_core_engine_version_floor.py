@@ -224,25 +224,10 @@ def test_declared_pin_takes_priority_over_installed(tmp_path: Path) -> None:
     assert rule.resolve_version() == "v0.6.1"
 
 
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _project_with_dep(tmp_path, _git_dep("v0.6.1"))
-    rule = build({"floor": "v0.7.0"}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
 def test_main_no_config_is_noop(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.1.0"))
     # main() injects no config block, so with no floor it is a no-op pass.
     assert main(["--repo-root", str(tmp_path)]) == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _project_with_dep(tmp_path, _git_dep("v0.6.1"))
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "engine-version-floor-files.txt").exists()
 
 
 def test_build_and_main_are_exposed(tmp_path: Path) -> None:
