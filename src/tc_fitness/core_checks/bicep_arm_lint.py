@@ -127,8 +127,6 @@ def _order_violations_for_resource(
     for j in range(1, len(seen)):
         line_no, prop = seen[j]
         _prev_line, prev_prop = seen[j - 1]
-        if prop not in PROPERTY_RANK or prev_prop not in PROPERTY_RANK:
-            continue
         if PROPERTY_RANK[prop] >= PROPERTY_RANK[prev_prop]:
             continue
         out.append(

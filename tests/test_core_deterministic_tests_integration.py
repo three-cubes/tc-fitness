@@ -23,7 +23,9 @@ from tc_fitness.core_checks.deterministic_tests import (
     RunSpec,
     SuiteRunError,
     build,
+    collect_node_ids,
     main,
+    run_suite,
     shuffled_order,
 )
 
@@ -201,6 +203,67 @@ def test_stable_suite_passes(tmp_path: Path, capsys: object) -> None:
     out = capsys.readouterr().out  # type: ignore[attr-defined]
     assert rc == 0, "a deterministic suite must PASS"
     assert "ok [deterministic-tests]" in out
+
+
+def test_existing_empty_root_is_reported_as_no_collected_tests(tmp_path: Path, capsys: object) -> None:
+    _seed_tests(tmp_path)
+    rule = build(
+        {"roots": ["tests"], "test_command": [sys.executable, "-m", "pytest"]},
+        repo_root=tmp_path,
+    )
+
+    assert rule.run() == 0
+    assert "no tests collected" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+
+def test_unavailable_configured_runner_is_a_dependency_error(tmp_path: Path, capsys: object) -> None:
+    _seed_tests(tmp_path)
+    rule = build(
+        {"roots": ["tests"], "test_command": [str(tmp_path / "missing-test-runner")]},
+        repo_root=tmp_path,
+    )
+
+    assert rule.run() == 2
+    assert "configured test command unavailable" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+
+def test_real_collection_timeout_is_a_suite_run_error(tmp_path: Path) -> None:
+    with pytest.raises(SuiteRunError, match="collection timed out after"):
+        collect_node_ids(
+            [sys.executable, "-c", "import time; time.sleep(1)"],
+            ["tests"],
+            repo_root=tmp_path,
+            seed=11,
+            timeout=0.05,
+        )
+
+
+def test_real_suite_timeout_is_a_suite_run_error(tmp_path: Path) -> None:
+    with pytest.raises(SuiteRunError, match="timed out after"):
+        run_suite(
+            RunSpec("timeout-probe", None),
+            command=[sys.executable, "-c", "import time; time.sleep(1)"],
+            test_paths=["tests"],
+            node_ids=[],
+            repo_root=tmp_path,
+            seed=13,
+            use_randomly=False,
+            timeout=0.05,
+        )
+
+
+def test_real_process_without_pytest_outcomes_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SuiteRunError, match="produced no per-test results"):
+        run_suite(
+            RunSpec("no-results", None),
+            command=[sys.executable, "-c", "print('process started')"],
+            test_paths=["tests"],
+            node_ids=[],
+            repo_root=tmp_path,
+            seed=17,
+            use_randomly=False,
+            timeout=5,
+        )
 
 
 def test_main_establish_baseline_is_noop_zero(tmp_path: Path, capsys: object) -> None:

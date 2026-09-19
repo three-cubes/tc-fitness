@@ -82,6 +82,48 @@ def test_empty_allowlist_is_noop(tmp_path: Path) -> None:
     assert rule.run() == 0  # no allowlist configured → no-op pass
 
 
+def test_unresolvable_git_range_is_a_clean_noop(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    _commit(repo, "first")
+    rule = build({**ALLOW, "base_ref": "missing-base", "head_ref": "HEAD"}, repo_root=repo)
+
+    assert rule.collect_violations() == set()
+
+
+def test_empty_resolved_range_has_no_commits_to_check(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    head = _commit(repo, "head")
+    rule = build({**ALLOW, "base_ref": head, "head_ref": head}, repo_root=repo)
+
+    assert rule.collect_violations() == set()
+
+
+def test_commit_without_name_patterns_accepts_any_allowlisted_name(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    base = _commit(repo, "base", ae=HUMAN)
+    _commit(repo, "work", an="Unrestricted Name", ae=HUMAN)
+    rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
+
+    assert rule.collect_violations() == set()
+
+
+def test_range_check_exposes_no_file_surface(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    rule = build(ALLOW, repo_root=repo)
+
+    assert rule.enumerate_files() == []
+    assert rule.file_has_violation(tmp_path / "anything") is False
+
+
+def test_malformed_git_identity_record_fails_closed(tmp_path: Path) -> None:
+    repo = _init(tmp_path)
+    base = _commit(repo, "base", ae=HUMAN)
+    _commit(repo, "control-character-name", an="Dan\x1fForged", ae=HUMAN)
+    rule = build({**ALLOW, "base_ref": base, "head_ref": "HEAD"}, repo_root=repo)
+
+    assert rule.collect_violations()
+
+
 def test_allowed_identities_pass(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     base = _commit(repo, "base", ae=BOT, an="three-cubes-agent[bot]")

@@ -74,6 +74,105 @@ def test_resolve_declared_version_absent_is_none(tmp_path: Path) -> None:
     assert resolve_declared_version(manifest, PKG) is None
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "project = 1\n",
+        '[project]\nname = "consumer"\ndependencies = [1]\n',
+        '[project]\nname = "consumer"\noptional-dependencies = ["invalid-shape"]\n',
+        '[project]\nname = "consumer"\n'
+        'dependencies = ["other-package @ https://example.invalid/repo@v9.0"]\n',
+        '[project]\nname = "consumer"\n'
+        'dependencies = ["three-cubes-fitness @ https://example.invalid/repo"]\n',
+        '[project]\nname = "consumer"\ndependencies = ["other-package==9.0"]\n',
+        '[project]\nname = "consumer"\n'
+        'dependencies = ["three-cubes-fitness"]\n'
+        '[tool.uv]\nsources = ["invalid-shape"]\n',
+        '[project]\nname = "consumer"\n'
+        'dependencies = ["three-cubes-fitness"]\n'
+        '[tool.uv.sources]\n"other-package" = { tag = "v9.0" }\n',
+        '[project]\nname = "consumer"\n'
+        'dependencies = ["three-cubes-fitness"]\n'
+        '[tool.uv.sources]\n"three-cubes-fitness" = { tag = 9 }\n',
+        '[dependency-groups]\ntest = [{ include-group = "dev" }, 7]\n'
+        'other = ["other==2"]\ninvalid = { include-group = "dev" }\n',
+        "dependency-groups = 1\n",
+    ],
+)
+def test_malformed_or_unrelated_dependency_shapes_do_not_resolve_a_pin(tmp_path: Path, body: str) -> None:
+    manifest = _manifest(tmp_path, body)
+
+    assert resolve_declared_version(manifest, PKG) is None
+
+
+def test_dependency_groups_can_declare_the_pin(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, '[dependency-groups]\ntest = ["three-cubes-fitness==0.8.0"]\n')
+
+    assert resolve_declared_version(manifest, PKG) == "0.8.0"
+
+
+def test_multiple_optional_groups_and_dependencies_are_scanned(tmp_path: Path) -> None:
+    body = (
+        '[project]\nname = "consumer"\n'
+        'dependencies = ["unrelated==1"]\n'
+        "[project.optional-dependencies]\n"
+        'docs = [1, "unrelated==2"]\n'
+        'dev = ["unrelated==3", "three-cubes-fitness==0.9.0"]\n'
+    )
+
+    assert resolve_declared_version(_manifest(tmp_path, body), PKG) == "0.9.0"
+
+
+def test_compatible_specifier_reports_its_lower_bound(tmp_path: Path) -> None:
+    manifest = _project_with_dep(tmp_path, f"{PKG}~=0.7")
+
+    assert resolve_declared_version(manifest, PKG) == "0.7"
+
+
+@pytest.mark.parametrize("body", ["tool = 1\n", "tool = { uv = 1 }\n"])
+def test_non_mapping_uv_source_shapes_have_no_pin(tmp_path: Path, body: str) -> None:
+    manifest = _manifest(tmp_path, body)
+
+    assert resolve_declared_version(manifest, PKG) is None
+
+
+def test_uv_source_searches_past_other_sources(tmp_path: Path) -> None:
+    body = (
+        '[project]\nname = "consumer"\ndependencies = ["three-cubes-fitness"]\n'
+        "[tool.uv.sources]\n"
+        'unrelated = { tag = "v1.0.0" }\n'
+        '"three-cubes-fitness" = { tag = "v0.8.0" }\n'
+    )
+
+    assert resolve_declared_version(_manifest(tmp_path, body), PKG) == "v0.8.0"
+
+
+@pytest.mark.parametrize("manifest_text", [None, "[project\n", "\xff"])
+def test_missing_malformed_or_non_utf8_manifest_is_unresolved(
+    tmp_path: Path, manifest_text: str | None
+) -> None:
+    path = tmp_path / "pyproject.toml"
+    if manifest_text is not None:
+        path.write_bytes(manifest_text.encode("utf-8", errors="surrogateescape"))
+
+    assert resolve_declared_version(path, PKG) is None
+
+
+def test_version_floor_no_file_surface(tmp_path: Path) -> None:
+    rule = build({"floor": "v0.1.0"}, repo_root=tmp_path)
+
+    assert rule.enumerate_files() == []
+    assert rule.file_has_violation(tmp_path / "pyproject.toml") is False
+
+
+@pytest.mark.parametrize("floor, pin", [("release", "v0.1.0"), ("v0.8.0", "preview")])
+def test_unparseable_floor_or_pin_is_a_noop(tmp_path: Path, floor: str, pin: str) -> None:
+    _project_with_dep(tmp_path, _git_dep(pin))
+    rule = build({"floor": floor}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == set()
+
+
 def test_below_floor_fails(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.6.1"))
     rule = build({"floor": "v0.7.0"}, repo_root=tmp_path)

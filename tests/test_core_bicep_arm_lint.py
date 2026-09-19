@@ -75,6 +75,26 @@ def test_detection_core_clean(tmp_path: Path) -> None:
     assert bicep_findings(p) == []
 
 
+def test_unknown_nested_fields_and_text_outside_resources_are_ignored(tmp_path: Path) -> None:
+    source = """// Resource properties are checked only inside resource blocks.
+var tags = {}
+resource store 'Microsoft.Storage/storageAccounts@2021-01-01' = {
+  scope: resourceGroup()
+  customMetadata: {
+    tags: {
+      env: 'nested'
+    }
+  }
+  tags: {
+    env: 'prod'
+  }
+}
+"""
+    path = _seed(tmp_path, "resource.bicep", source)
+
+    assert bicep_findings(path) == []
+
+
 def test_non_bicep_and_unreadable_are_ignored(tmp_path: Path) -> None:
     # A .bicep that is not valid UTF-8 yields no findings (another concern owns
     # unreadable files); a missing file likewise.
