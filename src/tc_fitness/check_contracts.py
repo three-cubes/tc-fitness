@@ -37,12 +37,21 @@ class OutcomeExpectation:
 
 
 @dataclass(frozen=True)
+class CaseEnvironment:
+    """Portable process-search-path policy, never arbitrary environment values."""
+
+    schema: str = "tc.fitness/check-environment/v1"
+    path: str = "inherit"
+
+
+@dataclass(frozen=True)
 class ContractCase:
     """A fixture and its expected terminal outcome."""
 
     id: str
     fixture: str
     expected: OutcomeExpectation
+    environment: CaseEnvironment = CaseEnvironment()
 
 
 @dataclass(frozen=True)
@@ -100,10 +109,25 @@ def _parse_expected(value: object, location: str) -> OutcomeExpectation:
 def _parse_case(value: object, index: int) -> ContractCase:
     location = f"cases[{index}]"
     raw = _mapping(value, location)
+    case_id = _required_string(raw.get("id"), f"{location}.id")
+    environment = CaseEnvironment()
+    if "environment" in raw:
+        declaration = _mapping(raw["environment"], f"{location}.environment")
+        if (
+            set(declaration) != {"schema", "path"}
+            or declaration.get("schema") != environment.schema
+            or not isinstance(declaration.get("path"), str)
+            or declaration.get("path") not in {"inherit", "empty"}
+        ):
+            raise CheckContractError(f"{location}.environment requires a known schema and inherit/empty path")
+        environment = CaseEnvironment(path=str(declaration["path"]))
+    if environment.path == "empty" and case_id != "unavailable":
+        raise CheckContractError("only an unavailable case may request an empty environment path")
     return ContractCase(
-        id=_required_string(raw.get("id"), f"{location}.id"),
+        id=case_id,
         fixture=_required_string(raw.get("fixture"), f"{location}.fixture"),
         expected=_parse_expected(raw.get("expected"), f"{location}.expected"),
+        environment=environment,
     )
 
 
@@ -149,11 +173,11 @@ def _validate_case_set(cases: tuple[ContractCase, ...], dependencies: tuple[str,
         raise CheckContractError("unavailable case must expect at least one stable finding")
 
 
-def load_check_contract(path: Path) -> CheckContract:
+def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckContract:
     """Load and validate one check-contract manifest."""
-    if not path.is_file():
+    if source is None and not path.is_file():
         raise CheckContractError(f"contract manifest does not exist: {path}")
-    value, error = load_yaml(path, reject_duplicate_keys=True)
+    value, error = load_yaml(path, reject_duplicate_keys=True, source=source)
     if error is not None:
         raise CheckContractError(f"{path}: {error}")
     raw = _mapping(value, str(path))
@@ -211,6 +235,7 @@ def validate_contract_registry(
 
 
 __all__ = [
+    "CaseEnvironment",
     "CheckContract",
     "CheckContractError",
     "ContractCase",

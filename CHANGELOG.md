@@ -25,6 +25,13 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ### Changed
 
+- **Contract assurance rejects mutable or suppressed proof** — snapshot inputs
+  and candidate source before dispatch, reject execution-time mutations and
+  baseline influence, and exercise unavailable cases through real checks using
+  a versioned per-case environment declaration. Checkov now returns an error
+  when its required executable is absent and cannot create an empty adoption
+  baseline without running the scanner.
+
 - **Commit identity guidance now separates metadata from authentication** —
   `canonical_commit_identity` validates Git author and committer metadata; it
   does not prove who authenticated a GitHub write. Remediation and contributor

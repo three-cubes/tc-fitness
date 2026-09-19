@@ -32,11 +32,12 @@ def make_contract(root: Path, *, dependency: bool = False) -> Path:
     ]
     dependencies = []
     if dependency:
-        dependencies = ["tc-fitness-intentionally-unavailable-contract-tool"]
+        dependencies = ["python3"]
         cases.append(
             {
                 "id": "unavailable",
                 "fixture": "unavailable",
+                "environment": {"schema": "tc.fitness/check-environment/v1", "path": "empty"},
                 "expected": {
                     "status": "error",
                     "exit": "nonzero",
@@ -54,14 +55,23 @@ def make_contract(root: Path, *, dependency: bool = False) -> Path:
         folder = root / case["fixture"] / "src"
         folder.mkdir(parents=True)
         text = "value = 1\n" if case["id"] == "violation" else "# SPDX-License-Identifier: MIT\nvalue = 1\n"
+        if dependency:
+            text = "import argparse\ndef main():\n    argparse.ArgumentParser()\n"
+            text += "raise SystemExit(1)\n" if case["id"] == "violation" else "main()\n"
         (folder / "example.py").write_text(text)
+    if dependency:
+        cases[1]["expected"]["findings"] = [
+            {"rule": "script-help-smoke", "path": "src/example.py", "message_contains": "--help"}
+        ]
     manifest = root / "contract.yaml"
     manifest.write_text(
         yaml.safe_dump(
             {
                 "schema": "tc.fitness/check-contract/v1",
-                "check": "core:license_present",
-                "config": {"roots": ["src"]},
+                "check": "core:script_help_smoke" if dependency else "core:license_present",
+                "config": {"roots": ["src"], "python_executable": "python3"}
+                if dependency
+                else {"roots": ["src"]},
                 "cases": cases,
                 "dependencies": dependencies,
             }
@@ -104,7 +114,9 @@ def test_public_command_emits_real_case_evidence(
     evidence = json.loads(ledger.read_text())
     assert result.returncode == exit_code
     assert evidence["schema"] == "tc.fitness/check-ledger/v1"
-    assert evidence["check"] == "core:license_present"
+    assert evidence["check"] == (
+        "core:script_help_smoke" if case == "unavailable" else "core:license_present"
+    )
     assert evidence["case_id"] == case
     assert evidence["actual"]["status"] == status
     assert evidence["actual"]["exit_code"] == exit_code
@@ -415,6 +427,7 @@ def test_embedded_public_entrypoint_retains_evidence_and_restores_outer_capture(
         data["config"]["header_lines"] = "invalid"
         manifest.write_text(yaml.safe_dump(data))
     ledger = tmp_path / "ledger.json"
+    original_path = os.environ.get("PATH")
     with capture_check_evidence() as outer:
         exit_code = main(
             [
@@ -436,6 +449,7 @@ def test_embedded_public_entrypoint_retains_evidence_and_restores_outer_capture(
     assert evidence["actual"]["exit_code"] == exit_code
     assert [finding.rule for finding in outer.findings] == ["outer"]
     assert outer.results == []
+    assert os.environ.get("PATH") == original_path
 
 
 @pytest.mark.parametrize(

@@ -379,7 +379,9 @@ def emit_pass(message: str, stream: Any = None) -> None:
     print(message, file=out)
 
 
-def load_yaml(path: Path, *, reject_duplicate_keys: bool = False) -> tuple[Any, str | None]:
+def load_yaml(
+    path: Path, *, reject_duplicate_keys: bool = False, source: bytes | None = None
+) -> tuple[Any, str | None]:
     """Load YAML returning ``(data, error)``.
 
     Returns ``({} or scalar, None)`` on success or ``(None, error-str)`` when
@@ -394,7 +396,7 @@ def load_yaml(path: Path, *, reject_duplicate_keys: bool = False) -> tuple[Any, 
         return None, "PyYAML missing"
 
     try:
-        text = path.read_text()
+        text = path.read_text() if source is None else source.decode("utf-8")
         if not reject_duplicate_keys:
             return yaml.safe_load(text) or {}, None
 
@@ -432,7 +434,7 @@ def load_yaml(path: Path, *, reject_duplicate_keys: bool = False) -> tuple[Any, 
             return loader.get_single_data() or {}, None
         finally:
             loader.dispose()
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, UnicodeError) as e:
         return None, f"invalid YAML — {e}"
 
 

@@ -1,8 +1,8 @@
 """Shared strict loading and protocol primitives for runtime contract checks.
 
 The public helpers in this module deliberately use only the standard library
-for JSON. YAML remains an optional input format and is imported only when a
-consumer selects a ``.yaml`` or ``.yml`` registry.
+for JSON. YAML is parsed using the required PyYAML runtime dependency, imported
+when a consumer selects a ``.yaml`` or ``.yml`` registry.
 """
 
 from __future__ import annotations

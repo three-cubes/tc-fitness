@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -15,7 +19,7 @@ from uuid import UUID, uuid4
 
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.check_contracts import CheckContractError, FindingExpectation, load_check_contract
-from tc_fitness.check_evidence import capture_check_evidence, report_finding, report_result
+from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks import CORE_CHECKS
 from tc_fitness.runner import run
 from tc_fitness.runner import run_contract_case as run_contract_case
@@ -52,7 +56,9 @@ def candidate_identity() -> dict[str, str]:
 
 def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
     """Run one case and retain its terminal evidence; return its actual exit."""
-    contract = load_check_contract(manifest)
+    manifest_bytes = manifest.read_bytes()
+    contract = load_check_contract(manifest, source=manifest_bytes)
+    _portable_configuration(contract.config)
     if contract.check not in CORE_CHECKS:
         raise CheckContractError(f"unregistered CORE check: {contract.check}")
     case = next((case for case in contract.cases if case.id == case_id), None)
@@ -64,28 +70,28 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
     if ledger.exists():
         raise CheckContractError("ledger already exists; retain it and select a new output for the retry")
     fixture_digest = tree_digest(fixture)
+    candidate = candidate_identity()
     started = datetime.now(UTC).isoformat()
     with TemporaryDirectory(prefix="tc-fitness-contract-") as temporary:
         repo = Path(temporary) / "repo"
         shutil.copytree(fixture, repo)
-        with capture_check_evidence() as evidence:
-            missing = [dependency for dependency in contract.dependencies if shutil.which(dependency) is None]
-            if missing:
-                for dependency in missing:
-                    report_finding(
-                        "dependency-unavailable",
-                        ".",
-                        f"required executable unavailable: {dependency}",
-                        status="error",
-                    )
-                report_result(contract.check, 2)
-            else:
-                entry = RuleEntry(id=contract.check, gate=contract.check, check=contract.check)
-                run(
-                    (entry,),
-                    repo_root=repo,
-                    core_check_configs={contract.check.removeprefix("core:"): contract.config},
-                )
+        if tree_digest(repo) != fixture_digest:
+            raise CheckContractError("fixture changed while copying the execution snapshot")
+        with _case_environment(case.environment.path, Path(temporary)), capture_check_evidence() as evidence:
+            entry = RuleEntry(id=contract.check, gate=contract.check, check=contract.check)
+            run(
+                (entry,),
+                repo_root=repo,
+                core_check_configs={contract.check.removeprefix("core:"): contract.config},
+            )
+        if manifest.read_bytes() != manifest_bytes:
+            raise CheckContractError("manifest changed during execution")
+        if tree_digest(_fixture_path(manifest, case.fixture)) != fixture_digest:
+            raise CheckContractError("original fixture changed during execution")
+        if candidate_identity() != candidate:
+            raise CheckContractError("candidate source changed during execution")
+        if (repo / ".architecture" / "baseline").exists():
+            raise CheckContractError("execution created a suppression baseline")
         if len(evidence.results) != 1:
             raise CheckContractError("missing or multiple terminal check results")
         result = evidence.results[0]
@@ -94,14 +100,15 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
             "schema": LEDGER_SCHEMA,
             "check": contract.check,
             "case_id": case.id,
-            "contract_digest": "sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "contract_digest": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(),
             "case_digest": payload_digest(asdict(case)),
             "fixture_digest": fixture_digest,
-            "candidate": candidate_identity(),
+            "candidate": candidate,
             "execution_id": str(uuid4()),
             "started_at": started,
             "finished_at": datetime.now(UTC).isoformat(),
             "expected": asdict(case.expected),
+            "environment": asdict(case.environment),
             "actual": {
                 "status": result.status,
                 "exit_code": exit_code,
@@ -113,6 +120,41 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
         with ledger.open("x", encoding="utf-8") as output:
             output.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
         return exit_code
+
+
+def _portable_configuration(value: object) -> None:
+    """Keep configured inputs inside the fixture and forbid baseline overrides."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if "baseline" in key or (key == "name" and not re.fullmatch(r"[a-zA-Z0-9_-]+", str(item))):
+                raise CheckContractError(
+                    "contract configuration cannot select a baseline or external rule name"
+                )
+            _portable_configuration(item)
+    elif isinstance(value, list):
+        for item in value:
+            _portable_configuration(item)
+    elif isinstance(value, str) and (Path(value).is_absolute() or ".." in Path(value).parts):
+        raise CheckContractError("contract configuration paths must be portable and fixture-relative")
+
+
+@contextmanager
+def _case_environment(policy: str, temporary: Path) -> Iterator[None]:
+    """Hide PATH-resolved tools for an explicit unavailable case, then restore."""
+    if policy == "inherit":
+        yield
+        return
+    empty = temporary / "empty-path"
+    empty.mkdir()
+    original = os.environ.get("PATH")
+    os.environ["PATH"] = str(empty)
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = original
 
 
 def _fixture_path(manifest: Path, name: str) -> Path:
@@ -171,7 +213,11 @@ def validate_contract_ledger(
     never from the ledger being validated. A digest protects integrity, not
     authenticity; release signing remains the admission layer's responsibility.
     """
-    contract = load_check_contract(manifest)
+    try:
+        manifest_bytes = manifest.read_bytes()
+    except OSError as exc:
+        raise CheckContractError(f"cannot read contract snapshot: {exc}") from exc
+    contract = load_check_contract(manifest, source=manifest_bytes)
     case = next((case for case in contract.cases if case.id == case_id), None)
     if case is None:
         raise CheckContractError(f"unknown contract case: {case_id}")
@@ -187,10 +233,11 @@ def validate_contract_ledger(
             "check": contract.check,
             "case_id": case.id,
             "case_digest": payload_digest(asdict(case)),
-            "contract_digest": "sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "contract_digest": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(),
             "fixture_digest": tree_digest(_fixture_path(manifest, case.fixture)),
             "candidate": candidate_identity(),
             "expected": json.loads(json.dumps(asdict(case.expected))),
+            "environment": asdict(case.environment),
         }
         for name, expected in bindings.items():
             if value[name] != expected:
