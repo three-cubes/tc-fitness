@@ -168,11 +168,13 @@ def test_invalid_syntax_and_missing_candidate_are_not_substitution_findings(tmp_
     assert not file_patches_internal(invalid, internal_roots=_INTERNAL, exempt_roots=_EXEMPT)
     assert not file_patches_internal(missing, internal_roots=_INTERNAL, exempt_roots=_EXEMPT)
 
+
 def test_unreadable_candidate_is_not_a_substitution_finding(tmp_path: Path) -> None:
     path = tmp_path / "tests" / "invalid.py"
     path.parent.mkdir()
     path.write_bytes(b"\xff")
     assert file_patches_internal(path, internal_roots=_INTERNAL, exempt_roots=_EXEMPT) is False
+
 
 def test_empty_internal_roots_is_noop(tmp_path: Path) -> None:
     rule = build({"roots": ["."]}, repo_root=tmp_path)
