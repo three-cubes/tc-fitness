@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,11 +16,38 @@ from tc_fitness.check_contracts import (
 
 pytestmark = pytest.mark.integration
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_repository_collection_executes_contract_drivers_without_collecting_fixture_tests() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--strict-markers",
+            "-p",
+            "tc_fitness.pytest_tiers",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "tests/test_check_contracts_static_batch.py::" in result.stdout
+    assert "tests/test_check_contracts_repository.py::" in result.stdout
+    assert "tests/check_contracts/" not in result.stdout
 
 
 def test_loads_complete_contract_with_explicit_exit_expectations(tmp_path: Path) -> None:
