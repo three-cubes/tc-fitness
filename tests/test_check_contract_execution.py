@@ -103,6 +103,61 @@ def invoke(
     )
 
 
+def _fast_import_single_file(path: str, content: bytes) -> bytes:
+    """One deterministic commit plus a remote base ref for a real Git fixture."""
+    return (
+        b"blob\nmark :1\ndata "
+        + str(len(content)).encode()
+        + b"\n"
+        + content
+        + b"\ncommit refs/heads/candidate\nmark :2\n"
+        + b"author Contract Fixture <fixture@example.invalid> 0 +0000\n"
+        + b"committer Contract Fixture <fixture@example.invalid> 0 +0000\n"
+        + b"data 7\ninitial\n"
+        + f"M 100644 :1 {path}\n\n".encode()
+        + b"reset refs/remotes/origin/main\nfrom :2\n\n"
+    )
+
+
+def test_public_contract_materialises_bound_git_history(tmp_path: Path) -> None:
+    manifest = make_contract(tmp_path)
+    fixture = tmp_path / "compliant"
+    for path in sorted((fixture / "src").rglob("*"), reverse=True):
+        if path.is_file():
+            path.unlink()
+        else:
+            path.rmdir()
+    (fixture / "src").rmdir()
+    history = fixture / ".contract" / "git.fast-import"
+    history.parent.mkdir()
+    history.write_bytes(
+        _fast_import_single_file("src/example.py", b"# SPDX-License-Identifier: MIT\nvalue = 1\n")
+    )
+    data = yaml.safe_load(manifest.read_text())
+    data["cases"][0]["environment"] = {
+        "schema": "tc.fitness/check-environment/v2",
+        "path": "inherit",
+        "git": {
+            "schema": "tc.fitness/git-fixture/v1",
+            "history": ".contract/git.fast-import",
+            "checkout": "refs/heads/candidate",
+        },
+    }
+    manifest.write_text(yaml.safe_dump(data))
+    ledger = tmp_path / "git-ledger.json"
+
+    result = invoke(manifest, "compliant", ledger)
+
+    assert result.returncode == 0, result.stderr
+    evidence = json.loads(ledger.read_text())
+    assert evidence["actual"] == {"exit": "zero", "exit_code": 0, "findings": [], "status": "pass"}
+    assert evidence["environment"]["git"] == {
+        "checkout": "refs/heads/candidate",
+        "history": ".contract/git.fast-import",
+        "schema": "tc.fitness/git-fixture/v1",
+    }
+
+
 @pytest.mark.parametrize(
     ("case", "status", "exit_code"),
     [("compliant", "pass", 0), ("violation", "fail", 1), ("unavailable", "error", 2)],
