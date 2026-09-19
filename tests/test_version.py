@@ -13,7 +13,7 @@ import pytest
 import tc_fitness
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_version_matches_installed_metadata() -> None:
     try:
         metadata_version = importlib.metadata.version("three-cubes-fitness")

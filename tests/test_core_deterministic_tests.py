@@ -189,7 +189,7 @@ def test_format_failure_names_offender_and_remediation() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_build_returns_rule_with_defaults() -> None:
     rule = build({})
     assert isinstance(rule, DeterministicTests)
@@ -197,7 +197,7 @@ def test_build_returns_rule_with_defaults() -> None:
     assert rule.use_randomly is False
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_from_config_reads_knobs() -> None:
     rule = build(
         {

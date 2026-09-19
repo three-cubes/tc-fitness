@@ -91,7 +91,7 @@ def test_empty_staged_runs_everything() -> None:
     assert decide(entry, "check_x.py", []).run is True
 
 
-@pytest.mark.contract
+@pytest.mark.unit
 def test_always_run_always_dispatches() -> None:
     entry = RuleEntry(id="F50", gate="f50", check="x", staged_class="always-run")
     # Even a totally unrelated staged file runs an always-run rule.
