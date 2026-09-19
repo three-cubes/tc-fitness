@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_production_suppressions
+config: {"roots":["src"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-production-suppressions
+          path: src/example.py
+          message_contains: "remove the suppression"
+dependencies: []
