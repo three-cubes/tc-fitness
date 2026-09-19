@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   check:
-    name: Quality gate
+    name: Self gate (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -69,6 +69,18 @@ jobs:
 
       - name: Qualify direct and rebuilt distributions
         run: bash scripts/qualification/distribution.sh --python "${{ matrix.python-version }}"
+
+  quality-gate:
+    name: Quality gate
+    if: ${{ always() }}
+    needs: [check, distribution-qualification]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Require every qualification worker to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/qualification/quality_gate_fanin.py
 
   # no-attribution — the dedicated required context (Autonomous Delivery
   # decision D1): reject AI/LLM self-attribution residue in the PR's commits +
