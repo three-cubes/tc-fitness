@@ -98,31 +98,6 @@ def _is_pytestmark_target(target: ast.expr) -> bool:
     return isinstance(target, ast.Name) and target.id == "pytestmark"
 
 
-def _contains_pytestmark_target(target: ast.expr) -> bool:
-    if _is_pytestmark_target(target):
-        return True
-    if isinstance(target, ast.Tuple | ast.List):
-        return any(_contains_pytestmark_target(element) for element in target.elts)
-    if isinstance(target, ast.Starred):
-        return _contains_pytestmark_target(target.value)
-    return False
-
-
-def _pytestmark_assignments(tree: ast.Module) -> list[ast.Assign | ast.AnnAssign | ast.AugAssign]:
-    """Return all declarations, reassignments, and augmentations of pytestmark."""
-    assignments: list[ast.Assign | ast.AnnAssign | ast.AugAssign] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(
-            _contains_pytestmark_target(target) for target in node.targets
-        ):
-            assignments.append(node)
-        elif isinstance(node, ast.AnnAssign) and _contains_pytestmark_target(node.target):
-            assignments.append(node)
-        elif isinstance(node, ast.AugAssign) and _contains_pytestmark_target(node.target):
-            assignments.append(node)
-    return assignments
-
-
 def _is_direct_tier_marker(value: ast.expr, tiers: frozenset[str]) -> bool:
     """Accept only the static ``pytest.mark.<tier>`` declaration form."""
     return (
@@ -135,25 +110,91 @@ def _is_direct_tier_marker(value: ast.expr, tiers: frozenset[str]) -> bool:
     )
 
 
-def _has_pytestmark_mutation(tree: ast.Module) -> bool:
+def _canonical_declaration(tree: ast.Module, tiers: frozenset[str]) -> ast.Assign | None:
+    """Return the sole allowed primary-tier declaration, if present.
+
+    Canonical mode intentionally does not interpret Python.  It permits just
+    one literal, top-level ``pytestmark = pytest.mark.<tier>`` assignment;
+    all other binding and marker syntax is examined separately and rejected.
+    """
+    declarations = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and _is_pytestmark_target(node.targets[0])
+        and _is_direct_tier_marker(node.value, tiers)
+    ]
+    return declarations[0] if len(declarations) == 1 else None
+
+
+def _binds_pytestmark(node: ast.AST, allowed_target: ast.expr) -> bool:
+    """Whether ``node`` binds pytestmark other than the allowed target."""
+    if isinstance(node, ast.Name):
+        return (
+            isinstance(node.ctx, ast.Store | ast.Del)
+            and node.id == "pytestmark"
+            and node is not allowed_target
+        )
+    if isinstance(node, ast.alias):
+        return node.asname == "pytestmark" or (
+            node.asname is None and node.name.split(".", maxsplit=1)[0] == "pytestmark"
+        )
+    if isinstance(node, ast.arg):
+        return node.arg == "pytestmark"
+    if isinstance(node, ast.ExceptHandler):
+        return node.name == "pytestmark"
+    if isinstance(node, ast.MatchAs | ast.MatchStar):
+        return node.name == "pytestmark"
+    if isinstance(node, ast.MatchMapping):
+        return node.rest == "pytestmark"
+    if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+        return node.name == "pytestmark"
+    return (
+        type(node).__name__ in {"TypeVar", "ParamSpec", "TypeVarTuple"}
+        and getattr(node, "name", None) == "pytestmark"
+    )
+
+
+def _has_unallowed_pytestmark_binding(tree: ast.Module, declaration: ast.Assign) -> bool:
+    return any(_binds_pytestmark(node, declaration.targets[0]) for node in ast.walk(tree))
+
+
+def _has_pytestmark_attribute_or_mutation(tree: ast.Module) -> bool:
+    """Reject ``x.pytestmark`` and uses that mutate/read pytestmark itself."""
     return any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "pytestmark"
+        isinstance(node, ast.Attribute)
+        and (
+            node.attr == "pytestmark" or (isinstance(node.value, ast.Name) and node.value.id == "pytestmark")
+        )
         for node in ast.walk(tree)
+    )
+
+
+def _has_tier_marker_outside_declaration(
+    tree: ast.Module,
+    tiers: frozenset[str],
+    declaration: ast.Assign,
+) -> bool:
+    """Reject every explicit tier marker except the canonical declaration value."""
+    allowed_value_nodes = {id(node) for node in ast.walk(declaration.value)}
+    return any(
+        _is_direct_tier_marker(node, tiers) and id(node) not in allowed_value_nodes
+        for node in ast.walk(tree)
+        if isinstance(node, ast.expr)
     )
 
 
 def _canonical_module_tier_is_valid(tree: ast.Module, tiers: frozenset[str]) -> bool:
     """True iff a module has one static, unambiguous primary tier declaration."""
-    declarations = _pytestmark_assignments(tree)
-    if len(declarations) != 1 or not isinstance(declarations[0], ast.Assign):
+    declaration = _canonical_declaration(tree, tiers)
+    if declaration is None:
         return False
-    declaration = declarations[0]
-    if declaration not in tree.body or len(declaration.targets) != 1:
-        return False
-    return _is_pytestmark_target(declaration.targets[0]) and _is_direct_tier_marker(declaration.value, tiers)
+    return not (
+        _has_unallowed_pytestmark_binding(tree, declaration)
+        or _has_pytestmark_attribute_or_mutation(tree)
+        or _has_tier_marker_outside_declaration(tree, tiers, declaration)
+    )
 
 
 def _function_tier_marker(node: ast.FunctionDef | ast.AsyncFunctionDef, tiers: frozenset[str]) -> set[str]:
@@ -220,7 +261,6 @@ def file_missing_tier_marker(
     if require_module_marker:
         return has_tests and (
             not _canonical_module_tier_is_valid(tree, tiers)
-            or _has_pytestmark_mutation(tree)
             or _has_function_tier_marker(tree, tiers)
             or _has_class_tier_marker(tree, tiers)
         )
