@@ -55,7 +55,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from tc_fitness.baseline import baseline_dir, parse_baseline_text, render_baseline
+from tc_fitness.baseline import baseline_dir, parse_baseline_text, read_baseline_text, render_baseline
 from tc_fitness.check_evidence import report_finding
 from tc_fitness.lib import REPO_ROOT
 from tc_fitness.lib import remediation as _remediation
@@ -238,10 +238,7 @@ class CheckovIacSecurity:
         return lambda sd: run_checkov(sd, framework=self._framework, timeout=self._timeout)
 
     def _load_baseline(self) -> set[str]:
-        path = self.baseline_path
-        if not path.exists():
-            return set()
-        return parse_baseline_text(path.read_text(encoding="utf-8"))
+        return parse_baseline_text(read_baseline_text(self.baseline_path, encoding="utf-8"))
 
     def evaluate(self) -> tuple[bool, list[str], dict[str, Any]]:
         """Run the scan and diff against the baseline.

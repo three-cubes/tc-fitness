@@ -35,6 +35,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.baseline import read_baseline_text
+
 # ---------------------------------------------------------------------------
 # kairix _arch_lib surface — baseline gating
 # ---------------------------------------------------------------------------
@@ -117,14 +119,11 @@ def gate(
     """
     root = repo_root if repo_root is not None else REPO_ROOT
     baseline_file = _baseline_dir(root) / f"{name}-files.txt"
-    if baseline_file.exists():
-        baseline = {
-            Path(line.strip())
-            for line in baseline_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        }
-    else:
-        baseline = set()
+    baseline = {
+        Path(line.strip())
+        for line in read_baseline_text(baseline_file).splitlines()
+        if line.strip() and not line.startswith("#")
+    }
 
     current_rel = {p.relative_to(root) if p.is_absolute() else p for p in current}
     new = sorted(current_rel - baseline)
@@ -214,14 +213,11 @@ def gate_keys(
     """
     root = repo_root if repo_root is not None else REPO_ROOT
     baseline_file = _baseline_dir(root) / f"{name}{baseline_suffix}"
-    if baseline_file.exists():
-        baseline = {
-            line.strip()
-            for line in baseline_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        }
-    else:
-        baseline = set()
+    baseline = {
+        line.strip()
+        for line in read_baseline_text(baseline_file).splitlines()
+        if line.strip() and not line.startswith("#")
+    }
 
     new = sorted(current - baseline)
 

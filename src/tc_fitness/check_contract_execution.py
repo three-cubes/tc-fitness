@@ -17,6 +17,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import UUID, uuid4
 
+from tc_fitness.baseline import baseline_free_execution
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.check_contracts import CheckContractError, FindingExpectation, load_check_contract
 from tc_fitness.check_evidence import capture_check_evidence
@@ -77,7 +78,11 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
         shutil.copytree(fixture, repo)
         if tree_digest(repo) != fixture_digest:
             raise CheckContractError("fixture changed while copying the execution snapshot")
-        with _case_environment(case.environment.path, Path(temporary)), capture_check_evidence() as evidence:
+        with (
+            _case_environment(case.environment.path, Path(temporary)),
+            capture_check_evidence() as evidence,
+            baseline_free_execution(),
+        ):
             entry = RuleEntry(id=contract.check, gate=contract.check, check=contract.check)
             run(
                 (entry,),

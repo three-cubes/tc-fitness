@@ -291,6 +291,10 @@ an external rule name. Manifest bytes, parsed configuration, fixture digest and
 candidate identity are captured before dispatch. A changed manifest, original
 fixture or candidate source, or a baseline created by the executing fixture,
 invalidates the run before a ledger can be published.
+During dispatch, a context-local policy disables suppression reads in the shared
+file/key gates and custom CORE baseline loaders. Even a transient baseline
+removed before dispatch finishes cannot grandfather a detector finding. Ordinary
+consumer runs outside contract mode retain their existing baseline behaviour.
 The output directory must exist, and the ledger must be a new path outside the
 fixture. Retries retain the previous ledger and use a new output path.
 
