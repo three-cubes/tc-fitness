@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 from _core_check_assertions import assert_no_repo_identity
 
+from tc_fitness.catalogue import RuleEntry
+from tc_fitness.check_evidence import CheckResult, capture_check_evidence
 from tc_fitness.core_checks.behavioural_evidence import BehaviouralEvidence, build
+from tc_fitness.runner import run
 
 pytestmark = pytest.mark.integration
 
@@ -147,6 +150,42 @@ def test_process_success_without_observed_output_is_not_evidence(tmp_path: Path)
     findings = build(_config(), repo_root=tmp_path).collect_findings()
 
     assert {finding.code for finding in findings} == {"missing-output-observation"}
+
+
+def test_public_runner_emits_structured_behavioural_findings(tmp_path: Path) -> None:
+    _seed_surfaces(tmp_path)
+    _seed(
+        tmp_path,
+        "tests/integration/test_image_build.py",
+        _valid_test().replace("    assert output.exists()\n", ""),
+    )
+    entry = RuleEntry(
+        id="core:behavioural_evidence",
+        gate="core:behavioural_evidence",
+        check="core:behavioural_evidence",
+    )
+
+    with capture_check_evidence() as evidence:
+        verdicts = run(
+            (entry,),
+            repo_root=tmp_path,
+            core_check_configs={"behavioural_evidence": _config()},
+        )
+
+    assert verdicts.exit_code == 1
+    assert evidence.results == [CheckResult("core:behavioural_evidence", "fail", 1)]
+    assert [
+        (finding.rule, finding.path, finding.message, finding.status) for finding in evidence.findings
+    ] == [
+        (
+            "behavioural-evidence",
+            "infra/docker/build-tool-runtime.sh",
+            "/claims/0/executables/0: missing-output-observation: "
+            "claim 'release-image-build' executes infra/docker/build-tool-runtime.sh without asserting a passed output; "
+            "fix: assert a produced file, response or retained receipt passed to the executable",
+            "fail",
+        )
+    ]
 
 
 def test_unrelated_file_assertion_is_not_an_output_observation(tmp_path: Path) -> None:
