@@ -31,12 +31,17 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+
       # Pinned + cached uv install (org standard). `--all-extras` provisions the
       # `dev` optional-dependency group (ruff / mypy / pytest …) into the locked
       # .venv, so the gate step runs the CI-equivalent toolchain.
       - name: Locked uv install (org composite)
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
           python-version: ${{ matrix.python-version }}
           sync-args: "--all-extras"
 
@@ -62,9 +67,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+
       - name: Locked uv install (org composite)
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
           python-version: ${{ matrix.python-version }}
 
       - name: Qualify direct and rebuilt distributions

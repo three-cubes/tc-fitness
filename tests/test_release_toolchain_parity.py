@@ -48,12 +48,12 @@ def _uv_setup_violations(repo_root: Path) -> list[str]:
 
     jobs = _jobs(repo_root / ".github" / "workflows")
     resolver_path = repo_root / ".github" / "actions" / "resolve-uv-version" / "action.yml"
-    has_direct_setup = any(
-        isinstance(step.get("uses"), str) and step["uses"].startswith(DIRECT_SETUP_UV)
+    has_setup = any(
+        isinstance(step.get("uses"), str) and step["uses"].startswith((DIRECT_SETUP_UV, SHARED_SETUP_UV))
         for _, _, steps in jobs
         for step in steps
     )
-    if has_direct_setup and not resolver_path.is_file():
+    if has_setup and not resolver_path.is_file():
         violations.append("the .uv-version resolver action is missing")
 
     for workflow_path, job_name, steps in jobs:
@@ -64,19 +64,18 @@ def _uv_setup_violations(repo_root: Path) -> list[str]:
             inputs = step.get("with") or {}
             location = f"{workflow_path.relative_to(repo_root)}:{job_name}:{step.get('name', uses)}"
 
-            if uses.startswith(DIRECT_SETUP_UV):
+            if uses.startswith((DIRECT_SETUP_UV, SHARED_SETUP_UV)):
                 preceding = steps[:index]
                 if not any(
                     candidate.get("uses") == RESOLVER_USE and candidate.get("id") == "uv-version"
                     for candidate in preceding
                 ):
                     violations.append(f"{location} must run the .uv-version resolver first")
-                if inputs.get("version") != "${{ steps.uv-version.outputs.version }}":
+                version_input = "version" if uses.startswith(DIRECT_SETUP_UV) else "uv-version"
+                if inputs.get(version_input) != "${{ steps.uv-version.outputs.version }}":
                     violations.append(f"{location} must install the resolved .uv-version output")
                 if "version-file" in inputs:
                     violations.append(f"{location} must not pass .uv-version as version-file")
-            elif uses.startswith(SHARED_SETUP_UV) and "uv-version" in inputs:
-                violations.append(f"{location} must let setup-uv-cached read .uv-version")
 
     return violations
 
@@ -189,24 +188,60 @@ jobs:
     ]
 
 
-def test_parity_check_rejects_a_shared_setup_override(tmp_path: Path) -> None:
-    """The shared installer must use its repository-file path, not a workflow literal."""
+def _shared_setup_fixture(tmp_path: Path, inputs: dict[str, str], *, resolver: bool = True) -> None:
     (tmp_path / ".uv-version").write_text("0.12.5\n", encoding="utf-8")
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)
+    action = tmp_path / ".github" / "actions" / "resolve-uv-version" / "action.yml"
+    action.parent.mkdir(parents=True)
+    action.write_text(RESOLVER_ACTION.read_text(encoding="utf-8"), encoding="utf-8")
+    steps: list[dict[str, Any]] = []
+    if resolver:
+        steps.append({"id": "uv-version", "uses": RESOLVER_USE})
+    steps.append(
+        {
+            "name": "Shared installer",
+            "uses": SHARED_SETUP_UV + "b" * 40,
+            "with": inputs,
+        }
+    )
     (workflows / "ci.yaml").write_text(
-        """\
-jobs:
-  check:
-    steps:
-      - name: Shared installer
-        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        with:
-          uv-version: 0.11.0
-""",
-        encoding="utf-8",
+        yaml.safe_dump({"jobs": {"check": {"steps": steps}}}), encoding="utf-8"
     )
 
+
+def test_parity_check_rejects_a_shared_setup_override(tmp_path: Path) -> None:
+    """An explicit but different pin must not bypass the repository version."""
+    _shared_setup_fixture(tmp_path, {"uv-version": "0.11.0"})
     assert _uv_setup_violations(tmp_path) == [
-        ".github/workflows/ci.yaml:check:Shared installer must let setup-uv-cached read .uv-version"
+        ".github/workflows/ci.yaml:check:Shared installer must install the resolved .uv-version output"
     ]
+
+
+def test_parity_check_rejects_a_shared_setup_without_a_pin(tmp_path: Path) -> None:
+    """The pinned shared action's default is not the repository's exact uv pin."""
+    _shared_setup_fixture(tmp_path, {})
+    assert _uv_setup_violations(tmp_path) == [
+        ".github/workflows/ci.yaml:check:Shared installer must install the resolved .uv-version output"
+    ]
+
+
+def test_parity_check_accepts_a_shared_setup_using_resolved_pin(tmp_path: Path) -> None:
+    """The supported shared-action input must accept the validated resolver output."""
+    _shared_setup_fixture(tmp_path, {"uv-version": "${{ steps.uv-version.outputs.version }}"})
+    assert _uv_setup_violations(tmp_path) == []
+
+
+def test_parity_check_requires_shared_setup_resolver_first(tmp_path: Path) -> None:
+    """A reference to an output is invalid if its producer never ran in this job."""
+    _shared_setup_fixture(tmp_path, {"uv-version": "${{ steps.uv-version.outputs.version }}"}, resolver=False)
+    assert _uv_setup_violations(tmp_path) == [
+        ".github/workflows/ci.yaml:check:Shared installer must run the .uv-version resolver first"
+    ]
+
+
+def test_parity_check_requires_shared_setup_resolver_action(tmp_path: Path) -> None:
+    """A missing local action must fail even when only shared installers are used."""
+    _shared_setup_fixture(tmp_path, {"uv-version": "${{ steps.uv-version.outputs.version }}"})
+    (tmp_path / ".github" / "actions" / "resolve-uv-version" / "action.yml").unlink()
+    assert _uv_setup_violations(tmp_path) == ["the .uv-version resolver action is missing"]
