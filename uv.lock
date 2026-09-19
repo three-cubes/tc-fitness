@@ -388,6 +388,7 @@ name = "three-cubes-fitness"
 version = "0.16.1"
 source = { editable = "." }
 dependencies = [
+    { name = "coverage" },
     { name = "pyyaml" },
 ]
 
@@ -401,6 +402,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+<<<<<<< HEAD
+=======
+    { name = "coverage", specifier = ">=7.5" },
+    { name = "mutmut", marker = "extra == 'dev'", specifier = "==3.6.0" },
+>>>>>>> 7142eb0 (build: ship coverage admission dependency)
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },

@@ -18,9 +18,9 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
-# Check-contract manifests are a shipped public surface, so their YAML parser
-# must be available in every default installation.
-dependencies = ["PyYAML>=6.0"]
+# Check-contract manifests and exact-source coverage admission are shipped
+# public surfaces, so their parsers must exist in every default installation.
+dependencies = ["coverage>=7.5", "PyYAML>=6.0"]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and
