@@ -585,6 +585,81 @@ def test_repository_tests_are_all_classified_by_tier() -> None:
     assert rule.run() == 0
 
 
+def _contract_fixture_manifest(root: Path) -> None:
+    _seed(
+        root,
+        "tests/check_contracts/every_test_has_tier_marker/contract.yaml",
+        """schema: tc.fitness/check-contract/v1
+check: core:every_test_has_tier_marker
+config:
+  roots: [tests]
+  require_module_marker: true
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: every-test-has-tier-marker
+          path: tests/test_subject.py
+          message_contains: module-level tier
+dependencies: []
+""",
+    )
+
+
+def test_registered_contract_test_sources_are_data_not_authoring_tests(tmp_path: Path) -> None:
+    _contract_fixture_manifest(tmp_path)
+    _seed(
+        tmp_path,
+        "tests/check_contracts/every_test_has_tier_marker/compliant/tests/test_subject.py",
+        "import pytest\npytestmark = pytest.mark.unit\ndef test_subject(): pass\n",
+    )
+    _seed(
+        tmp_path,
+        "tests/check_contracts/every_test_has_tier_marker/violation/tests/test_subject.py",
+        "import pytest\n@pytest.mark.unit\ndef test_subject(): pass\n",
+    )
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+
+    assert rule.collect_violations() == set()
+
+
+def test_unregistered_check_contracts_directory_cannot_hide_a_test(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "tests/check_contracts/unregistered/test_subject.py",
+        "def test_subject(): pass\n",
+    )
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+
+    assert rule.collect_violations() == {path.relative_to(tmp_path)}
+
+
+def test_copied_contract_manifest_cannot_hide_an_authoring_test(tmp_path: Path) -> None:
+    _contract_fixture_manifest(tmp_path)
+    manifest = tmp_path / "tests/check_contracts/every_test_has_tier_marker/contract.yaml"
+    manifest.write_text(manifest.read_text().replace("core:every_test_has_tier_marker", "core:path_naming"))
+    path = _seed(
+        tmp_path,
+        "tests/check_contracts/every_test_has_tier_marker/violation/tests/test_subject.py",
+        "def test_subject(): pass\n",
+    )
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+
+    assert rule.collect_violations() == {path.relative_to(tmp_path)}
+
+
 @pytest.mark.parametrize("suffix", _REUSED_OR_ALIASED_MARKERS.values(), ids=_REUSED_OR_ALIASED_MARKERS)
 def test_canonical_source_rejects_reused_markers_and_namespaces(tmp_path: Path, suffix: str) -> None:
     body = "import pytest\npytestmark = pytest.mark.unit\n" + suffix
