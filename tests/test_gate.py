@@ -426,6 +426,27 @@ def test_shard_ignores_step_without_shard_args(repo: Path) -> None:
     assert marker.read_text() == "|"
 
 
+def test_assure_coverage_help_is_routed_to_its_public_parser(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["assure-coverage", "--help"])
+
+    assert exc.value.code == 0
+    assert "--evidence-dir EVIDENCE_DIR" in capsys.readouterr().out
+
+
+def test_python_module_cli_shows_help_from_a_real_child_process(repo: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.gate", "--help"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "The single runnable quality gate" in result.stdout
+
+
 @pytest.mark.parametrize("spec", ["5/4", "0/4", "abc", "2/0", "2"])
 def test_main_invalid_shard_returns_two(repo: Path, capsys: pytest.CaptureFixture[str], spec: str) -> None:
     _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
