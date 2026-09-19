@@ -72,12 +72,11 @@ def report_lacks_branches(report_path: Path, *, element_tree: Any | None = None)
 
     Reads the root ``<coverage>`` element's ``branch-rate`` and
     ``branches-valid`` attributes: a real branch-aware report carries both > 0.
-    A MISSING report returns ``False`` (nothing to assert yet — another run
-    will produce it). A malformed/unsafe report raises, surfacing the problem
-    rather than silently passing.
+    A missing report returns ``True``: absent evidence cannot satisfy branch
+    assurance. A malformed/unsafe report raises rather than silently passing.
     """
     if not report_path.exists():
-        return False
+        return True
     text = report_path.read_text(encoding="utf-8")
     _reject_unsafe_xml(text, str(report_path))
     et = element_tree if element_tree is not None else _resolve_element_tree()
@@ -116,8 +115,7 @@ class CoverageIncludesBranches(FitnessRule):
 
     def enumerate_files(self) -> list[Path]:
         """The single artifact this rule judges: the coverage report itself."""
-        report = self._report_path()
-        return [report] if report.exists() else []
+        return [self._report_path()]
 
     def is_in_scope(self, rel: str) -> bool:
         """Admit the configured report regardless of where it sits."""

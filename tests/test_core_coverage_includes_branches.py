@@ -36,8 +36,8 @@ def test_branch_aware_report_clean(tmp_path: Path) -> None:
     assert report_lacks_branches(p) is False
 
 
-def test_missing_report_not_a_violation(tmp_path: Path) -> None:
-    assert report_lacks_branches(tmp_path / "absent.xml") is False
+def test_missing_report_is_a_violation(tmp_path: Path) -> None:
+    assert report_lacks_branches(tmp_path / "absent.xml") is True
 
 
 def test_rule_flags_lines_only(tmp_path: Path) -> None:
@@ -59,8 +59,10 @@ def test_report_path_is_config_driven(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-def test_run_passes_when_no_report(tmp_path: Path) -> None:
-    assert build({}, repo_root=tmp_path).run() == 0
+def test_run_fails_when_no_report(tmp_path: Path) -> None:
+    rule = build({}, repo_root=tmp_path)
+    assert rule.collect_violations() == {Path("coverage.xml")}
+    assert rule.run() == 1
 
 
 def test_unsafe_xml_rejected(tmp_path: Path) -> None:
