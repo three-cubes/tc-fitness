@@ -94,13 +94,13 @@ def module_has_os_native_serialisation(path: Path) -> bool:
 
     Pure helper (the detection core) so tests can assert on it directly. Flags a
     ``str(...)`` call whose argument subtree holds a ``relative_to(...)`` that is
-    not ``.as_posix()``-terminated. A syntax/decode error returns False (another
-    check owns unparseable files).
+    not ``.as_posix()``-terminated. A syntax/read error is a violation because
+    the configured source could not be evaluated.
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
-    except (SyntaxError, ValueError):
-        return False
+    except (SyntaxError, ValueError, OSError):
+        return True
     compliant = _compliant_relative_to_nodes(tree)
     for node in ast.walk(tree):
         if (

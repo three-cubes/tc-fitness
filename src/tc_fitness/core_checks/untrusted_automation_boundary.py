@@ -48,11 +48,16 @@ REMEDIATION = _remediation(
 
 def _as_strings(value: object) -> tuple[str, ...]:
     """Return string members of a scalar-or-sequence config value."""
+    if value is None:
+        return ()
     if isinstance(value, str):
+        if not value:
+            raise ValueError("configured values must be a string or a sequence of non-empty strings")
         return (value,)
-    if isinstance(value, Sequence):
-        return tuple(item for item in value if isinstance(item, str))
-    return ()
+    if isinstance(value, Sequence) and not isinstance(value, bytes):
+        if all(isinstance(item, str) and item for item in value):
+            return tuple(value)
+    raise ValueError("configured values must be a string or a sequence of non-empty strings")
 
 
 def _load_workflow(path: Path) -> Mapping[str, Any] | None:
@@ -68,10 +73,8 @@ def _load_workflow(path: Path) -> Mapping[str, Any] | None:
     return loaded if isinstance(loaded, Mapping) else None
 
 
-def _step_uses(step: object, prefixes: tuple[str, ...]) -> bool:
+def _step_uses(step: Mapping[str, Any], prefixes: tuple[str, ...]) -> bool:
     """Whether ``step`` invokes an action with a configured prefix."""
-    if not isinstance(step, Mapping):
-        return False
     uses = step.get("uses")
     return isinstance(uses, str) and any(uses.casefold().startswith(prefix.casefold()) for prefix in prefixes)
 
@@ -97,8 +100,6 @@ def _normalise_relative_path(value: str) -> tuple[str, ...] | None:
         return None
     parts: list[str] = []
     for part in path.parts:
-        if part in ("", "."):
-            continue
         if part == "..":
             if not parts:
                 return None
@@ -165,10 +166,12 @@ def workflow_has_untrusted_automation_boundary_violation(
     workflow_env = workflow.get("env")
     for job in jobs.values():
         if not isinstance(job, Mapping):
-            continue
+            return True
         steps = job.get("steps")
-        if not isinstance(steps, Sequence):
-            continue
+        if not isinstance(steps, Sequence) or isinstance(steps, str | bytes):
+            return True
+        if any(not isinstance(step, Mapping) for step in steps):
+            return True
         untrusted_steps = [step for step in steps if _step_uses(step, untrusted_action_prefixes)]
         if not untrusted_steps:
             continue
@@ -179,8 +182,6 @@ def workflow_has_untrusted_automation_boundary_violation(
         ):
             return True
         for step in steps:
-            if not isinstance(step, Mapping):
-                continue
             if _step_uses(step, privileged_action_prefixes):
                 return True
             if _mapping_has_credential_env(step.get("env"), credential_env_names):
@@ -239,12 +240,8 @@ class UntrustedAutomationBoundary(FitnessRule):
         return rule
 
     def enumerate_files(self) -> list[Path]:
-        """Enumerate only existing consumer-configured workflow files."""
-        return [
-            self._repo_root / workflow
-            for workflow in self.workflows
-            if (self._repo_root / workflow).is_file()
-        ]
+        """Enumerate every configured workflow so missing files are reported."""
+        return [self._repo_root / workflow for workflow in self.workflows]
 
     def is_in_scope(self, rel: str) -> bool:
         return rel in self.workflows

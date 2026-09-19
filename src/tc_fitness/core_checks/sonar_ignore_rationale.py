@@ -30,7 +30,7 @@ DEFAULT_SONAR_FILE = "sonar-project.properties"
 #: The multicriteria rule-key line shape — Sonar's own format, overridable.
 DEFAULT_RULE_KEY_PATTERN = r"^sonar\.issue\.ignore\.multicriteria\.([A-Za-z0-9_-]+)\.ruleKey="
 
-_BAD_TOKENS = ("TODO", "FIXME", "XXX", "fixme", "todo")
+_BAD_TOKENS = ("todo", "fixme", "xxx")
 _MIN_SUBSTANTIVE_LEN = 25
 
 REMEDIATION = _remediation(
@@ -74,7 +74,7 @@ def _rationale_lines_above(lines: list[str], index: int) -> list[str]:
 def _has_real_rationale(comment_block: list[str]) -> bool:
     """True if the block has an em-dash or a long substantive (non-TODO) line."""
     for line in comment_block:
-        if not line or any(tok in line for tok in _BAD_TOKENS):
+        if not line or any(tok in line.casefold() for tok in _BAD_TOKENS):
             continue
         if "—" in line or "--" in line:
             return True
@@ -87,12 +87,12 @@ def file_has_unjustified_ignore(path: Path, *, rule_key_pattern: str) -> bool:
     """True iff ``path`` has a Sonar rule-ignore lacking a preceding rationale.
 
     Pure helper (the detection core) so tests assert on it directly. A read
-    error is treated as "no violation".
+    error is a violation because the configured properties file could not be evaluated.
     """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (UnicodeDecodeError, OSError):
-        return False
+        return True
     rule_re = re.compile(rule_key_pattern)
     for idx, raw in enumerate(lines):
         if rule_re.match(raw.strip()) and not _has_real_rationale(_rationale_lines_above(lines, idx)):
@@ -111,6 +111,7 @@ class SonarIgnoreRationale(FitnessRule):
     #: Rule-specific knobs — overridable per consumer.
     sonar_file: str = DEFAULT_SONAR_FILE
     rule_key_pattern: str = DEFAULT_RULE_KEY_PATTERN
+    sonar_file_required: bool = False
 
     @classmethod
     def from_config(
@@ -123,12 +124,13 @@ class SonarIgnoreRationale(FitnessRule):
         assert isinstance(rule, SonarIgnoreRationale)  # noqa: S101  # narrowing for mypy
         rule.sonar_file = str(config.get("sonar_file", DEFAULT_SONAR_FILE))
         rule.rule_key_pattern = str(config.get("rule_key_pattern", DEFAULT_RULE_KEY_PATTERN))
+        rule.sonar_file_required = "sonar_file" in config
         return rule
 
     def enumerate_files(self) -> list[Path]:
-        """Scan exactly the configured Sonar properties file (if present)."""
+        """Scan the Sonar file; an explicitly configured missing file is incomplete evidence."""
         target = self._repo_root / self.sonar_file
-        return [target] if target.is_file() else []
+        return [target] if target.is_file() or self.sonar_file_required else []
 
     def is_in_scope(self, rel: str) -> bool:
         """The single named target file is always in scope."""

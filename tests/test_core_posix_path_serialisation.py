@@ -49,9 +49,23 @@ def test_detection_clean_str_without_relative_to(tmp_path: Path) -> None:
     assert module_has_os_native_serialisation(p) is False
 
 
-def test_syntax_error_is_not_a_violation(tmp_path: Path) -> None:
+def test_only_relative_to_calls_inside_str_arguments_are_rejected(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/paths.py", "str()\np.relative_to(root)\nstr(p.relative_to(root))\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_syntax_error_is_not_clean_evidence(tmp_path: Path) -> None:
     p = _seed(tmp_path, "broken.py", "def (:\n")
-    assert module_has_os_native_serialisation(p) is False
+    assert module_has_os_native_serialisation(p) is True
+
+
+def test_unparseable_configured_source_is_reported(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/broken.py", "def route(:\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
 
 
 def test_excluded_segment_is_config_driven(tmp_path: Path) -> None:

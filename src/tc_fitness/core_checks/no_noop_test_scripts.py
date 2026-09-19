@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -57,9 +58,67 @@ def script_is_noop(script: str, *, placeholder: re.Pattern[str], real_runner: re
     text = " ".join(script.split())
     if not placeholder.search(text):
         return False
-    if real_runner.search(text):
-        return False
+    try:
+        lexer = shlex.shlex(script, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return True
+
+    command: list[str] = []
+    for token in [*tokens, ";"]:
+        if token in {";", "&&", "||", "|"}:
+            if _command_invokes_runner(command, real_runner):
+                return False
+            command = []
+        else:
+            command.append(token)
     return True
+
+
+def _command_invokes_runner(command: list[str], real_runner: re.Pattern[str]) -> bool:
+    """Match a runner only where it is an executable, not an argument to echo."""
+    if not command:
+        return False
+    position = 0
+    while position < len(command):
+        token = command[position]
+        if "=" in token and token.split("=", 1)[0].replace("_", "a").isalnum():
+            position += 1
+            continue
+        if token in {"env", "cross-env"}:
+            position += 1
+            position = _skip_options(command, position)
+            continue
+        if token in {"npx", "yarn", "bunx"}:
+            position = _skip_options(command, position + 1)
+            continue
+        if token in {"pnpm", "npm", "bun"}:
+            action_position = _skip_options(command, position + 1)
+            if action_position < len(command) and command[action_position] in {"exec", "run", "x"}:
+                position = _skip_options(command, action_position + 1)
+                continue
+        break
+    if position == len(command):
+        return False
+    executable = command[position]
+    if real_runner.search(executable) is not None:
+        return True
+    return (
+        executable == "node"
+        and position + 1 < len(command)
+        and real_runner.search(f"{executable} {command[position + 1]}") is not None
+    )
+
+
+def _skip_options(command: list[str], position: int) -> int:
+    """Skip wrapper flags before its executable, including value-taking flags."""
+    takes_value = {"--package", "-p", "--filter", "--dir", "--workspace-root", "--config", "--registry"}
+    while position < len(command) and command[position].startswith("-"):
+        if command[position] == "--":
+            return position + 1
+        position += 2 if command[position] in takes_value else 1
+    return position
 
 
 class NoNoopTestScripts(FitnessRule):
@@ -121,9 +180,14 @@ class NoNoopTestScripts(FitnessRule):
     def file_has_violation(self, path: Path) -> bool:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return False
-        test_script = (data.get("scripts") or {}).get("test")
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            return True
+        if not isinstance(data, Mapping):
+            return True
+        scripts = data.get("scripts")
+        if scripts is not None and not isinstance(scripts, Mapping):
+            return True
+        test_script = (scripts or {}).get("test")
         if not isinstance(test_script, str):
             return False
         return script_is_noop(

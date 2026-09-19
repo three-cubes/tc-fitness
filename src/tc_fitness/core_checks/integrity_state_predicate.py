@@ -56,13 +56,24 @@ REMEDIATION = _remediation(
 
 
 def _is_presence_only_completeness_check(sql: str, table: str, state_cols: tuple[str, ...]) -> bool:
-    """True iff ``sql`` does a LEFT JOIN <table> … IS NULL completeness check
-    without referencing any of ``table``'s state columns."""
-    if not re.search(rf"LEFT\s+JOIN\s+{re.escape(table)}\b", sql, re.IGNORECASE):
+    """True iff a joined table has a NULL-completeness check but no ON state filter."""
+    join = re.search(
+        rf"LEFT\s+JOIN\s+{re.escape(table)}\b"
+        r"(?:\s+(?:AS\s+)?(?P<alias>[A-Za-z_][\w$]*))?\s+ON\b"
+        r"(?P<on>.*?)(?=\b(?:LEFT|RIGHT|INNER|FULL|CROSS)\s+JOIN\b|\bWHERE\b|$)",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if join is None:
         return False
     if not re.search(r"\bIS\s+NULL\b", sql, re.IGNORECASE):
         return False
-    return not any(re.search(rf"\b{re.escape(col)}\b", sql, re.IGNORECASE) for col in state_cols)
+    alias = join.group("alias") or table.rsplit(".", 1)[-1]
+    on_clause = re.sub(r"--[^\n]*|/\*.*?\*/", " ", join.group("on"), flags=re.DOTALL)
+    return not any(
+        re.search(rf"\b{re.escape(alias)}\s*\.\s*{re.escape(col)}\b", on_clause, re.IGNORECASE)
+        for col in state_cols
+    )
 
 
 def file_missing_state_predicate(path: Path, *, state_tables: Mapping[str, tuple[str, ...]]) -> bool:
@@ -72,15 +83,15 @@ def file_missing_state_predicate(path: Path, *, state_tables: Mapping[str, tuple
     Pure helper (the detection core). Walks string literals via the AST —
     adjacent-literal concatenation (the common multi-line SQL shape) is folded
     into one constant by the parser, so the whole query is one string. A
-    syntax/decode error is treated as no violation; an empty ``state_tables``
-    flags nothing.
+    syntax/decode/read error is a violation because the configured source could
+    not be evaluated; an empty ``state_tables`` flags nothing.
     """
     if not state_tables:
         return False
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (SyntaxError, UnicodeDecodeError, OSError):
-        return False
+        return True
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
             continue

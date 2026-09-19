@@ -35,6 +35,18 @@ def test_no_roots_flags_nothing(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
+def test_missing_configured_boundary_root_is_reported(tmp_path: Path) -> None:
+    rule = build({"boundary_roots": ["tools/mcp"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_missing_marker_root_is_incomplete_not_clean(tmp_path: Path) -> None:
+    rule = build({"marker_roots": ["packages"], "marker_file": "package.json"}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
 def test_marker_root_gates_on_marker_file(tmp_path: Path) -> None:
     # leaf with marker → scanned; leaf without → ignored.
     _mkdir(tmp_path, "skills/content/render-ts")
