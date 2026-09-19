@@ -1,0 +1,30 @@
+schema: tc.fitness/check-contract/v1
+check: core:osv_scanner_sca
+config:
+  scanner_version: 2.2.4
+  lockfiles: [uv.lock]
+  required: true
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: vulnerability
+          path: .
+          message_contains: GHSA-fixture
+  - id: unavailable
+    fixture: unavailable
+    environment: {schema: tc.fitness/check-environment/v1, path: empty}
+    expected:
+      status: error
+      exit: nonzero
+      findings:
+        - rule: dependency-unavailable
+          path: .
+          message_contains: osv-scanner
+dependencies: [osv-scanner]

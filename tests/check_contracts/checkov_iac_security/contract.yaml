@@ -1,0 +1,29 @@
+schema: tc.fitness/check-contract/v1
+check: core:checkov_iac_security
+config:
+  scan_dir: infra
+  framework: bicep
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: CKV_FIXTURE_1
+          path: infra/main.bicep
+          message_contains: fixture violation
+  - id: unavailable
+    fixture: unavailable
+    environment: {schema: tc.fitness/check-environment/v1, path: empty}
+    expected:
+      status: error
+      exit: nonzero
+      findings:
+        - rule: dependency-unavailable
+          path: .
+          message_contains: checkov
+dependencies: [checkov]
