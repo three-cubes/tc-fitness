@@ -28,10 +28,11 @@ def _run(needs: dict[str, dict[str, str]]) -> subprocess.CompletedProcess[str]:
 
 
 def test_fan_in_accepts_only_successful_required_workers() -> None:
-    """Branch protection can pass only when both matrix workers report success."""
+    """Branch protection requires qualification and mutation workers to succeed."""
     needs = {
         "check": {"result": "success"},
         "distribution-qualification": {"result": "success"},
+        "changed-mutation": {"result": "success"},
     }
     result = _run(needs)
 
@@ -44,8 +45,17 @@ def test_fan_in_rejects_a_non_successful_required_worker() -> None:
         {
             "check": {"result": "success"},
             "distribution-qualification": {"result": "cancelled"},
+            "changed-mutation": {"result": "success"},
         }
     )
 
     assert result.returncode == 1
     assert "distribution-qualification=cancelled" in result.stderr
+
+
+@pytest.mark.parametrize("state", ["failure", "cancelled", "skipped", None])
+def test_mutation_failure_or_missing_worker_cannot_pass_branch_protection(state: str | None) -> None:
+    needs = {"check": {"result": "success"}, "distribution-qualification": {"result": "success"}}
+    if state is not None:
+        needs["changed-mutation"] = {"result": state}
+    assert _run(needs).returncode == 1
