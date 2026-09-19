@@ -23,7 +23,7 @@ from tc_fitness.core_checks import (
 from tc_fitness.runner import core_module_name, is_core_check
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_registry_matches_disk_bidirectionally() -> None:
     registry = set(CORE_CHECKS)
     on_disk = set(discover_core_check_modules())
@@ -31,7 +31,7 @@ def test_registry_matches_disk_bidirectionally() -> None:
     assert on_disk - registry == set(), "orphan module with no registry id"
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_core_check_consistency_passes() -> None:
     assert core_check_consistency() == 0
 
@@ -42,7 +42,7 @@ def test_registry_is_sorted_and_namespaced() -> None:
     assert all(cid.startswith("core:") for cid in CORE_CHECKS)
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 @pytest.mark.parametrize("check_id", CORE_CHECKS)
 def test_every_core_check_module_is_conformant(check_id: str) -> None:
     """Each registered check resolves to a module exposing build() + main()."""

@@ -371,7 +371,7 @@ def test_staged_gate_id_wins_over_staged(repo: Path, capsys: pytest.CaptureFixtu
     assert "run [B1]" not in out  # gate_id narrowed, not staged-selected
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_main_staged_flag_threads_through(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -431,7 +431,7 @@ def test_shard_ignores_step_without_shard_args(repo: Path) -> None:
     assert marker.read_text() == "|"
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 @pytest.mark.parametrize("spec", ["5/4", "0/4", "abc", "2/0", "2"])
 def test_main_invalid_shard_returns_two(repo: Path, capsys: pytest.CaptureFixture[str], spec: str) -> None:
     _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
@@ -439,7 +439,7 @@ def test_main_invalid_shard_returns_two(repo: Path, capsys: pytest.CaptureFixtur
     assert "FAIL --shard" in _plain(capsys.readouterr().err)
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_main_shard_flag_threads_through(repo: Path) -> None:
     _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
     assert main(["run", "--repo-root", str(repo), "--shard", "1/2"]) == 0
@@ -481,7 +481,7 @@ def test_main_changed_files_from_threads_diff_scope_through_catalogue(
     assert "SKIP [expensive]" in out
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_main_changed_files_from_missing_file_fails_closed(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -503,19 +503,19 @@ def test_main_changed_files_from_missing_file_fails_closed(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_main_run_returns_zero_on_pass(repo: Path) -> None:
     _write_config(repo, '[[steps]]\nid = "ok"\nrun = ["true"]\n')
     assert main(["run", "--repo-root", str(repo)]) == 0
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_main_run_returns_one_on_failure(repo: Path) -> None:
     _write_config(repo, '[[steps]]\nid = "bad"\nrun = ["false"]\n')
     assert main(["run", "--repo-root", str(repo)]) == 1
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_main_missing_config_returns_two(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["run", "--repo-root", str(repo)])
     err = _plain(capsys.readouterr().err)
@@ -538,7 +538,7 @@ def test_main_run_reads_pyproject_tool_block(repo: Path) -> None:
     assert main(["run", "--repo-root", str(repo)]) == 0
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_main_only_flag_threads_through(repo: Path) -> None:
     _write_config(
         repo,
@@ -614,7 +614,7 @@ def test_all_singleton_stages_match_sequential_output(repo: Path, capsys: pytest
     assert scheduled == sequential
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 def test_tier_selects_tagged_steps(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,

@@ -235,7 +235,7 @@ def test_findings_are_hard_and_cannot_be_grandfathered(tmp_path: Path) -> None:
         rule.establish_baseline()
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), BehaviouralEvidence)
 

@@ -105,7 +105,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "test-skip-rationale-files.txt").exists()
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), TestSkipRationale)
 

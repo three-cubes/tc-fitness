@@ -268,7 +268,7 @@ def test_runtime_markers_are_consumer_configured(tmp_path: Path) -> None:
     assert rule.file_has_violation(path) is True
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), NoTestDoublesInRuntimeTiers)
 

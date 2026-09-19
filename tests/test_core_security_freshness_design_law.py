@@ -54,7 +54,7 @@ def test_no_repo_strings_in_executable_code(module_name: str) -> None:
                 assert tok not in lowered, f"{module_name}: repo identity leaked in a code literal: {tok}"
 
 
-@pytest.mark.contract
+@pytest.mark.integration
 @pytest.mark.parametrize("module_name", _MODULES)
 def test_module_exposes_build_and_main(module_name: str) -> None:
     mod = importlib.import_module(module_name)

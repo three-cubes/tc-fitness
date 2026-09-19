@@ -29,19 +29,19 @@ def _seed_pkg(tmp_path: Path, rel: str, test_script: str) -> Path:
     return p
 
 
-@pytest.mark.contract
+@pytest.mark.unit
 def test_placeholder_is_noop() -> None:
     assert (
         script_is_noop("echo 'no tests yet' && exit 0", placeholder=_PLACEHOLDER, real_runner=_REAL) is True
     )
 
 
-@pytest.mark.contract
+@pytest.mark.unit
 def test_real_runner_is_not_noop() -> None:
     assert script_is_noop("vitest run src --coverage", placeholder=_PLACEHOLDER, real_runner=_REAL) is False
 
 
-@pytest.mark.contract
+@pytest.mark.unit
 def test_placeholder_with_real_runner_passes() -> None:
     # mentions "exit 0" but also runs vitest → real
     assert script_is_noop("vitest run || exit 0", placeholder=_PLACEHOLDER, real_runner=_REAL) is False
@@ -87,7 +87,7 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-noop-test-scripts-files.txt").exists()
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), NoNoopTestScripts)
 

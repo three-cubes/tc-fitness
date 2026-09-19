@@ -122,7 +122,7 @@ def test_missing_configured_contract_is_a_finding(tmp_path: Path) -> None:
     assert {finding.code for finding in findings} == {"missing-file"}
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_resolve_selects_one_registry_target_without_mutating_input() -> None:
     registry = {
         "schema": CONTRACT_SCHEMA,
