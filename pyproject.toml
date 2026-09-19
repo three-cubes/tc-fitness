@@ -41,7 +41,6 @@ packages = ["src/tc_fitness"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["check_contracts"]
 addopts = ["--strict-markers", "-p", "tc_fitness.pytest_tiers"]
 markers = [
   "unit: in-process transformation or predicate with no process boundary",

@@ -50,6 +50,64 @@ def test_repository_collection_executes_contract_drivers_without_collecting_fixt
     assert "tests/check_contracts/" not in result.stdout
 
 
+def test_invalid_contract_manifest_cannot_hide_an_unclassified_test(
+    tmp_path: Path,
+) -> None:
+    contract = tmp_path / "tests" / "check_contracts" / "example"
+    _write(
+        contract / "contract.yaml",
+        """schema: tc.fitness/check-contract/v1
+check: core:example
+config: {}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: example
+          path: test_hidden.py
+          message_contains: intended violation
+dependencies: []
+""",
+    )
+    (contract / "compliant").mkdir()
+    _write(contract / "violation" / "test_hidden.py", "def test_hidden(): pass\n")
+    _write(
+        tmp_path / "tests" / "test_control.py",
+        "import pytest\npytestmark = pytest.mark.integration\ndef test_control(): pass\n",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--strict-markers",
+            "-o",
+            "markers=integration: repository composition test",
+            "-p",
+            "tc_fitness.pytest_tiers",
+            str(tmp_path / "tests"),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert "test_hidden.py::test_hidden" in result.stdout
+    assert "items must have exactly one effective tier" in result.stderr
+
+
 def test_loads_complete_contract_with_explicit_exit_expectations(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path / "example_check" / "contract.yaml",

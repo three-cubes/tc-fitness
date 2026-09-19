@@ -39,8 +39,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from tc_fitness.check_contracts import CheckContractError, load_check_contract
-from tc_fitness.core_checks import run_core_check
+from tc_fitness.check_contracts import registered_contract_directory
+from tc_fitness.core_checks import CORE_CHECKS, run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -314,11 +314,6 @@ class EveryTestHasTierMarker(FitnessRule):
         parts = Path(rel).parts
         if any(part in self.excluded_parts for part in parts):
             return False
-        candidate = self._repo_root / rel
-        while candidate != self._repo_root:
-            if (candidate / "contract.yaml").is_file():
-                return False
-            candidate = candidate.parent
         return Path(rel).name.startswith("test_")
 
     def file_has_violation(self, path: Path) -> bool:
@@ -341,15 +336,9 @@ class EveryTestHasTierMarker(FitnessRule):
         for parent in resolved.parents:
             if parent == self._repo_root.parent:
                 break
-            manifest = parent / "contract.yaml"
-            if not manifest.is_file():
+            contract = registered_contract_directory(parent, CORE_CHECKS)
+            if contract is None:
                 continue
-            try:
-                contract = load_check_contract(manifest)
-            except CheckContractError:
-                return False
-            if contract.check != f"core:{parent.name}":
-                return False
             return any(resolved.is_relative_to((parent / case.fixture).resolve()) for case in contract.cases)
         return False
 
