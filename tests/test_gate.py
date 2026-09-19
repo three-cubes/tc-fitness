@@ -291,6 +291,21 @@ def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.Ca
     assert "could not load catalogue" in out
 
 
+def test_catalogue_step_rejects_entries_outside_the_public_schema(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (repo / "invalid_catalogue.py").write_text("ENTRIES = (object(),)\n")
+    _write_config(
+        repo,
+        '[[steps]]\nid = "f"\ncatalogue = "invalid_catalogue:ENTRIES"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert not outcome.ok
+    assert "could not load catalogue" in _plain(capsys.readouterr().out)
+
+
 # --------------------------------------------------------------------------- #
 # --staged smoke tier — the <60s fast-feedback entrypoint
 # --------------------------------------------------------------------------- #

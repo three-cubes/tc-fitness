@@ -54,6 +54,7 @@ from importlib import import_module
 from pathlib import Path
 
 from tc_fitness.baseline import baseline_free_execution
+from tc_fitness.catalogue import RuleEntry
 from tc_fitness.gate_config import (
     GateConfig,
     GateConfigError,
@@ -223,12 +224,14 @@ def _run_command_step(step: StepSpec, repo_root: Path, *, shard: tuple[int, int]
     return StepResult(step.id, "fail", gating=not step.continue_on_error)
 
 
-def _resolve_catalogue(ref: str) -> tuple[object, ...]:
+def _resolve_catalogue(ref: str) -> tuple[RuleEntry, ...]:
     """Import ``module.path:attr`` and return the ``tuple[RuleEntry, ...]``."""
     module_path, _, attr = ref.partition(":")
     module = import_module(module_path)
-    rules = getattr(module, attr)
-    return tuple(rules)
+    rules = tuple(getattr(module, attr))
+    if any(not isinstance(rule, RuleEntry) for rule in rules):
+        raise ValueError("catalogue entries must use tc_fitness.catalogue.RuleEntry")
+    return rules
 
 
 def _run_catalogue_step(
@@ -302,7 +305,7 @@ def _run_catalogue_step(
         return StepResult(step.id, "fail")
     with baseline_free_execution() if step.baseline_free else nullcontext():
         rc = main_cli(
-            rules,  # type: ignore[arg-type]
+            rules,
             argv,
             repo_root=repo_root_for_step,
             checks_dir=checks_dir,
