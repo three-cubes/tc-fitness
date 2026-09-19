@@ -59,6 +59,26 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "path-naming-files.txt").exists()
 
 
+def test_fixed_generated_segments_are_outside_authored_path_scope(tmp_path: Path) -> None:
+    rule = PathNaming.from_config({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
+    assert not rule.is_in_scope("docs/node_modules/BadName.md")
+    assert rule.is_in_scope("docs/BadName.md")
+
+
+def test_enumeration_handles_missing_nonfile_cache_and_wrong_extension(tmp_path: Path) -> None:
+    _seed(tmp_path, "docs/good-name.md")
+    _seed(tmp_path, "docs/readme.txt")
+    _seed(tmp_path, "docs/__pycache__/BadName.md")
+    (tmp_path / "docs" / "directory.md").mkdir()
+    rule = PathNaming.from_config({"kebab_roots": ["missing/", "docs/"]}, repo_root=tmp_path)
+
+    assert {path.relative_to(tmp_path).as_posix() for path in rule.enumerate_files()} == {"docs/good-name.md"}
+
+
+def test_cli_executes_with_repo_root(tmp_path: Path) -> None:
+    assert main(["--repo-root", str(tmp_path)]) == 0
+
+
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.path_naming as mod
 
