@@ -52,6 +52,9 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
   a versioned per-case environment declaration. Checkov now returns an error
   when its required executable is absent and cannot create an empty adoption
   baseline without running the scanner.
+  Contract execution disables baseline suppression at the shared read boundary,
+  including Checkov's custom loader, so transient baseline files cannot attest
+  false PASS. Ordinary consumer baseline semantics are unchanged.
 
 - **Commit identity guidance now separates metadata from authentication** —
   `canonical_commit_identity` validates Git author and committer metadata; it

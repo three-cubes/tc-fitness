@@ -80,7 +80,9 @@ def make_contract(root: Path, *, dependency: bool = False) -> Path:
     return manifest
 
 
-def invoke(manifest: Path, case: str, ledger: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+def invoke(
+    manifest: Path, case: str, ledger: Path, *extra: str, timeout: float | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             str(Path(sys.executable).with_name("tc-fitness")),
@@ -97,6 +99,7 @@ def invoke(manifest: Path, case: str, ledger: Path, *extra: str) -> subprocess.C
         capture_output=True,
         check=False,
         env=dict(os.environ),
+        timeout=timeout,
     )
 
 

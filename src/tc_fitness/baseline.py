@@ -33,7 +33,9 @@ violations vs that frozen set. :func:`establish_baseline` is the single writer;
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -43,6 +45,35 @@ BASELINE_SUFFIX = "-files.txt"
 
 #: Repo-relative directory every baseline lives under.
 BASELINE_DIRNAME = Path(".architecture") / "baseline"
+
+_BASELINE_FREE: ContextVar[bool] = ContextVar("baseline_free_execution", default=False)
+
+
+@contextmanager
+def baseline_free_execution() -> Iterator[None]:
+    """Disable suppression reads in this execution context, including nested runs.
+
+    Contract assurance must judge the detector's complete finding set, even if
+    the detector's inputs create and remove baseline files during execution.
+    Ordinary consumers retain baseline semantics outside this scope.
+    """
+    token = _BASELINE_FREE.set(True)
+    try:
+        yield
+    finally:
+        _BASELINE_FREE.reset(token)
+
+
+def read_baseline_text(path: Path, *, encoding: str | None = None) -> str:
+    """Read consumer suppression debt, or no debt during contract assurance.
+
+    Check the context BEFORE any filesystem operation: transient files, FIFOs
+    and external paths must never influence the detector's finding set. Keep
+    parsing with each caller so existing consumer comment semantics are intact.
+    """
+    if _BASELINE_FREE.get() or not path.exists():
+        return ""
+    return path.read_text(encoding=encoding)
 
 
 def baseline_dir(repo_root: Path) -> Path:
@@ -87,9 +118,7 @@ def load_baseline(name: str, repo_root: Path) -> set[str]:
     never diverge on the comment / blank-line contract.
     """
     path = baseline_path(name, repo_root)
-    if not path.exists():
-        return set()
-    return parse_baseline_text(path.read_text(encoding="utf-8"))
+    return parse_baseline_text(read_baseline_text(path, encoding="utf-8"))
 
 
 def _header_block(name: str) -> list[str]:
@@ -153,6 +182,8 @@ __all__ = [
     "BASELINE_DIRNAME",
     "baseline_dir",
     "baseline_path",
+    "baseline_free_execution",
+    "read_baseline_text",
     "parse_baseline_text",
     "load_baseline",
     "render_baseline",
