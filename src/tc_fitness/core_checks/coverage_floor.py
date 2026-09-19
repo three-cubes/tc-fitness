@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Mapping
+from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from tc_fitness.core_checks import run_core_check
+from tc_fitness.core_checks._coverage_evidence import resolve_coverage_filename
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -76,15 +78,21 @@ def _resolve_element_tree(
         return import_module("xml.etree.ElementTree")
 
 
-def parse_coverage_report(report_path: Path, *, element_tree: Any | None = None) -> dict[str, float]:
+def parse_coverage_report(
+    report_path: Path,
+    *,
+    repo_root: Path | None = None,
+    element_tree: Any | None = None,
+) -> dict[str, float]:
     """Return ``{<source>/<filename>: line-rate-percent}`` from a Cobertura report.
 
     Cobertura XML declares ``<source>`` roots and emits ``<class filename=...>``
-    paths relative to a source. The returned keys join the first source root
-    with each class filename so they read as report-relative paths (the same
-    shape the scan roots filter against). When multiple classes resolve to one
-    key, the LOWEST line-rate wins (the pessimistic reading). A missing report
-    yields an empty mapping — the caller decides whether that is in scope.
+    paths relative to a source. The returned keys resolve absolute, relative and
+    multiple source roots to repository-relative paths. Existing files
+    disambiguate multiple roots; unresolved ambiguity fails. When multiple
+    classes resolve to one key, the LOWEST line-rate wins (the pessimistic
+    reading). A missing report yields an empty mapping; the rule treats that as
+    missing required evidence.
     """
     if not report_path.exists():
         return {}
@@ -93,18 +101,14 @@ def parse_coverage_report(report_path: Path, *, element_tree: Any | None = None)
     et = element_tree if element_tree is not None else _resolve_element_tree()
     root = et.parse(report_path).getroot()
 
-    source_roots = [s.text.strip().strip("/") for s in root.iter("source") if s.text and s.text.strip()]
-    source_prefix = source_roots[0] if source_roots else ""
+    source_roots = [s.text.strip() for s in root.iter("source") if s.text and s.text.strip()]
 
     out: dict[str, float] = {}
     for cls in root.iter("class"):
         filename = cls.get("filename") or ""
         if not filename:
             continue
-        if source_prefix and not filename.startswith(source_prefix + "/"):
-            full = f"{source_prefix}/{filename}"
-        else:
-            full = filename
+        full = resolve_coverage_filename(filename, source_roots, repo_root=repo_root)
         try:
             rate = float(cls.get("line-rate", "1.0")) * 100.0
         except ValueError:
@@ -144,25 +148,37 @@ class CoverageFloor(FitnessRule):
         report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
+    @cached_property
+    def _coverage(self) -> dict[str, float]:
+        return parse_coverage_report(self._report_path(), repo_root=self._repo_root)
+
     def _below_floor(self) -> dict[str, float]:
         """Map of report-relative path → coverage for files under the floor."""
-        coverage = parse_coverage_report(self._report_path())
-        return {path: pct for path, pct in coverage.items() if pct < self.floor_pct}
+        return {path: pct for path, pct in self._coverage.items() if pct < self.floor_pct}
 
     def enumerate_files(self) -> list[Path]:
         """Enumerate the below-floor files named in the coverage report.
 
-        Overrides the default rglob walk: the rule's universe is the coverage
-        report's contents, not the on-disk tree. Each below-floor entry is
-        returned as a repo-root-anchored path so the inherited scope predicate
-        (extensions + roots) still applies.
+        The source tree is authoritative. A report cannot hide an uncovered
+        file by omitting it. A missing or empty report is represented by the
+        report path itself so it produces an observable finding.
         """
-        return [self._repo_root / path for path in self._below_floor()]
+        if not self._coverage:
+            return [self._report_path()]
+        return super().enumerate_files()
+
+    def is_in_scope(self, rel: str) -> bool:
+        report_rel = self._repo_relative(self._report_path()).as_posix()
+        return rel == report_rel or super().is_in_scope(rel)
 
     def file_has_violation(self, path: Path) -> bool:
-        """Every enumerated file is, by construction, below the floor."""
-        rel = str(self._repo_relative(path))
-        return rel in self._below_floor()
+        """The report is absent/empty, or a source file is absent/below floor."""
+        rel = self._repo_relative(path).as_posix()
+        report_rel = self._repo_relative(self._report_path()).as_posix()
+        if rel == report_rel:
+            return not self._coverage
+        measured = self._coverage.get(rel)
+        return measured is None or measured < self.floor_pct
 
 
 def build(
