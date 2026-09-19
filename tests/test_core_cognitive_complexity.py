@@ -150,6 +150,7 @@ def test_empty_else_paths_and_nested_function_definitions_are_scored(tmp_path: P
     assert module_over_threshold(path, threshold=0) is True
     assert module_over_threshold(path, threshold=100) is False
 
+
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/c.py", _COMPLEX)
     _seed(tmp_path, "vendor/c.py", _COMPLEX)
