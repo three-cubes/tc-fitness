@@ -14,6 +14,8 @@ from tc_fitness.core_checks.license_present import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     p = tmp_path / rel
@@ -22,32 +24,27 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_missing_header_flagged(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", "def f():\n    return 1\n")
     assert file_missing_license(p, markers=DEFAULT_MARKERS, header_lines=20) is True
 
 
-@pytest.mark.integration
 def test_spdx_header_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", "# SPDX-License-Identifier: MIT\ndef f():\n    return 1\n")
     assert file_missing_license(p, markers=DEFAULT_MARKERS, header_lines=20) is False
 
 
-@pytest.mark.integration
 def test_copyright_header_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "m.py", "# Copyright 2026 Someone\ndef f():\n    return 1\n")
     assert file_missing_license(p, markers=DEFAULT_MARKERS, header_lines=20) is False
 
 
-@pytest.mark.integration
 def test_marker_below_window_still_flagged(tmp_path: Path) -> None:
     body = "\n" * 30 + "# SPDX-License-Identifier: MIT\n"
     p = _seed(tmp_path, "m.py", body)
     assert file_missing_license(p, markers=DEFAULT_MARKERS, header_lines=20) is True
 
 
-@pytest.mark.integration
 def test_custom_markers_via_config(tmp_path: Path) -> None:
     rule = build({"roots": ["."], "markers": ["MY-LICENSE-TAG"]}, repo_root=tmp_path)
     ok = _seed(tmp_path, "ok.py", "# MY-LICENSE-TAG\nx = 1\n")
@@ -56,7 +53,6 @@ def test_custom_markers_via_config(tmp_path: Path) -> None:
     assert rule.file_has_violation(bad) is True
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/m.py", "x = 1\n")
     rule = LicensePresent.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -65,7 +61,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "m.py", "x = 1\n")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])

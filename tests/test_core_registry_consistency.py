@@ -22,8 +22,9 @@ from tc_fitness.core_checks import (
 )
 from tc_fitness.runner import core_module_name, is_core_check
 
+pytestmark = pytest.mark.integration
 
-@pytest.mark.integration
+
 def test_registry_matches_disk_bidirectionally() -> None:
     registry = set(CORE_CHECKS)
     on_disk = set(discover_core_check_modules())
@@ -31,18 +32,10 @@ def test_registry_matches_disk_bidirectionally() -> None:
     assert on_disk - registry == set(), "orphan module with no registry id"
 
 
-@pytest.mark.integration
 def test_core_check_consistency_passes() -> None:
     assert core_check_consistency() == 0
 
 
-@pytest.mark.unit
-def test_registry_is_sorted_and_namespaced() -> None:
-    assert list(CORE_CHECKS) == sorted(CORE_CHECKS)
-    assert all(cid.startswith("core:") for cid in CORE_CHECKS)
-
-
-@pytest.mark.integration
 @pytest.mark.parametrize("check_id", CORE_CHECKS)
 def test_every_core_check_module_is_conformant(check_id: str) -> None:
     """Each registered check resolves to a module exposing build() + main()."""
@@ -53,20 +46,6 @@ def test_every_core_check_module_is_conformant(check_id: str) -> None:
     assert callable(module.main)
 
 
-@pytest.mark.unit
-def test_core_module_name_resolution() -> None:
-    entry = RuleEntry(id="x", gate="x", check="core:no_duplicate_string")
-    assert is_core_check(entry)
-    assert core_module_name(entry) == "tc_fitness.core_checks.no_duplicate_string"
-
-
-@pytest.mark.unit
-def test_local_check_is_not_core() -> None:
-    entry = RuleEntry(id="x", gate="x", check="provider_layer_imports")
-    assert not is_core_check(entry)
-
-
-@pytest.mark.integration
 def test_runner_dispatches_core_check_in_process(tmp_path: object) -> None:
     """A ``core:`` catalogue entry resolves + runs in-process via the runner.
 

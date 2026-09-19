@@ -5,6 +5,8 @@ it belongs to (a fast lane on every commit, a slower lane in CI) so the tier
 guarantees stay live. Without this gate, untagged tests drift into the slow
 lane (or are never run). This rule flags any test file where a ``test_*``
 function carries no tier marker and no module-level ``pytestmark`` pins one.
+Consumers that require one primary tier for every test module can opt into
+module-only classification.
 
 Detection (AST walk per file):
 
@@ -13,6 +15,8 @@ Detection (AST walk per file):
   2. Otherwise every ``test_*`` function must carry a matching
      ``@pytest.mark.<tier>`` decorator.
   3. A file with no ``test_*`` functions (a fixtures/support module) passes.
+  4. With ``require_module_marker``, every test module must declare exactly one
+     module-level tier; function-level markers alone do not satisfy the rule.
 
 The gate checks only the *presence* of a tier marker, not which one is right
 -- mis-classification is a code-review concern; absence is caught here.
@@ -20,7 +24,8 @@ The gate checks only the *presence* of a tier marker, not which one is right
 Ported from tc-agent-zone ``scripts/checks/every_test_has_tier_marker.py``
 and re-expressed as a configurable, repo-agnostic rule: scan roots and the
 excluded path components arrive from config; the tier marker vocabulary is
-the rule's own shape (``unit`` / ``contract`` / ``e2e``) and is overridable.
+the rule's own shape (``unit`` / ``contract`` / ``integration`` / ``e2e``)
+and is overridable.
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ from tc_fitness.lib import remediation as _remediation
 
 #: The default tier vocabulary -- the test-architecture's own shape, not repo
 #: identity. A consumer with a different taxonomy overrides via config.
-DEFAULT_TIER_MARKERS: tuple[str, ...] = ("unit", "contract", "e2e")
+DEFAULT_TIER_MARKERS: tuple[str, ...] = ("unit", "contract", "integration", "e2e")
 
 #: Path components that mark a support/fixture subtree to skip even when it
 #: holds ``test_*.py`` files. Overridable via config.
@@ -108,21 +113,36 @@ def _untagged_functions(tree: ast.Module, tiers: frozenset[str]) -> list[str]:
     return out
 
 
-def file_missing_tier_marker(path: Path, *, tiers: frozenset[str]) -> bool:
+def file_missing_tier_marker(
+    path: Path,
+    *,
+    tiers: frozenset[str],
+    require_module_marker: bool = False,
+) -> bool:
     """True iff ``path`` holds a ``test_*`` function with no tier marker.
 
     Pure helper (the detection core): a module-level ``pytestmark`` tier
     covers the whole file; otherwise every ``test_*`` function must carry one.
-    A file with no test functions (a fixtures module) is not a violation. A
-    syntax / decode error is treated as "no violation".
+    When ``require_module_marker`` is true, a test module instead needs exactly
+    one module-level tier marker. A file with no test functions (a fixtures
+    module) is not a violation. A syntax / decode error is treated as "no
+    violation".
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (SyntaxError, UnicodeDecodeError, OSError):
         return False
-    if _module_tier_marker(tree, tiers):
+    module_markers = _module_tier_marker(tree, tiers)
+    has_tests = any(
+        isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test_")
+        for node in ast.walk(tree)
+    )
+    untagged = _untagged_functions(tree, tiers)
+    if require_module_marker:
+        return has_tests and len(module_markers) != 1
+    if module_markers:
         return False
-    return bool(_untagged_functions(tree, tiers))
+    return bool(untagged)
 
 
 class EveryTestHasTierMarker(FitnessRule):
@@ -135,6 +155,7 @@ class EveryTestHasTierMarker(FitnessRule):
     #: Rule-specific knobs.
     tier_markers: tuple[str, ...] = DEFAULT_TIER_MARKERS
     excluded_parts: tuple[str, ...] = DEFAULT_EXCLUDED_PARTS
+    require_module_marker: bool = False
 
     @classmethod
     def from_config(
@@ -149,6 +170,7 @@ class EveryTestHasTierMarker(FitnessRule):
         rule.tier_markers = tuple(markers) if markers is not None else DEFAULT_TIER_MARKERS
         excluded = config.get("excluded_parts")
         rule.excluded_parts = tuple(excluded) if excluded is not None else DEFAULT_EXCLUDED_PARTS
+        rule.require_module_marker = bool(config.get("require_module_marker", False))
         return rule
 
     def is_in_scope(self, rel: str) -> bool:
@@ -161,7 +183,11 @@ class EveryTestHasTierMarker(FitnessRule):
         return Path(rel).name.startswith("test_")
 
     def file_has_violation(self, path: Path) -> bool:
-        return file_missing_tier_marker(path, tiers=frozenset(self.tier_markers))
+        return file_missing_tier_marker(
+            path,
+            tiers=frozenset(self.tier_markers),
+            require_module_marker=self.require_module_marker,
+        )
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> EveryTestHasTierMarker:

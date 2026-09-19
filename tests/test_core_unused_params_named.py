@@ -14,6 +14,8 @@ from tc_fitness.core_checks.unused_params_named import (
     module_has_unused_param,
 )
 
+pytestmark = pytest.mark.integration
+
 _UNUSED = """
 def handle(event, context):
     return event.id
@@ -41,39 +43,33 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_core_flags_unused(tmp_path: Path) -> None:
     p = _seed(tmp_path, "u.py", _UNUSED)
     assert module_has_unused_param(p) is True
 
 
-@pytest.mark.integration
 def test_underscore_named_is_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "n.py", _NAMED)
     assert module_has_unused_param(p) is False
 
 
-@pytest.mark.integration
 def test_abstractmethod_is_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "a.py", _ABSTRACT)
     assert module_has_unused_param(p) is False
 
 
-@pytest.mark.integration
 def test_self_and_args_kwargs_exempt(tmp_path: Path) -> None:
     body = "def f(self, *args, **kwargs):\n    return 1\n"
     p = _seed(tmp_path, "x.py", body)
     assert module_has_unused_param(p) is False
 
 
-@pytest.mark.integration
 def test_property_setter_value_exempt(tmp_path: Path) -> None:
     body = "class C:\n    @x.setter\n    def x(self, value):\n        pass\n"
     p = _seed(tmp_path, "s.py", body)
     assert module_has_unused_param(p) is False
 
 
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "src/u.py", _UNUSED)
     _seed(tmp_path, "vendor/u.py", _UNUSED)
@@ -81,7 +77,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/u.py"}
 
 
-@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/u.py", _UNUSED)
     rule = build({"roots": ["src"]}, repo_root=tmp_path)
@@ -90,7 +85,6 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "u.py", _UNUSED)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -98,7 +92,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "unused-params-named-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.unused_params_named as mod
 

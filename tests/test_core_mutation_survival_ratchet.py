@@ -13,6 +13,8 @@ from tc_fitness.core_checks.mutation_survival_ratchet import (
     report_is_malformed,
 )
 
+pytestmark = pytest.mark.integration
+
 _VALID = '{"schema_version": 1, "packages": {"pkg": {"survived": 0, "killed": 9}}}'
 _BAD_VERSION = '{"schema_version": 2, "packages": {}}'
 _BAD_PACKAGES = '{"schema_version": 1, "packages": []}'
@@ -26,42 +28,35 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_valid_report_not_malformed(tmp_path: Path) -> None:
     p = _seed(tmp_path, "r.json", _VALID)
     assert report_is_malformed(p) is False
 
 
-@pytest.mark.integration
 def test_bad_version_malformed(tmp_path: Path) -> None:
     p = _seed(tmp_path, "r.json", _BAD_VERSION)
     assert report_is_malformed(p) is True
 
 
-@pytest.mark.integration
 def test_bad_packages_malformed(tmp_path: Path) -> None:
     p = _seed(tmp_path, "r.json", _BAD_PACKAGES)
     assert report_is_malformed(p) is True
 
 
-@pytest.mark.integration
 def test_bad_json_malformed(tmp_path: Path) -> None:
     p = _seed(tmp_path, "r.json", _BAD_JSON)
     assert report_is_malformed(p) is True
 
 
-@pytest.mark.integration
 def test_absent_report_not_judged_by_helper(tmp_path: Path) -> None:
     assert report_is_malformed(tmp_path / "absent.json") is False
 
 
-@pytest.mark.integration
 def test_missing_baseline_is_violation(tmp_path: Path) -> None:
     rule = build({"baseline_report": "base.json", "current_report": "cur.json"}, repo_root=tmp_path)
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_allow_missing_current_passes(tmp_path: Path) -> None:
     _seed(tmp_path, "base.json", _VALID)
     rule = build(
@@ -73,7 +68,6 @@ def test_allow_missing_current_passes(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_missing_current_when_required_is_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "base.json", _VALID)
     rule = build(
@@ -83,7 +77,6 @@ def test_missing_current_when_required_is_violation(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_malformed_current_is_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "base.json", _VALID)
     _seed(tmp_path, "cur.json", _BAD_VERSION)
@@ -91,7 +84,6 @@ def test_malformed_current_is_violation(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"cur.json"}
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "base.json", _VALID)
     _seed(tmp_path, "cur.json", _BAD_VERSION)
@@ -101,7 +93,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "base.json", _VALID)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -109,7 +100,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "mutation-survival-ratchet-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.mutation_survival_ratchet as mod
 

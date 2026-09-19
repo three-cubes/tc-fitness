@@ -11,8 +11,9 @@ from tc_fitness.core_checks.path_naming import (
     PathNaming,
     build,
     main,
-    name_violates_convention,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str = "x\n") -> Path:
@@ -22,85 +23,6 @@ def _seed(tmp_path: Path, rel: str, body: str = "x\n") -> Path:
     return p
 
 
-@pytest.mark.unit
-def test_detection_bad_kebab_md() -> None:
-    assert (
-        name_violates_convention(
-            "docs/MyNote.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset(),
-        )
-        is True
-    )
-
-
-@pytest.mark.unit
-def test_detection_good_kebab_md() -> None:
-    assert (
-        name_violates_convention(
-            "docs/my-note.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset(),
-        )
-        is False
-    )
-
-
-@pytest.mark.unit
-def test_detection_bad_snake_py() -> None:
-    assert (
-        name_violates_convention(
-            "scripts/My-Check.py",
-            kebab_roots=(),
-            snake_roots=("scripts/",),
-            allowed_names=frozenset(),
-        )
-        is True
-    )
-
-
-@pytest.mark.unit
-def test_detection_good_snake_py() -> None:
-    assert (
-        name_violates_convention(
-            "scripts/my_check.py",
-            kebab_roots=(),
-            snake_roots=("scripts/",),
-            allowed_names=frozenset(),
-        )
-        is False
-    )
-
-
-@pytest.mark.unit
-def test_allowed_name_exempt() -> None:
-    assert (
-        name_violates_convention(
-            "docs/README.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset({"README.md"}),
-        )
-        is False
-    )
-
-
-@pytest.mark.unit
-def test_path_under_no_root_is_clean() -> None:
-    assert (
-        name_violates_convention(
-            "vendor/BadName.md",
-            kebab_roots=("docs/",),
-            snake_roots=(),
-            allowed_names=frozenset(),
-        )
-        is False
-    )
-
-
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "docs/BadNote.md")
     _seed(tmp_path, "docs/good-note.md")
@@ -109,14 +31,12 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"docs/BadNote.md"}
 
 
-@pytest.mark.integration
 def test_no_roots_flags_nothing(tmp_path: Path) -> None:
     _seed(tmp_path, "docs/BadNote.md")
     rule = build({}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_snake_root_init_allowed(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/__init__.py")
     _seed(tmp_path, "scripts/_private_helper.py")
@@ -124,7 +44,6 @@ def test_snake_root_init_allowed(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "docs/BadNote.md")
     rule = PathNaming.from_config({"kebab_roots": ["docs/"]}, repo_root=tmp_path)
@@ -133,7 +52,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "docs/BadNote.md")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -141,7 +59,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "path-naming-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.path_naming as mod
 

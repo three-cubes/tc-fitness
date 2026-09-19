@@ -20,6 +20,8 @@ from tc_fitness.core_checks.runtime_evidence_contract import (
 )
 from tc_fitness.runner import run
 
+pytestmark = pytest.mark.integration
+
 _NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 _SOURCE_SHA = "a" * 40
 _IMAGE_DIGEST = "sha256:" + "b" * 64
@@ -118,7 +120,6 @@ def _config() -> dict[str, object]:
     }
 
 
-@pytest.mark.integration
 def test_valid_runtime_evidence_passes(tmp_path: Path) -> None:
     _seed(tmp_path, captured_at=_NOW)
     rule = build(_config(), repo_root=tmp_path)
@@ -134,19 +135,16 @@ def test_valid_runtime_evidence_passes(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.integration
 def test_empty_configuration_is_vacuous_and_does_not_open_files(tmp_path: Path) -> None:
     assert build({}, repo_root=tmp_path / "does-not-exist").run() == 0
 
 
-@pytest.mark.integration
 def test_configured_missing_files_fail_actionably(tmp_path: Path, capsys: object) -> None:
     rule = build({"contract_file": "contract.json", "evidence_file": "evidence.json"}, repo_root=tmp_path)
     assert rule.run() == 1
     assert "fix:" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_baseline_cannot_suppress_bad_evidence(tmp_path: Path, capsys: object) -> None:
     _seed(tmp_path, mutate="wrong-source")
     baseline = tmp_path / ".architecture" / "baseline"
@@ -158,7 +156,6 @@ def test_baseline_cannot_suppress_bad_evidence(tmp_path: Path, capsys: object) -
     assert "source-sha-mismatch" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_establish_baseline_rejects_invalid_runtime_evidence(tmp_path: Path, capsys: object) -> None:
     rule = build(
         {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"},
@@ -172,7 +169,6 @@ def test_establish_baseline_rejects_invalid_runtime_evidence(tmp_path: Path, cap
     assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_shared_core_helper_cannot_baseline_invalid_runtime_evidence(tmp_path: Path) -> None:
     config = {"contract_file": "missing.json", "evidence_file": "missing-evidence.json"}
 
@@ -186,7 +182,6 @@ def test_shared_core_helper_cannot_baseline_invalid_runtime_evidence(tmp_path: P
     assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_catalogue_runner_fails_invalid_runtime_evidence_baseline(
     tmp_path: Path,
     capsys: object,
@@ -215,7 +210,6 @@ def test_catalogue_runner_fails_invalid_runtime_evidence_baseline(
     assert not (tmp_path / ".architecture" / "baseline" / "runtime-evidence-contract-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_configured_duplicate_key_fails_actionably(tmp_path: Path, capsys: object) -> None:
     _seed(tmp_path)
     (tmp_path / "evidence.json").write_text(
@@ -227,7 +221,6 @@ def test_configured_duplicate_key_fails_actionably(tmp_path: Path, capsys: objec
     assert "fix:" in captured.err
 
 
-@pytest.mark.integration
 def test_tampered_artifact_fails(tmp_path: Path, capsys: object) -> None:
     _seed(tmp_path)
     (tmp_path / "artifacts" / "probe.txt").write_bytes(b"tampered\n")
@@ -235,7 +228,6 @@ def test_tampered_artifact_fails(tmp_path: Path, capsys: object) -> None:
     assert "artifact-digest-mismatch" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_wrong_contract_schema_fails(tmp_path: Path, capsys: object) -> None:
     _seed(tmp_path)
     contract = _contract()
@@ -245,7 +237,6 @@ def test_wrong_contract_schema_fails(tmp_path: Path, capsys: object) -> None:
     assert "wrong-schema" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_nan_evidence_fails(tmp_path: Path, capsys: object) -> None:
     _seed(tmp_path)
     (tmp_path / "evidence.json").write_text(
@@ -255,21 +246,18 @@ def test_nan_evidence_fails(tmp_path: Path, capsys: object) -> None:
     assert "invalid-json-constant" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_boolean_integer_identity_fails(tmp_path: Path, capsys: object) -> None:
     _seed(tmp_path, mutate="bool-id")
     assert build(_config(), repo_root=tmp_path).run() == 1
     assert "integer-id" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_unsafe_artifact_reference_fails(tmp_path: Path, capsys: object) -> None:
     _seed(tmp_path, mutate="unsafe-artifact")
     assert build(_config(), repo_root=tmp_path).run() == 1
     assert "unsafe-artifact-path" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_stale_skipped_and_exit_code_only_evidence_fail(tmp_path: Path, capsys: object) -> None:
     for mutation, code in (
         ("stale", "stale-evidence"),
@@ -283,7 +271,6 @@ def test_stale_skipped_and_exit_code_only_evidence_fail(tmp_path: Path, capsys: 
         assert code in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize("required_checks", ["runtime-probe", [""], [1], ["runtime-probe", "runtime-probe"]])
 def test_malformed_required_checks_fail_actionably(
     tmp_path: Path,
@@ -299,7 +286,6 @@ def test_malformed_required_checks_fail_actionably(
     assert "fix:" in captured.err
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize(
     "checks",
     [
@@ -352,7 +338,6 @@ def test_failed_or_contradictory_emitted_check_cannot_pass(
     assert "check-verdict" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_expected_denial_is_an_explicit_success_outcome(tmp_path: Path) -> None:
     _seed(tmp_path)
     evidence = json.loads((tmp_path / "evidence.json").read_bytes())
@@ -370,7 +355,6 @@ def test_expected_denial_is_an_explicit_success_outcome(tmp_path: Path) -> None:
     assert build(config, repo_root=tmp_path).run() == 0
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize(
     ("field", "bad_value"),
     [
@@ -403,7 +387,6 @@ def test_receipt_requires_complete_typed_identity_envelope(
     assert "fix:" in captured
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize(
     ("field", "replacement", "code"),
     [
@@ -429,7 +412,6 @@ def test_receipt_must_match_independently_expected_attempt_identity(
     assert code in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize(
     ("field", "bad_value"),
     [
@@ -453,7 +435,6 @@ def test_expected_attempt_identity_is_complete_and_typed(
     assert "expected-identity" in capsys.readouterr().err  # type: ignore[attr-defined]
 
 
-@pytest.mark.integration
 def test_large_artifact_hashing_uses_bounded_memory(tmp_path: Path) -> None:
     artifact = b"x" * (8 * 1024 * 1024)
     contract = _contract()
@@ -474,7 +455,6 @@ def test_large_artifact_hashing_uses_bounded_memory(tmp_path: Path) -> None:
     assert peak < 3 * 1024 * 1024
 
 
-@pytest.mark.integration
 @pytest.mark.parametrize("location", ["config", "artifact"])
 def test_nul_path_is_an_actionable_finding(tmp_path: Path, capsys: object, location: str) -> None:
     _seed(tmp_path)

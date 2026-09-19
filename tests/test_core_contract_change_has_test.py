@@ -23,6 +23,8 @@ from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.contract_change_has_test import build, main
 
+pytestmark = pytest.mark.integration
+
 # --------------------------------------------------------------------------- #
 # Fixtures: a canned git runner returning fixed merge-base + --name-only output.
 # --------------------------------------------------------------------------- #
@@ -67,7 +69,6 @@ def _cfg(**extra: Any) -> Mapping[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_contract_change_without_test_is_a_violation(tmp_path: Path) -> None:
     # The v0.13.0 shape: the shared contract base changed, no test changed.
     git = _fake_git(changed=["src/tc_fitness/fitness_rule.py"])
@@ -76,7 +77,6 @@ def test_contract_change_without_test_is_a_violation(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_contract_change_with_test_change_is_clean(tmp_path: Path) -> None:
     git = _fake_git(
         changed=["src/tc_fitness/fitness_rule.py", "tests/test_fitness_rule.py"],
@@ -86,7 +86,6 @@ def test_contract_change_with_test_change_is_clean(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_no_contract_change_is_a_noop(tmp_path: Path) -> None:
     # No contract-surface file in the change set → nothing to enforce → clean.
     git = _fake_git(changed=["README.md", "docs/notes.md", "src/tc_fitness/gate.py"])
@@ -100,7 +99,6 @@ def test_no_contract_change_is_a_noop(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_contract_surface_is_config_driven(tmp_path: Path) -> None:
     git = _fake_git(changed=["src/tc_fitness/gate.py"])
     # Default surface (fitness_rule.py) → gate.py is not a contract file → clean.
@@ -114,7 +112,6 @@ def test_contract_surface_is_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in widened.collect_violations()} == {"src/tc_fitness/gate.py"}
 
 
-@pytest.mark.integration
 def test_test_globs_are_config_driven(tmp_path: Path) -> None:
     # A test change under a NON-default location only counts when test_globs says so.
     git = _fake_git(changed=["src/tc_fitness/fitness_rule.py", "spec/rule_spec.py"])
@@ -124,7 +121,6 @@ def test_test_globs_are_config_driven(tmp_path: Path) -> None:
     assert build(_cfg(test_globs=["tests/**", "spec/**"]), repo_root=tmp_path, git_runner=git).run() == 0
 
 
-@pytest.mark.integration
 def test_every_touched_contract_file_is_reported(tmp_path: Path) -> None:
     git = _fake_git(changed=["src/tc_fitness/a.py", "src/tc_fitness/b.py"])
     rule = build(
@@ -143,13 +139,11 @@ def test_every_touched_contract_file_is_reported(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_no_changed_files_passes(tmp_path: Path) -> None:
     rule = build(_cfg(), repo_root=tmp_path, git_runner=_fake_git(changed=[]))
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_merge_base_unavailable_is_a_soft_pass(tmp_path: Path) -> None:
     git = _fake_git(changed=["src/tc_fitness/fitness_rule.py"], mb_rc=1)
     rule = build(_cfg(), repo_root=tmp_path, git_runner=git)
@@ -157,14 +151,12 @@ def test_merge_base_unavailable_is_a_soft_pass(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_diff_failure_is_a_soft_pass(tmp_path: Path) -> None:
     git = _fake_git(changed=["src/tc_fitness/fitness_rule.py"], diff_rc=1)
     rule = build(_cfg(), repo_root=tmp_path, git_runner=git)
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_unsafe_base_ref_skips_without_touching_git(tmp_path: Path) -> None:
     def exploding_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         raise AssertionError("git must not run for an unsafe base ref")
@@ -179,7 +171,6 @@ def test_unsafe_base_ref_skips_without_touching_git(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_run_fails_hard_and_baseline_grandfathers_nothing(tmp_path: Path) -> None:
     git = _fake_git(changed=["src/tc_fitness/fitness_rule.py"])
     rule = build(_cfg(), repo_root=tmp_path, git_runner=git)
@@ -197,7 +188,6 @@ def test_run_fails_hard_and_baseline_grandfathers_nothing(tmp_path: Path) -> Non
     assert entries == []
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_writes_empty_baseline(tmp_path: Path) -> None:
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
     assert rc == 0
@@ -216,7 +206,6 @@ def test_main_establish_baseline_writes_empty_baseline(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.contract_change_has_test as mod
 

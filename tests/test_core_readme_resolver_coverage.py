@@ -14,6 +14,8 @@ from tc_fitness.core_checks.readme_resolver_coverage import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 
 def _mkdir(tmp_path: Path, rel: str) -> Path:
     p = tmp_path / rel
@@ -27,19 +29,16 @@ def _with_readme(tmp_path: Path, rel: str) -> Path:
     return d
 
 
-@pytest.mark.integration
 def test_detection_missing(tmp_path: Path) -> None:
     d = _mkdir(tmp_path, "platform")
     assert directory_missing_resolver(d, resolver_file="README.md") is True
 
 
-@pytest.mark.integration
 def test_detection_present(tmp_path: Path) -> None:
     d = _with_readme(tmp_path, "platform")
     assert directory_missing_resolver(d, resolver_file="README.md") is False
 
 
-@pytest.mark.integration
 def test_top_level_scan_flags_missing(tmp_path: Path) -> None:
     _mkdir(tmp_path, "platform")  # no README
     _with_readme(tmp_path, "docs")
@@ -47,7 +46,6 @@ def test_top_level_scan_flags_missing(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"platform"}
 
 
-@pytest.mark.integration
 def test_exempt_dir_skipped(tmp_path: Path) -> None:
     _mkdir(tmp_path, "logs")  # in default exempt_dirs
     _mkdir(tmp_path, "platform")
@@ -55,7 +53,6 @@ def test_exempt_dir_skipped(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"platform"}
 
 
-@pytest.mark.integration
 def test_hidden_dir_skipped(tmp_path: Path) -> None:
     _mkdir(tmp_path, ".github")
     _mkdir(tmp_path, "platform")
@@ -63,7 +60,6 @@ def test_hidden_dir_skipped(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"platform"}
 
 
-@pytest.mark.integration
 def test_resolver_file_config_driven(tmp_path: Path) -> None:
     d = _mkdir(tmp_path, "platform")
     (d / "INDEX.md").write_text("x\n", encoding="utf-8")
@@ -73,14 +69,12 @@ def test_resolver_file_config_driven(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_exempt_dirs_config_driven(tmp_path: Path) -> None:
     _mkdir(tmp_path, "scratch")
     rule = build({"exempt_dirs": ["scratch"]}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _mkdir(tmp_path, "platform")
     rule = ReadmeResolverCoverage.from_config({}, repo_root=tmp_path)
@@ -89,7 +83,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _mkdir(tmp_path, "platform")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -97,7 +90,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "readme-resolver-coverage-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.readme_resolver_coverage as mod
 

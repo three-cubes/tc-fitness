@@ -27,25 +27,24 @@ from tc_fitness.ratchet import (
     parse_overrides,
 )
 
+pytestmark = pytest.mark.unit
+
 # --------------------------------------------------------------------------- #
 # Drift zone 1 — ONE override-rationale min-length (40, strictly-less-than)
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.unit
 def test_override_min_len_is_forty() -> None:
     # The reconciled constant — NOT 20. Coverage's old 20 was the latent bug.
     assert OVERRIDE_MIN_REASON_LEN == 40
 
 
-@pytest.mark.unit
 def test_reason_just_under_forty_is_vague() -> None:
     reason = "x" * 39
     assert len(reason) == 39
     assert is_vague_reason(reason) is True
 
 
-@pytest.mark.unit
 def test_reason_at_forty_is_not_vague() -> None:
     # Strictly-less-than: exactly 40 chars passes (40 < 40 is False).
     reason = "x" * 40
@@ -53,21 +52,18 @@ def test_reason_at_forty_is_not_vague() -> None:
     assert is_vague_reason(reason) is False
 
 
-@pytest.mark.unit
 def test_reason_above_forty_is_not_vague() -> None:
     reason = "this rationale is comfortably longer than forty characters total"
     assert len(reason) >= 40
     assert is_vague_reason(reason) is False
 
 
-@pytest.mark.unit
 def test_vague_lead_in_tokens_rejected_even_when_long() -> None:
     # A long-enough string that starts with a vague token is still vague.
     assert is_vague_reason("WIP " + "padding " * 10) is True
     assert is_vague_reason("will-fix-later " + "padding " * 10) is True
 
 
-@pytest.mark.unit
 def test_trailing_dot_and_whitespace_stripped_before_measuring() -> None:
     # 39 substantive chars + a dot + spaces is still vague (the dot/space
     # don't count toward the length).
@@ -80,7 +76,6 @@ def test_trailing_dot_and_whitespace_stripped_before_measuring() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.unit
 def test_is_vague_reason_default_min_len_is_unchanged() -> None:
     # v0.1.0 contract: with min_len omitted the floor is OVERRIDE_MIN_REASON_LEN
     # (=40). A 39-char reason is vague, a 40-char reason is not — byte-identical
@@ -89,7 +84,6 @@ def test_is_vague_reason_default_min_len_is_unchanged() -> None:
     assert is_vague_reason("x" * 40) is False
 
 
-@pytest.mark.unit
 def test_is_vague_reason_floor_override_to_ten() -> None:
     # taz passes min_len=10: a 10-char reason that was vague at the 40-floor is
     # now acceptable, while a 9-char reason is still vague.
@@ -100,14 +94,12 @@ def test_is_vague_reason_floor_override_to_ten() -> None:
     assert is_vague_reason(nine, min_len=10) is True  # 9 < 10 still vague
 
 
-@pytest.mark.unit
 def test_min_len_override_still_strips_dot_and_whitespace() -> None:
     # 9 substantive chars + dot + spaces is still 9 → vague at min_len=10.
     assert is_vague_reason("  " + ("y" * 9) + ".  ", min_len=10) is True
     assert is_vague_reason("  " + ("y" * 10) + ".  ", min_len=10) is False
 
 
-@pytest.mark.unit
 def test_min_len_override_does_not_bypass_vague_lead_in_tokens() -> None:
     # The vague lead-in set (WIP/TODO/...) is independent of the length floor:
     # a long-enough reason that starts with a vague token is still vague even
@@ -115,14 +107,12 @@ def test_min_len_override_does_not_bypass_vague_lead_in_tokens() -> None:
     assert is_vague_reason("WIP and then some more words here", min_len=10) is True
 
 
-@pytest.mark.unit
 def test_constant_unchanged_at_forty() -> None:
     # The constant stays 40 — taz lowers the floor per-call, it does NOT mutate
     # the shared default that kairix's @v0.1.0 gates depend on.
     assert OVERRIDE_MIN_REASON_LEN == 40
 
 
-@pytest.mark.unit
 def test_parse_overrides_default_min_len_unchanged() -> None:
     # v0.1.0 call shape (no min_len): a short reason is still marked vague at 40.
     line = "coverage-ratchet-acknowledged: scripts/x.py — short reason here"
@@ -131,7 +121,6 @@ def test_parse_overrides_default_min_len_unchanged() -> None:
     assert overrides[0].vague is True  # "short reason here" is < 40 chars
 
 
-@pytest.mark.unit
 def test_parse_overrides_forwards_min_len_to_vague_check() -> None:
     # With min_len=10 the same short reason clears the floor → not vague.
     line = "coverage-ratchet-acknowledged: scripts/x.py — short reason here"
@@ -152,7 +141,6 @@ def test_parse_overrides_forwards_min_len_to_vague_check() -> None:
 _LONG = "a sufficiently long and specific rationale exceeding forty chars"
 
 
-@pytest.mark.unit
 def test_coverage_override_accepts_em_dash() -> None:
     line = f"coverage-ratchet-acknowledged: scripts/x.py — {_LONG}"
     overrides = parse_overrides(line, COVERAGE_OVERRIDE_RE)
@@ -161,7 +149,6 @@ def test_coverage_override_accepts_em_dash() -> None:
     assert overrides[0].vague is False
 
 
-@pytest.mark.unit
 def test_coverage_override_accepts_plain_hyphen() -> None:
     line = f"coverage-ratchet-acknowledged: scripts/x.py - {_LONG}"
     overrides = parse_overrides(line, COVERAGE_OVERRIDE_RE)
@@ -170,7 +157,6 @@ def test_coverage_override_accepts_plain_hyphen() -> None:
     assert overrides[0].vague is False
 
 
-@pytest.mark.unit
 def test_mutation_override_accepts_both_separators() -> None:
     em = parse_overrides(f"mutation-ratchet-acknowledged: pkg.mod — {_LONG}", MUTATION_OVERRIDE_RE)
     hy = parse_overrides(f"mutation-ratchet-acknowledged: pkg.mod - {_LONG}", MUTATION_OVERRIDE_RE)
@@ -179,27 +165,23 @@ def test_mutation_override_accepts_both_separators() -> None:
     assert hy[0].target == "pkg.mod"
 
 
-@pytest.mark.unit
 def test_override_short_reason_marked_vague() -> None:
     line = "coverage-ratchet-acknowledged: scripts/x.py — WIP"
     overrides = parse_overrides(line, COVERAGE_OVERRIDE_RE)
     assert overrides[0].vague is True
 
 
-@pytest.mark.unit
 def test_make_override_re_custom_keyword() -> None:
     rx = make_override_re("custom-ratchet-acknowledged")
     out = parse_overrides(f"custom-ratchet-acknowledged: a/b.py — {_LONG}", rx)
     assert out == [Override(target="a/b.py", reason=_LONG, vague=False)]
 
 
-@pytest.mark.unit
 def test_override_re_ignores_non_matching_lines() -> None:
     text = "fix: something\nrandom commit body\nno acknowledgement here"
     assert parse_overrides(text, COVERAGE_OVERRIDE_RE) == []
 
 
-@pytest.mark.unit
 def test_override_re_parses_one_line_in_a_full_commit_message() -> None:
     text = (
         "feat(x): do a thing\n\n"
@@ -216,19 +198,16 @@ def test_override_re_parses_one_line_in_a_full_commit_message() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.unit
 def test_nosonar_in_substring_set() -> None:
     assert "# NOSONAR" in SUPPRESSION_PATTERNS
     assert "// NOSONAR" in SUPPRESSION_PATTERNS
 
 
-@pytest.mark.unit
 def test_superset_substring_markers_present() -> None:
     for marker in ("# pragma: no cover", "# noqa:", "// noqa:", "# type: ignore", "# nosec"):
         assert marker in SUPPRESSION_PATTERNS
 
 
-@pytest.mark.unit
 def test_contains_suppression_flags_any_marker() -> None:
     assert contains_suppression("x = 1  # NOSONAR — rationale here") is True
     assert contains_suppression("y = requests.get(u)  # noqa: BLE001 — ctx") is True
@@ -236,13 +215,11 @@ def test_contains_suppression_flags_any_marker() -> None:
     assert contains_suppression("plain = 1  # ordinary comment") is False
 
 
-@pytest.mark.unit
 def test_nosonar_in_bare_pattern_set() -> None:
     # A bare NOSONAR (no rationale) must match a bare-pattern regex.
     assert any(p.search("x = 1  # NOSONAR") for p in BARE_SUPPRESSION_PATTERNS)
 
 
-@pytest.mark.unit
 def test_bare_suppression_no_rationale_flagged() -> None:
     assert is_bare_suppression("x = 1  # NOSONAR") is True
     assert is_bare_suppression("y = 1  # noqa") is True
@@ -254,7 +231,6 @@ def test_bare_suppression_no_rationale_flagged() -> None:
     assert is_bare_suppression("v = 1  # nosec B607") is True
 
 
-@pytest.mark.unit
 def test_suppression_with_rationale_passes() -> None:
     # A same-line rationale after the token means NOT bare → no match.
     assert is_bare_suppression("x = 1  # NOSONAR — internal log path; not user-controlled") is False
@@ -264,6 +240,5 @@ def test_suppression_with_rationale_passes() -> None:
     assert is_bare_suppression("v = 1  # nosec B607 — fixed argv, no shell") is False
 
 
-@pytest.mark.unit
 def test_bare_patterns_are_compiled_regexes() -> None:
     assert all(isinstance(p, re.Pattern) for p in BARE_SUPPRESSION_PATTERNS)

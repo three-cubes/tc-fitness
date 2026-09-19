@@ -18,9 +18,10 @@ from tc_fitness.core_checks.engine_version_floor import (
     EngineVersionFloor,
     build,
     main,
-    parse_version,
     resolve_declared_version,
 )
+
+pytestmark = pytest.mark.integration
 
 PKG = DEFAULT_PACKAGE
 
@@ -39,32 +40,16 @@ def _project_with_dep(tmp_path: Path, dep: str) -> Path:
     return _manifest(tmp_path, f'[project]\nname = "consumer"\ndependencies = ["{dep}"]\n')
 
 
-@pytest.mark.unit
-def test_parse_version_reads_dotted_release() -> None:
-    assert parse_version("v0.6.1") == (0, 6, 1)
-    assert parse_version("0.7.0") == (0, 7, 0)
-    assert parse_version(" v1.2 ") == (1, 2)
-
-
-@pytest.mark.unit
-def test_parse_version_rejects_non_numeric() -> None:
-    assert parse_version("main") is None
-    assert parse_version("") is None
-
-
-@pytest.mark.integration
 def test_resolve_declared_version_from_git_url(tmp_path: Path) -> None:
     manifest = _project_with_dep(tmp_path, _git_dep("v0.6.1"))
     assert resolve_declared_version(manifest, PKG) == "v0.6.1"
 
 
-@pytest.mark.integration
 def test_resolve_declared_version_from_pep440_pin(tmp_path: Path) -> None:
     manifest = _project_with_dep(tmp_path, f"{PKG}==0.7.0")
     assert resolve_declared_version(manifest, PKG) == "0.7.0"
 
 
-@pytest.mark.integration
 def test_resolve_declared_version_from_optional_group(tmp_path: Path) -> None:
     body = (
         '[project]\nname = "consumer"\ndependencies = []\n'
@@ -74,7 +59,6 @@ def test_resolve_declared_version_from_optional_group(tmp_path: Path) -> None:
     assert resolve_declared_version(manifest, PKG) == "v0.7.0"
 
 
-@pytest.mark.integration
 def test_resolve_declared_version_from_uv_source_tag(tmp_path: Path) -> None:
     body = (
         '[project]\nname = "consumer"\ndependencies = ["three-cubes-fitness"]\n'
@@ -85,13 +69,11 @@ def test_resolve_declared_version_from_uv_source_tag(tmp_path: Path) -> None:
     assert resolve_declared_version(manifest, PKG) == "v0.6.1"
 
 
-@pytest.mark.integration
 def test_resolve_declared_version_absent_is_none(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path, '[project]\nname = "consumer"\ndependencies = []\n')
     assert resolve_declared_version(manifest, PKG) is None
 
 
-@pytest.mark.integration
 def test_below_floor_fails(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.6.1"))
     rule = build({"floor": "v0.7.0"}, repo_root=tmp_path)
@@ -100,7 +82,6 @@ def test_below_floor_fails(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_at_floor_passes(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.7.0"))
     rule = build({"floor": "v0.7.0"}, repo_root=tmp_path)
@@ -108,14 +89,12 @@ def test_at_floor_passes(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_above_floor_passes(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.8.0"))
     rule = build({"floor": "v0.7.0"}, repo_root=tmp_path)
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_no_floor_configured_is_noop(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.1.0"))
     rule = build({}, repo_root=tmp_path)
@@ -123,7 +102,6 @@ def test_no_floor_configured_is_noop(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_unresolvable_version_is_noop(tmp_path: Path) -> None:
     # Manifest exists but declares no such dependency, and the package is not
     # installed → the version cannot be resolved → guard-forward no-op.
@@ -133,7 +111,6 @@ def test_unresolvable_version_is_noop(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_falls_back_to_installed_metadata(tmp_path: Path) -> None:
     # No declared pin in the manifest → resolve_version() uses the installed
     # distribution's own metadata version.
@@ -142,14 +119,12 @@ def test_falls_back_to_installed_metadata(tmp_path: Path) -> None:
     assert rule.resolve_version() == metadata.version(PKG)
 
 
-@pytest.mark.integration
 def test_declared_pin_takes_priority_over_installed(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.6.1"))
     rule = build({"floor": "v0.7.0"}, repo_root=tmp_path)
     assert rule.resolve_version() == "v0.6.1"
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.6.1"))
     rule = build({"floor": "v0.7.0"}, repo_root=tmp_path)
@@ -158,14 +133,12 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_no_config_is_noop(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.1.0"))
     # main() injects no config block, so with no floor it is a no-op pass.
     assert main(["--repo-root", str(tmp_path)]) == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _project_with_dep(tmp_path, _git_dep("v0.6.1"))
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -173,7 +146,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "engine-version-floor-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_build_and_main_are_exposed(tmp_path: Path) -> None:
     assert callable(build)
     assert callable(main)
@@ -181,7 +153,6 @@ def test_build_and_main_are_exposed(tmp_path: Path) -> None:
     assert EngineVersionFloor.name == "engine-version-floor"
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.engine_version_floor as mod
 

@@ -9,6 +9,8 @@ from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.behavioural_evidence import BehaviouralEvidence, build
 
+pytestmark = pytest.mark.integration
+
 
 def _seed(repo: Path, rel: str, body: str = "") -> Path:
     path = repo / rel
@@ -58,7 +60,6 @@ def _seed_surfaces(repo: Path) -> None:
     _seed(repo, "infra/docker/build-tool-runtime.sh", "#!/usr/bin/env bash\n")
 
 
-@pytest.mark.integration
 def test_real_executable_and_observed_artifact_satisfy_claim(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(tmp_path, "tests/integration/test_image_build.py", _valid_test())
@@ -66,7 +67,6 @@ def test_real_executable_and_observed_artifact_satisfy_claim(tmp_path: Path) -> 
     assert build(_config(), repo_root=tmp_path).collect_findings() == ()
 
 
-@pytest.mark.integration
 def test_source_text_assertions_cannot_satisfy_behavioural_claim(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(
@@ -88,7 +88,6 @@ def test_image_shape():
     assert {finding.code for finding in findings} == {"missing-executable-evidence"}
 
 
-@pytest.mark.integration
 def test_unrelated_subprocess_cannot_satisfy_named_executable(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(
@@ -110,7 +109,6 @@ def test_image_shape():
     assert {finding.code for finding in findings} == {"missing-executable-evidence"}
 
 
-@pytest.mark.integration
 def test_execution_without_observed_process_result_is_not_evidence(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(
@@ -138,7 +136,6 @@ def test_image_shape(tmp_path):
     }
 
 
-@pytest.mark.integration
 def test_process_success_without_observed_output_is_not_evidence(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(
@@ -152,7 +149,6 @@ def test_process_success_without_observed_output_is_not_evidence(tmp_path: Path)
     assert {finding.code for finding in findings} == {"missing-output-observation"}
 
 
-@pytest.mark.integration
 def test_unrelated_file_assertion_is_not_an_output_observation(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(
@@ -166,7 +162,6 @@ def test_unrelated_file_assertion_is_not_an_output_observation(tmp_path: Path) -
     assert {finding.code for finding in findings} == {"missing-output-observation"}
 
 
-@pytest.mark.integration
 def test_every_matched_critical_surface_requires_a_claim(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(tmp_path, "infra/docker/Dockerfile.other", "FROM scratch\n")
@@ -179,7 +174,6 @@ def test_every_matched_critical_surface_requires_a_claim(tmp_path: Path) -> None
     ]
 
 
-@pytest.mark.integration
 def test_missing_test_and_surface_fail_instead_of_vacuously_passing(tmp_path: Path) -> None:
     findings = build(_config(test="tests/integration/missing.py"), repo_root=tmp_path).collect_findings()
 
@@ -190,7 +184,6 @@ def test_missing_test_and_surface_fail_instead_of_vacuously_passing(tmp_path: Pa
     }
 
 
-@pytest.mark.integration
 def test_behaviour_marker_is_required_on_evidence_test(tmp_path: Path) -> None:
     _seed_surfaces(tmp_path)
     _seed(
@@ -204,7 +197,6 @@ def test_behaviour_marker_is_required_on_evidence_test(tmp_path: Path) -> None:
     assert {finding.code for finding in findings} == {"missing-behaviour-marker"}
 
 
-@pytest.mark.integration
 def test_claim_cannot_omit_surfaces_tests_or_executables(tmp_path: Path) -> None:
     config = {
         "surface_globs": ["infra/docker/Dockerfile.*"],
@@ -222,12 +214,10 @@ def test_claim_cannot_omit_surfaces_tests_or_executables(tmp_path: Path) -> None
     }
 
 
-@pytest.mark.integration
 def test_empty_configuration_is_vacuous_for_additive_adoption(tmp_path: Path) -> None:
     assert build({}, repo_root=tmp_path).run() == 0
 
 
-@pytest.mark.integration
 def test_findings_are_hard_and_cannot_be_grandfathered(tmp_path: Path) -> None:
     rule = build(_config(), repo_root=tmp_path)
 
@@ -235,12 +225,10 @@ def test_findings_are_hard_and_cannot_be_grandfathered(tmp_path: Path) -> None:
         rule.establish_baseline()
 
 
-@pytest.mark.integration
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), BehaviouralEvidence)
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.behavioural_evidence as mod
 

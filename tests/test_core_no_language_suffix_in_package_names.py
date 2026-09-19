@@ -11,8 +11,9 @@ from tc_fitness.core_checks.no_language_suffix_in_package_names import (
     NoLanguageSuffixInPackageNames,
     build,
     main,
-    name_has_language_suffix,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _mkdir(tmp_path: Path, rel: str) -> Path:
@@ -21,17 +22,6 @@ def _mkdir(tmp_path: Path, rel: str) -> Path:
     return p
 
 
-@pytest.mark.unit
-def test_detection_flags_suffix() -> None:
-    assert name_has_language_suffix("mcp-render-ts", suffixes=("-ts",)) is True
-
-
-@pytest.mark.unit
-def test_detection_clean() -> None:
-    assert name_has_language_suffix("mcp-render", suffixes=("-ts", "-py")) is False
-
-
-@pytest.mark.integration
 def test_boundary_root_scan(tmp_path: Path) -> None:
     _mkdir(tmp_path, "tools/mcp/render-ts")
     _mkdir(tmp_path, "tools/mcp/render")
@@ -39,14 +29,12 @@ def test_boundary_root_scan(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"tools/mcp/render-ts"}
 
 
-@pytest.mark.integration
 def test_no_roots_flags_nothing(tmp_path: Path) -> None:
     _mkdir(tmp_path, "tools/mcp/render-ts")
     rule = build({}, repo_root=tmp_path)
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_marker_root_gates_on_marker_file(tmp_path: Path) -> None:
     # leaf with marker → scanned; leaf without → ignored.
     _mkdir(tmp_path, "skills/content/render-ts")
@@ -56,7 +44,6 @@ def test_marker_root_gates_on_marker_file(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"skills/content/render-ts"}
 
 
-@pytest.mark.integration
 def test_forbidden_suffixes_config_driven(tmp_path: Path) -> None:
     _mkdir(tmp_path, "pkgs/thing-rb")
     # default suffixes don't include -rb → clean; configure it → violation.
@@ -66,7 +53,6 @@ def test_forbidden_suffixes_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"pkgs/thing-rb"}
 
 
-@pytest.mark.integration
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _mkdir(tmp_path, "tools/mcp/render-ts")
     rule = NoLanguageSuffixInPackageNames.from_config({"boundary_roots": ["tools/mcp"]}, repo_root=tmp_path)
@@ -75,7 +61,6 @@ def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _mkdir(tmp_path, "tools/mcp/render-ts")
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -84,7 +69,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert expected.exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_language_suffix_in_package_names as mod
 

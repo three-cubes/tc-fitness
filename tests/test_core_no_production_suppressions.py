@@ -14,6 +14,8 @@ from tc_fitness.core_checks.no_production_suppressions import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 _SUPPRESSED = "result = parse(payload)  # noqa: BLE001\n"
 _CLEAN = "result = parse(payload)  # finding fixed upstream\n"
 
@@ -25,19 +27,16 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_core_flags_suppression(tmp_path: Path) -> None:
     p = _seed(tmp_path, "s.py", _SUPPRESSED)
     assert file_contains_suppression(p, ("# noqa:",)) is True
 
 
-@pytest.mark.integration
 def test_detection_core_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "c.py", _CLEAN)
     assert file_contains_suppression(p, ("# noqa:",)) is False
 
 
-@pytest.mark.integration
 def test_exempt_prefix_skips_file(tmp_path: Path) -> None:
     _seed(tmp_path, "src/app.py", _SUPPRESSED)
     _seed(tmp_path, "scripts/tool.py", _SUPPRESSED)
@@ -48,7 +47,6 @@ def test_exempt_prefix_skips_file(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/app.py"}
 
 
-@pytest.mark.integration
 def test_test_file_basename_is_exempt(tmp_path: Path) -> None:
     _seed(tmp_path, "src/app.py", _SUPPRESSED)
     _seed(tmp_path, "src/test_app.py", _SUPPRESSED)
@@ -56,7 +54,6 @@ def test_test_file_basename_is_exempt(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"src/app.py"}
 
 
-@pytest.mark.integration
 def test_suppression_patterns_config_driven(tmp_path: Path) -> None:
     p = _seed(tmp_path, "src/app.ts", "const x = 1; // NOSONAR\n")
     rule = build(
@@ -66,7 +63,6 @@ def test_suppression_patterns_config_driven(tmp_path: Path) -> None:
     assert rule.file_has_violation(p) is True
 
 
-@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "src/app.py", _SUPPRESSED)
     rule = NoProductionSuppressions.from_config({"roots": ["src"]}, repo_root=tmp_path)
@@ -75,7 +71,6 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "app.py", _SUPPRESSED)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -83,7 +78,6 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-production-suppressions-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_production_suppressions as mod
 

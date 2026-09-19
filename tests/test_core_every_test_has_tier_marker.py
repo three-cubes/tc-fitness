@@ -14,6 +14,8 @@ from tc_fitness.core_checks.every_test_has_tier_marker import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 _UNTAGGED = """
 def test_parser() -> None:
     assert True
@@ -54,31 +56,34 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_untagged_is_violation(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _UNTAGGED)
     assert file_missing_tier_marker(p, tiers=_TIERS) is True
 
 
-@pytest.mark.integration
 def test_module_marker_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _MODULE_MARKER)
     assert file_missing_tier_marker(p, tiers=_TIERS) is False
 
 
-@pytest.mark.integration
 def test_function_marker_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _FUNCTION_MARKER)
     assert file_missing_tier_marker(p, tiers=_TIERS) is False
 
 
-@pytest.mark.integration
+def test_canonical_mode_rejects_function_only_module(tmp_path: Path) -> None:
+    _seed(tmp_path, "tests/test_x.py", _FUNCTION_MARKER)
+    rule = EveryTestHasTierMarker.from_config(
+        {"roots": ["tests"], "require_module_marker": True}, repo_root=tmp_path
+    )
+    assert rule.collect_violations() == {Path("tests/test_x.py")}
+
+
 def test_file_without_tests_passes(tmp_path: Path) -> None:
     p = _seed(tmp_path, "test_x.py", _NO_TESTS)
     assert file_missing_tier_marker(p, tiers=_TIERS) is False
 
 
-@pytest.mark.integration
 def test_tier_vocabulary_is_config_driven(tmp_path: Path) -> None:
     body = "import pytest\n\n@pytest.mark.fast\ndef test_x() -> None:\n    assert True\n"
     _seed(tmp_path, "tests/test_x.py", body)
@@ -90,7 +95,6 @@ def test_tier_vocabulary_is_config_driven(tmp_path: Path) -> None:
     assert custom.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_scope_skips_non_test_files_and_excluded_parts(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/helpers.py", _UNTAGGED)  # not test_*
     _seed(tmp_path, "tests/fixtures/test_x.py", _UNTAGGED)  # excluded part
@@ -99,7 +103,6 @@ def test_scope_skips_non_test_files_and_excluded_parts(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_real.py"}
 
 
-@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_x.py", _UNTAGGED)
     rule = EveryTestHasTierMarker.from_config({"roots": ["tests"]}, repo_root=tmp_path)
@@ -108,7 +111,6 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "test_x.py", _UNTAGGED)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -116,21 +118,22 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "every-test-has-tier-marker-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), EveryTestHasTierMarker)
 
 
-@pytest.mark.integration
 def test_repository_tests_are_all_classified_by_tier() -> None:
     rule = EveryTestHasTierMarker.from_config(
-        {"roots": ["tests"], "tier_markers": ["unit", "contract", "integration", "e2e"]},
+        {
+            "roots": ["tests"],
+            "tier_markers": ["unit", "contract", "integration", "e2e"],
+            "require_module_marker": True,
+        },
         repo_root=Path(__file__).parent.parent,
     )
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.every_test_has_tier_marker as mod
 

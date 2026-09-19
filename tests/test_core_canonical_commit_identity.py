@@ -18,6 +18,8 @@ from tc_fitness.core_checks.canonical_commit_identity import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 BOT = "295831460+three-cubes-agent[bot]@users.noreply.github.com"
 HUMAN = "dan@example.com"
 ALLOW = {"allowed_emails": [BOT, HUMAN]}
@@ -72,7 +74,6 @@ def _commit(
     ).stdout.strip()
 
 
-@pytest.mark.integration
 def test_empty_allowlist_is_noop(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     _commit(repo, "base")
@@ -81,7 +82,6 @@ def test_empty_allowlist_is_noop(tmp_path: Path) -> None:
     assert rule.run() == 0  # no allowlist configured → no-op pass
 
 
-@pytest.mark.integration
 def test_allowed_identities_pass(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     base = _commit(repo, "base", ae=BOT, an="three-cubes-agent[bot]")
@@ -90,7 +90,6 @@ def test_allowed_identities_pass(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_non_allowed_author_email_fails(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     base = _commit(repo, "base", ae=HUMAN)
@@ -99,7 +98,6 @@ def test_non_allowed_author_email_fails(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_failure_remediation_separates_commit_metadata_from_github_authentication(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -116,7 +114,6 @@ def test_failure_remediation_separates_commit_metadata_from_github_authenticatio
     assert "mint a per-agent app token" not in output
 
 
-@pytest.mark.integration
 def test_committer_distinct_from_author_is_checked(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     base = _commit(repo, "base", ae=HUMAN)
@@ -126,7 +123,6 @@ def test_committer_distinct_from_author_is_checked(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_emoji_in_name_fails_when_name_pattern_configured(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     base = _commit(repo, "base", ae=HUMAN, an="Dan")
@@ -138,7 +134,6 @@ def test_emoji_in_name_fails_when_name_pattern_configured(tmp_path: Path) -> Non
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_cutover_ref_grandfathers_prior_commits(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     _commit(repo, "old-rogue", an="feat-156-deploy", ae="noreply@anthropic.com")
@@ -148,7 +143,6 @@ def test_cutover_ref_grandfathers_prior_commits(tmp_path: Path) -> None:
     assert rule.run() == 0  # the pre-cutover rogue commit is out of range
 
 
-@pytest.mark.integration
 def test_webflow_merge_committer_passes(tmp_path: Path) -> None:
     """A squash/merge stamped by GitHub's web-flow committer passes: the author is
     the allowlisted agent, the committer is ``GitHub <noreply@github.com>`` (SGO-198)."""
@@ -159,7 +153,6 @@ def test_webflow_merge_committer_passes(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_platform_bot_committers_pass(tmp_path: Path) -> None:
     """Dependabot and Renovate are intrinsically allowed committers (SGO-198)."""
     repo = _init(tmp_path)
@@ -170,7 +163,6 @@ def test_platform_bot_committers_pass(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_platform_committer_exemption_bypasses_name_patterns(tmp_path: Path) -> None:
     """The ``[bot]`` in a platform committer name is exempt even under a strict name
     pattern that would otherwise reject the brackets (author name stays pattern-gated)."""
@@ -191,7 +183,6 @@ def test_platform_committer_exemption_bypasses_name_patterns(tmp_path: Path) -> 
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_rogue_author_fails_even_with_webflow_committer(tmp_path: Path) -> None:
     """The committer exemption never rescues a rogue AUTHOR — author stays strict."""
     repo = _init(tmp_path)
@@ -201,7 +192,6 @@ def test_rogue_author_fails_even_with_webflow_committer(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_non_platform_bot_committer_still_fails(tmp_path: Path) -> None:
     """The committer exemption is narrow: a bot committer NOT in the platform set
     (here github-actions[bot]) and off the allowlist is still a violation."""
@@ -212,7 +202,6 @@ def test_non_platform_bot_committer_still_fails(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-@pytest.mark.integration
 def test_main_repo_root_and_establish(tmp_path: Path) -> None:
     repo = _init(tmp_path)
     base = _commit(repo, "base", ae=HUMAN)

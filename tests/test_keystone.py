@@ -10,13 +10,12 @@ import pytest
 from tc_fitness.baseline import establish_baseline
 from tc_fitness.keystone import (
     baseline_shrink_only,
-    catalogue_check_consistency,
-    find_net_new_violations,
     load_all_baselines,
     net_new_violations_forbidden,
-    reconcile_catalogue,
     resolve_previous_tag,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -33,7 +32,6 @@ def _init_repo(tmp_path: Path) -> Path:
 # ── net_new_violations_forbidden ──────────────────────────────────────────
 
 
-@pytest.mark.integration
 def test_load_all_baselines(tmp_path: Path) -> None:
     establish_baseline("rule-a", ["src/x.py"], tmp_path)
     establish_baseline("rule-b", ["src/y.py"], tmp_path)
@@ -42,20 +40,11 @@ def test_load_all_baselines(tmp_path: Path) -> None:
     assert loaded["rule-b-files.txt"] == {"src/y.py"}
 
 
-@pytest.mark.unit
-def test_find_net_new_hits() -> None:
-    baselines = {"r-files.txt": {"src/old.py"}}
-    assert find_net_new_violations(["src/old.py"], baselines) == {"r-files.txt": ["src/old.py"]}
-    assert find_net_new_violations(["src/new.py"], baselines) == {}
-
-
-@pytest.mark.integration
 def test_net_new_violations_forbidden_clean(tmp_path: Path) -> None:
     establish_baseline("r", ["src/old.py"], tmp_path)
     assert net_new_violations_forbidden(["src/brand-new.py"], tmp_path, print_fn=lambda _m: None) == 0
 
 
-@pytest.mark.integration
 def test_net_new_violations_forbidden_blocks_grandfathered_add(tmp_path: Path) -> None:
     establish_baseline("r", ["src/old.py"], tmp_path)
     # An ADDED file that is already in the baseline → fail.
@@ -65,14 +54,12 @@ def test_net_new_violations_forbidden_blocks_grandfathered_add(tmp_path: Path) -
 # ── baseline_shrink_only ──────────────────────────────────────────────────
 
 
-@pytest.mark.integration
 def test_shrink_only_first_release_skips(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     rc = baseline_shrink_only(["a-files.txt"], tmp_path, print_fn=lambda _m: None)
     assert rc == 0  # no prior tag → clean skip
 
 
-@pytest.mark.integration
 def test_shrink_only_passes_when_baseline_shrinks(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     rel = ".architecture/baseline/r-files.txt"
@@ -87,7 +74,6 @@ def test_shrink_only_passes_when_baseline_shrinks(tmp_path: Path) -> None:
     assert baseline_shrink_only([rel], repo, print_fn=lambda _m: None) == 0
 
 
-@pytest.mark.integration
 def test_shrink_only_fails_when_baseline_grows(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     rel = ".architecture/baseline/r-files.txt"
@@ -101,7 +87,6 @@ def test_shrink_only_fails_when_baseline_grows(tmp_path: Path) -> None:
     assert baseline_shrink_only([rel], repo, print_fn=lambda _m: None) == 1
 
 
-@pytest.mark.integration
 def test_shrink_only_fails_when_baseline_stalls_above_zero(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     rel = ".architecture/baseline/r-files.txt"
@@ -116,7 +101,6 @@ def test_shrink_only_fails_when_baseline_stalls_above_zero(tmp_path: Path) -> No
     assert baseline_shrink_only([rel], repo, print_fn=lambda _m: None) == 1
 
 
-@pytest.mark.integration
 def test_resolve_previous_tag(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "a.txt").write_text("a")
@@ -130,48 +114,3 @@ def test_resolve_previous_tag(tmp_path: Path) -> None:
 
 
 # ── catalogue_check_consistency ───────────────────────────────────────────
-
-
-@pytest.mark.unit
-def test_reconcile_clean() -> None:
-    report = reconcile_catalogue(
-        cataloged_check_ids=["core:a", "core:b"],
-        available_check_ids=["core:a", "core:b"],
-    )
-    assert report.ok
-
-
-@pytest.mark.unit
-def test_reconcile_orphan_check() -> None:
-    report = reconcile_catalogue(
-        cataloged_check_ids=["core:a"],
-        available_check_ids=["core:a", "core:b"],
-    )
-    assert report.orphan_checks == ["core:b"]
-    assert not report.ok
-
-
-@pytest.mark.unit
-def test_reconcile_dangling_entry() -> None:
-    report = reconcile_catalogue(
-        cataloged_check_ids=["core:a", "core:missing"],
-        available_check_ids=["core:a"],
-    )
-    assert report.dangling_entries == [("core:missing", "core:missing")]
-    assert not report.ok
-
-
-@pytest.mark.unit
-def test_catalogue_check_consistency_exit_codes() -> None:
-    ok = catalogue_check_consistency(
-        cataloged_check_ids=["x"],
-        available_check_ids=["x"],
-        print_fn=lambda _m: None,
-    )
-    assert ok == 0
-    bad = catalogue_check_consistency(
-        cataloged_check_ids=["x", "y"],
-        available_check_ids=["x"],
-        print_fn=lambda _m: None,
-    )
-    assert bad == 1

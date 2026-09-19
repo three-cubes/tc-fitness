@@ -14,6 +14,8 @@ from tc_fitness.core_checks.no_test_only_kwargs import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 _SEAM = """
 def route(intent, clock_fn=None):
     return intent
@@ -38,26 +40,22 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.integration
 def test_detection_flags_free_function_seam(tmp_path: Path) -> None:
     p = _seed(tmp_path, "router.py", _SEAM)
     found = find_test_only_kwargs_in_file(p, suffixes=("_fn",))
     assert found == [("route", "clock_fn", 2)]
 
 
-@pytest.mark.integration
 def test_detection_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, "router.py", _CLEAN)
     assert find_test_only_kwargs_in_file(p, suffixes=("_fn",)) == []
 
 
-@pytest.mark.integration
 def test_methods_on_class_are_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "deps.py", _METHOD_EXEMPT)
     assert find_test_only_kwargs_in_file(p, suffixes=("_fn",)) == []
 
 
-@pytest.mark.integration
 def test_suffixes_are_config_driven(tmp_path: Path) -> None:
     body = "def make(store_loader=None):\n    return store_loader\n"
     _seed(tmp_path, "scripts/m.py", body)
@@ -69,7 +67,6 @@ def test_suffixes_are_config_driven(tmp_path: Path) -> None:
     assert {str(p) for p in custom.collect_violations()} == {"scripts/m.py"}
 
 
-@pytest.mark.integration
 def test_exempt_keys_allow_documented_seam(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/router.py", _SEAM)
     rule = NoTestOnlyKwargs.from_config(
@@ -79,7 +76,6 @@ def test_exempt_keys_allow_documented_seam(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
-@pytest.mark.integration
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/router.py", _SEAM)
     _seed(tmp_path, "vendor/router.py", _SEAM)
@@ -87,7 +83,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     assert {str(p) for p in rule.collect_violations()} == {"scripts/router.py"}
 
 
-@pytest.mark.integration
 def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/router.py", _SEAM)
     rule = NoTestOnlyKwargs.from_config({"roots": ["scripts"]}, repo_root=tmp_path)
@@ -96,7 +91,6 @@ def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
     assert rule.run() == 0
 
 
-@pytest.mark.integration
 def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     _seed(tmp_path, "router.py", _SEAM)
     rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
@@ -104,12 +98,10 @@ def test_main_establish_baseline_mode(tmp_path: Path) -> None:
     assert (tmp_path / ".architecture" / "baseline" / "no-test-only-kwargs-files.txt").exists()
 
 
-@pytest.mark.integration
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), NoTestOnlyKwargs)
 
 
-@pytest.mark.integration
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.no_test_only_kwargs as mod
 
