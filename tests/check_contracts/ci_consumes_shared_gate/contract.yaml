@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:ci_consumes_shared_gate
+config: {}
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: ci-consumes-shared-gate
+      path: .
+      message_contains: NONE consumes the shared gate
+dependencies: []

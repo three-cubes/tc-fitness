@@ -1,0 +1,21 @@
+schema: tc.fitness/check-contract/v1
+check: core:ci_fanin_parity
+config:
+  aggregator_name: Quality gate
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: ci-fanin-parity
+      path: .github/workflows/ci.yml
+      message_contains: dangling job
+dependencies: []

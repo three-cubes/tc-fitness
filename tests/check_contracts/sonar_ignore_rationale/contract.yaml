@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:sonar_ignore_rationale
+config: {}
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: sonar-ignore-rationale
+      path: sonar-project.properties
+      message_contains: explaining WHY the rule is ignored
+dependencies: []
