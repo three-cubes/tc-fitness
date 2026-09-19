@@ -9,6 +9,7 @@ branch name is injected (no git dependency in the unit tests); the default
 
 from __future__ import annotations
 
+import runpy
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import pytest
 
 from tc_fitness.checks.branch_naming import (
     check_branch,
+    current_branch,
 )
 
 pytestmark = pytest.mark.contract
@@ -33,6 +35,18 @@ def test_none_branch_skips_clean(capsys: pytest.CaptureFixture[str]) -> None:
     # Not in a git repo / detached → skip clean (exit 0), never a false fail.
     rc = check_branch(None)
     assert rc == 0
+
+
+def test_current_branch_skips_when_git_cannot_resolve_a_branch(tmp_path: Path) -> None:
+    assert current_branch(tmp_path, env={}) is None
+
+
+def test_module_entrypoint_exits_with_the_real_current_branch_gate() -> None:
+    with pytest.warns(RuntimeWarning, match="found in sys.modules"):
+        with pytest.raises(SystemExit) as result:
+            runpy.run_module("tc_fitness.checks.branch_naming", run_name="__main__")
+
+    assert result.value.code == 0
 
 
 # ── PR-event detached-HEAD resolution (the gate must BITE on PRs) ────────────

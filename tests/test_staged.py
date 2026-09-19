@@ -114,6 +114,47 @@ def test_module_roots_from_boundary_rule_attr(roots_checks_dir: Path) -> None:
     assert resolver("check_boundary.py") == ("pkg", "pkg/sub")
 
 
+def test_module_roots_uses_fallback_when_boundary_rule_has_no_roots(roots_checks_dir: Path) -> None:
+    (roots_checks_dir / "check_empty_boundary.py").write_text("class _R:\n    roots = ()\nRULE = _R()\n")
+    resolver = make_module_roots_resolver(
+        checks_dir=roots_checks_dir,
+        boundary_rule_attr="RULE",
+        fallback_roots=("fallback",),
+    )
+
+    assert resolver("check_empty_boundary.py") == ("fallback",)
+
+
+def test_module_roots_resolver_does_not_modify_sys_path_when_disabled(roots_checks_dir: Path) -> None:
+    (roots_checks_dir / "check_disabled_path.py").write_text("x = 1\n")
+    resolver = make_module_roots_resolver(
+        checks_dir=roots_checks_dir,
+        checks_dir_on_path=False,
+        fallback_roots=("fallback",),
+    )
+
+    assert resolver("check_disabled_path.py") == ("fallback",)
+
+
+def test_module_roots_resolver_adds_a_new_checks_directory_to_sys_path(tmp_path: Path) -> None:
+    checks_dir = tmp_path / "checks"
+    checks_dir.mkdir()
+    (checks_dir / "check_added_path.py").write_text("x = 1\n")
+    checks_dir_str = str(checks_dir)
+    assert checks_dir_str not in sys.path
+    before_modules = set(sys.modules)
+
+    resolver = make_module_roots_resolver(checks_dir=checks_dir, fallback_roots=("fallback",))
+    try:
+        assert resolver("check_added_path.py") == ("fallback",)
+        assert checks_dir_str in sys.path
+    finally:
+        sys.path.remove(checks_dir_str)
+        for name in set(sys.modules) - before_modules:
+            if name == "check_added_path":
+                sys.modules.pop(name)
+
+
 def test_module_roots_boundary_branch_off_by_default(roots_checks_dir: Path) -> None:
     # DEFECT-3 regression: with NO boundary_rule_attr configured, the engine must
     # NOT consult kairix's "RULE" convention — that would privilege one repo's
@@ -156,6 +197,42 @@ def test_module_roots_skips_imported_abc_itself(roots_checks_dir: Path) -> None:
     assert resolver("check_owns_no_subclass.py") is None
 
 
+def test_module_roots_ignores_subclasses_declared_outside_the_check_module(roots_checks_dir: Path) -> None:
+    (roots_checks_dir / "_engine_abc_external.py").write_text("class EngineRule:\n    roots = ()\n")
+    (roots_checks_dir / "_engine_abc_foreign.py").write_text(
+        "from _engine_abc_external import EngineRule\n"
+        "class ForeignRule(EngineRule):\n    roots = ('foreign',)\n"
+    )
+    (roots_checks_dir / "check_foreign_abc.py").write_text("from _engine_abc_foreign import ForeignRule\n")
+    import importlib
+
+    base = importlib.import_module("_engine_abc_external").EngineRule
+    resolver = make_module_roots_resolver(
+        checks_dir=roots_checks_dir,
+        abc_type=base,
+        fallback_roots=("fallback",),
+    )
+
+    assert resolver("check_foreign_abc.py") == ("fallback",)
+
+
+def test_module_roots_uses_fallback_when_local_subclass_roots_are_empty(roots_checks_dir: Path) -> None:
+    (roots_checks_dir / "_engine_abc_empty.py").write_text("class EngineRule:\n    roots = ()\n")
+    (roots_checks_dir / "check_empty_abc.py").write_text(
+        "from _engine_abc_empty import EngineRule\nclass LocalRule(EngineRule):\n    roots = ()\n"
+    )
+    import importlib
+
+    base = importlib.import_module("_engine_abc_empty").EngineRule
+    resolver = make_module_roots_resolver(
+        checks_dir=roots_checks_dir,
+        abc_type=base,
+        fallback_roots=("fallback",),
+    )
+
+    assert resolver("check_empty_abc.py") == ("fallback",)
+
+
 def test_module_roots_location_marker_fallback(roots_checks_dir: Path) -> None:
     # The optional location-marker hook generalises kairix's "imports the
     # location engine → walk the production package" branch.
@@ -166,6 +243,22 @@ def test_module_roots_location_marker_fallback(roots_checks_dir: Path) -> None:
 
     resolver = make_module_roots_resolver(checks_dir=roots_checks_dir, location_marker=location_marker)
     assert resolver("check_located.py") == ("prod_pkg",)
+
+
+def test_module_roots_uses_fallback_when_location_marker_does_not_match(roots_checks_dir: Path) -> None:
+    (roots_checks_dir / "check_unlocated.py").write_text("x = 1\n")
+
+    def location_marker(module: object) -> tuple[str, ...] | None:
+        roots = getattr(module, "roots", None)
+        return roots if isinstance(roots, tuple) else None
+
+    resolver = make_module_roots_resolver(
+        checks_dir=roots_checks_dir,
+        location_marker=location_marker,
+        fallback_roots=("fallback",),
+    )
+
+    assert resolver("check_unlocated.py") == ("fallback",)
 
 
 def test_module_roots_fallback_roots_when_nothing_resolves(roots_checks_dir: Path) -> None:
