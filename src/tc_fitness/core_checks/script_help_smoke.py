@@ -26,12 +26,14 @@ intrinsic constant is the ``--help`` invocation contract itself.
 from __future__ import annotations
 
 import ast
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -194,6 +196,18 @@ class ScriptHelpSmoke(FitnessRule):
             python=self.python_executable,
             timeout=self.help_timeout_seconds,
         )
+
+    def run(self) -> int:
+        if shutil.which(self.python_executable) is None:
+            report_finding(
+                "dependency-unavailable",
+                ".",
+                f"required interpreter unavailable: {self.python_executable}",
+                status="error",
+            )
+            print(f"ERROR script-help-smoke: required interpreter unavailable: {self.python_executable}")
+            return 2
+        return super().run()
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> ScriptHelpSmoke:

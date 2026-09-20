@@ -35,6 +35,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.baseline import read_baseline_text
+
 # ---------------------------------------------------------------------------
 # kairix _arch_lib surface — baseline gating
 # ---------------------------------------------------------------------------
@@ -117,19 +119,20 @@ def gate(
     """
     root = repo_root if repo_root is not None else REPO_ROOT
     baseline_file = _baseline_dir(root) / f"{name}-files.txt"
-    if baseline_file.exists():
-        baseline = {
-            Path(line.strip())
-            for line in baseline_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        }
-    else:
-        baseline = set()
+    baseline = {
+        Path(line.strip())
+        for line in read_baseline_text(baseline_file).splitlines()
+        if line.strip() and not line.startswith("#")
+    }
 
     current_rel = {p.relative_to(root) if p.is_absolute() else p for p in current}
     new = sorted(current_rel - baseline)
 
     if new:
+        from tc_fitness.check_evidence import report_finding
+
+        for path in new:
+            report_finding(name, path.as_posix(), remediation)
         print(f"{_RED}FAIL [arch:{name}]{_RESET} — new violation(s) introduced:")
         for p in new:
             print(f"  {p}")
@@ -210,14 +213,11 @@ def gate_keys(
     """
     root = repo_root if repo_root is not None else REPO_ROOT
     baseline_file = _baseline_dir(root) / f"{name}{baseline_suffix}"
-    if baseline_file.exists():
-        baseline = {
-            line.strip()
-            for line in baseline_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        }
-    else:
-        baseline = set()
+    baseline = {
+        line.strip()
+        for line in read_baseline_text(baseline_file).splitlines()
+        if line.strip() and not line.startswith("#")
+    }
 
     new = sorted(current - baseline)
 
@@ -375,21 +375,62 @@ def emit_pass(message: str, stream: Any = None) -> None:
     print(message, file=out)
 
 
-def load_yaml(path: Path) -> tuple[Any, str | None]:
+def load_yaml(
+    path: Path, *, reject_duplicate_keys: bool = False, source: bytes | None = None
+) -> tuple[Any, str | None]:
     """Load YAML returning ``(data, error)``.
 
-    Returns ``({} or scalar, None)`` on success; ``(None, error-str)`` on a
-    missing PyYAML dependency or a parse failure. Callers decide whether the
-    error is fatal. PyYAML is imported lazily so consumers that never call this
-    helper need not install the ``yaml`` extra.
+    Returns ``({} or scalar, None)`` on success or ``(None, error-str)`` when
+    the required dependency is unavailable or parsing fails.
+    ``reject_duplicate_keys`` selects the strict mapping loader used by
+    schema-bound manifest consumers, where last-write-wins would hide a
+    conflicting declaration.
     """
     try:
         import yaml
     except ImportError:
         return None, "PyYAML missing"
+
     try:
-        return yaml.safe_load(path.read_text()) or {}, None
-    except yaml.YAMLError as e:
+        text = path.read_text() if source is None else source.decode("utf-8")
+        if not reject_duplicate_keys:
+            return yaml.safe_load(text) or {}, None
+
+        def construct_mapping(loader: Any, node: Any, deep: bool = False) -> dict[Any, Any]:
+            loader.flatten_mapping(node)
+            mapping: dict[Any, Any] = {}
+            for key_node, value_node in node.value:
+                key = loader.construct_object(key_node, deep=deep)
+                try:
+                    duplicate = key in mapping
+                except TypeError as exc:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"unhashable YAML mapping key: {key!r}",
+                        key_node.start_mark,
+                    ) from exc
+                if duplicate:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"duplicate YAML mapping key: {key!r}",
+                        key_node.start_mark,
+                    )
+                mapping[key] = loader.construct_object(value_node, deep=deep)
+            return mapping
+
+        strict_loader = type(
+            "StrictLoader",
+            (yaml.SafeLoader,),
+            {"construct_mapping": construct_mapping},
+        )
+        loader = strict_loader(text)
+        try:
+            return loader.get_single_data() or {}, None
+        finally:
+            loader.dispose()
+    except (yaml.YAMLError, UnicodeError) as e:
         return None, f"invalid YAML — {e}"
 
 

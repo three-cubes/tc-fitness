@@ -18,12 +18,9 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
-# Pure stdlib at runtime. The `tc-fitness run` gate orchestrator uses the stdlib
-# `tomllib` (3.11+) to read the consumer's `[tool.tc_fitness]` config, so no
-# runtime dependency is added. PyYAML is an optional extra: load_yaml() degrades
-# gracefully (returns an error string) when it is absent, so consumers that
-# never touch YAML need not install it.
-dependencies = []
+# Check-contract manifests are a shipped public surface, so their YAML parser
+# must be available in every default installation.
+dependencies = ["PyYAML>=6.0"]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and
@@ -32,11 +29,9 @@ tc-fitness = "tc_fitness.gate:main"
 tc-fitness-runtime-contract = "tc_fitness.runtime_contract:main"
 
 [project.optional-dependencies]
-yaml = ["PyYAML>=6.0"]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
-  "PyYAML>=6.0",
   "ruff>=0.15,<0.16",
   "mypy>=1.11",
 ]
@@ -46,6 +41,12 @@ packages = ["src/tc_fitness"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "unit: in-process transformation or predicate with no process boundary",
+  "contract: public input/output or protocol contract using controlled local collaborators",
+  "integration: real package, filesystem, Git or child-process composition",
+  "e2e: installed distribution through its supported user entrypoint",
+]
 
 [tool.ruff]
 line-length = 110
@@ -100,7 +101,7 @@ ignore = ["E501", "RUF022"]
 # checkov_iac_security runs the trusted `checkov` binary (resolved to an absolute
 # path via shutil.which) over the consumer's config-declared scan dir, as a fixed
 # argv list with no shell — the same trusted-binary posture the gate itself uses;
-# the binary is absent-tolerant (soft-skip), so this is not attacker-controlled
+# a missing required executable fails closed. The argv is not attacker-controlled
 # input (S404 the import, S603 the call).
 "src/tc_fitness/core_checks/checkov_iac_security.py" = ["S404", "S603"]
 # osv_scanner_sca resolves the trusted scanner executable with shutil.which and
@@ -115,8 +116,7 @@ warn_unused_ignores = true
 files = ["src/tc_fitness"]
 
 [[tool.mypy.overrides]]
-# PyYAML is an OPTIONAL extra (load_yaml degrades gracefully when it is absent),
-# so its stubs are not a hard dependency of the type check.
+# PyYAML is a required runtime dependency, but does not ship type stubs.
 module = ["yaml"]
 ignore_missing_imports = true
 
@@ -162,9 +162,15 @@ ruff format --check \
   src/tc_fitness/baseline.py src/tc_fitness/fitness_rule.py \
   src/tc_fitness/keystone.py src/tc_fitness/core_checks/ \
   src/tc_fitness/runtime_contract.py \
+  src/tc_fitness/check_contracts.py src/tc_fitness/check_contract_policy.py \
+  src/tc_fitness/check_contract_execution.py src/tc_fitness/check_evidence.py \
   tests/test_baseline.py tests/test_fitness_rule.py \
   tests/test_keystone.py tests/_core_check_assertions.py \
   tests/test_runtime_contracts.py tests/test_runtime_contract_cli.py \
+  tests/test_check_contracts.py \
+  tests/test_check_contract_execution.py tests/test_check_evidence.py \
+  tests/test_check_contract_assurance.py tests/test_check_contract_policy.py \
+  tests/test_check_contract_default_install.py \
   tests/test_release_toolchain_parity.py \
   tests/test_core_behavioural_evidence.py \
   tests/test_core_runtime_evidence_contract.py tests/test_core_runtime_filesystem_contract.py \

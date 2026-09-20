@@ -18,11 +18,11 @@ same shape the engine's own ``branch_naming`` takes when the per-file model
 does not apply. It reads/writes ``.architecture/baseline/<name>-findings.txt``
 via the canonical baseline parse contract (:func:`tc_fitness.parse_baseline_text`).
 
-Optional tool, soft-skip
-------------------------
+Required consumer-provided tool
+------------------------------
 Checkov is the only heavy dependency, and it is CONSUMER-provided: when the
-``checkov`` binary is absent the gate soft-skips (exit 0) rather than hard-fail,
-mirroring how a shell detector degrades when ``shellcheck`` is not installed.
+``checkov`` binary is absent, the configured check returns an error (exit 2).
+An unavailable scanner cannot establish a findings baseline either.
 The engine adds NO runtime dependency — a consumer pins Checkov into its own
 tool environment so ``tc-fitness run`` has the binary. The scan itself runs as a
 subprocess of the trusted binary over the consumer-configured scan directory.
@@ -55,7 +55,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from tc_fitness.baseline import baseline_dir, parse_baseline_text, render_baseline
+from tc_fitness.baseline import baseline_dir, parse_baseline_text, read_baseline_text, render_baseline
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.lib import REPO_ROOT
 from tc_fitness.lib import remediation as _remediation
 
@@ -105,7 +106,7 @@ def run_checkov(
 ) -> dict[str, Any] | list[Any] | None:
     """Run Checkov over ``scan_dir`` and return its parsed JSON.
 
-    Returns ``None`` when the Checkov binary is not installed (soft-skip). The
+    Returns ``None`` when the Checkov binary is not installed. The
     binary is a fixed, trusted argv0 and the scan dir is a config-declared path
     resolved under the repo root — no shell, no attacker-controlled input.
     """
@@ -237,31 +238,28 @@ class CheckovIacSecurity:
         return lambda sd: run_checkov(sd, framework=self._framework, timeout=self._timeout)
 
     def _load_baseline(self) -> set[str]:
-        path = self.baseline_path
-        if not path.exists():
-            return set()
-        return parse_baseline_text(path.read_text(encoding="utf-8"))
+        return parse_baseline_text(read_baseline_text(self.baseline_path, encoding="utf-8"))
 
     def evaluate(self) -> tuple[bool, list[str], dict[str, Any]]:
         """Run the scan and diff against the baseline.
 
         Pure orchestration around the injected runner: canned JSON in tests,
         the real binary in production. When the runner returns ``None`` (Checkov
-        absent) the gate soft-skips.
+        absent), required scan evidence is unavailable and the gate fails.
         """
         data = self._active_runner()(self.scan_path)
         if data is None:
             return (
-                True,
+                False,
                 [],
-                {"skipped": True, "failed": 0, "baselined": 0, "net_new": 0, _PARSING_ERRORS_KEY: 0},
+                {"unavailable": True, "failed": 0, "baselined": 0, "net_new": 0, _PARSING_ERRORS_KEY: 0},
             )
         failed = parse_failed(data)
         baseline = self._load_baseline()
         net_new = net_new_findings(failed, baseline)
         errors = [_format_finding(fc, scan_dir=self._scan_dir) for fc in net_new]
         meta = {
-            "skipped": False,
+            "unavailable": False,
             "failed": len(failed),
             "baselined": len(baseline),
             "net_new": len(net_new),
@@ -272,14 +270,17 @@ class CheckovIacSecurity:
     def run(self) -> int:
         """Print a PASS/FAIL verdict and return the process exit code."""
         passed, errors, meta = self.evaluate()
-        if meta["skipped"]:
+        if meta["unavailable"]:
+            report_finding(
+                "dependency-unavailable", ".", "required executable unavailable: checkov", status="error"
+            )
             print(
-                "PASS checkov_iac_security (checkov not installed — soft-skip). "
+                "ERROR checkov_iac_security (required checkov executable not installed). "
                 "fix: install checkov into the tool environment to enable the scan; "
                 "next: re-run this check; "
                 "run: checkov --version"
             )
-            return 0
+            return 2
         if meta[_PARSING_ERRORS_KEY]:
             print(
                 f"NOTE checkov_iac_security: {meta[_PARSING_ERRORS_KEY]} "
@@ -301,7 +302,9 @@ class CheckovIacSecurity:
     def establish_baseline(self) -> Path:
         """Freeze today's findings as the frozen key baseline; return the path."""
         data = self._active_runner()(self.scan_path)
-        keys = sorted({finding_key(fc) for fc in parse_failed(data)}) if data is not None else []
+        if data is None:
+            raise RuntimeError("required checkov executable unavailable; cannot establish a baseline")
+        keys = sorted({finding_key(fc) for fc in parse_failed(data)})
         path = self.baseline_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(render_baseline(self._name, keys), encoding="utf-8")
@@ -335,7 +338,11 @@ def main(argv: list[str] | None = None) -> int:
 
     rule = CheckovIacSecurity.from_config({}, repo_root=args.repo_root)
     if args.establish_baseline:
-        path = rule.establish_baseline()
+        try:
+            path = rule.establish_baseline()
+        except RuntimeError as exc:
+            print(f"ERROR checkov_iac_security: {exc}")
+            return 2
         print(f"established baseline: {path}")
         return 0
     return rule.run()
