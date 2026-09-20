@@ -33,57 +33,11 @@ dist_dir="$workdir/dist"
 rebuilt_dir="$workdir/rebuilt"
 fixture_dir="$workdir/fixture"
 runtime_requirements="$workdir/runtime-requirements.txt"
-assurance_requirements="$workdir/assurance-requirements.txt"
-overrides="$workdir/overrides.txt"
+declared_pins="$workdir/declared-pins.txt"
 
 mkdir -p "$dist_dir" "$rebuilt_dir" "$fixture_dir"
 uv export --project "$repo_root" --locked --no-dev --no-emit-project \
   --format requirements.txt --output-file "$runtime_requirements" >/dev/null
-uv export --project "$repo_root" --locked --no-dev --all-extras --no-emit-project \
-  --format requirements.txt --output-file "$assurance_requirements" >/dev/null
-# `[tool.uv] override-dependencies` governs `uv sync` inside the project. These
-# installs are deliberately outside it, so the same overrides have to be handed
-# to the resolver explicitly, or it reports the conflict the override settles —
-# Checkov pins a vulnerable asteval this project overrides to the fixed one.
-# The names come from the manifest and the pinned versions and hashes from the
-# export above, so neither is restated here and --require-hashes stays satisfied.
-uv run --no-project --python "$python_bin" python - \
-  "$repo_root/pyproject.toml" "$assurance_requirements" "$overrides" <<'OVERRIDES'
-import re
-import sys
-import tomllib
-from pathlib import Path
-
-manifest, exported, destination = (Path(value) for value in sys.argv[1:4])
-declared = tomllib.loads(manifest.read_text(encoding="utf-8"))
-names = {
-    re.split(r"[\[<>=!~;]", entry, maxsplit=1)[0].strip().lower().replace("_", "-")
-    for entry in declared.get("tool", {}).get("uv", {}).get("override-dependencies", [])
-}
-
-blocks: list[str] = []
-current: list[str] = []
-wanted = False
-for line in exported.read_text(encoding="utf-8").splitlines():
-    if current:
-        current.append(line)
-    elif not line[:1].isspace() and not line.startswith(("#", "-")):
-        name = re.split(r"[\[<>=!~;]", line, maxsplit=1)[0].strip().lower().replace("_", "-")
-        wanted = name in names
-        current = [line]
-    if current and not current[-1].rstrip().endswith("\\"):
-        if wanted:
-            blocks.append("\n".join(current))
-        current, wanted = [], False
-
-missing = names - {
-    re.split(r"[\[<>=!~;]", block.splitlines()[0], maxsplit=1)[0].strip().lower().replace("_", "-")
-    for block in blocks
-}
-if missing:
-    raise SystemExit(f"overridden distribution absent from the export: {', '.join(sorted(missing))}")
-destination.write_text("".join(block + "\n" for block in blocks), encoding="utf-8")
-OVERRIDES
 uv build --python "$python_bin" --out-dir "$dist_dir" "$repo_root"
 
 wheels=("$dist_dir"/*.whl)
@@ -153,8 +107,7 @@ qualify() {
   # The installed candidate remains an index-free artifact install. Its required
   # runtime dependency is resolved from this repository's locked environment
   # before that proof, rather than treating the post-Task-2 package as stdlib-only.
-  uv pip install --python "$environment/bin/python" --overrides "$overrides" \
-    --require-hashes -r "$runtime_requirements"
+  uv pip install --python "$environment/bin/python" --require-hashes -r "$runtime_requirements"
   uv pip install --no-deps --no-index --python "$environment/bin/python" "$wheel"
 
   "$environment/bin/python" -c 'import coverage'
@@ -186,8 +139,61 @@ qualify() {
     --output "$verification"
 
   # Coverage parsing is an assurance extra, not a default-install dependency.
-  uv pip install --python "$environment/bin/python" --overrides "$overrides" \
-    --require-hashes -r "$assurance_requirements"
+  # Install the assurance extras through the locked PROJECT resolver rather than
+  # an exported requirements file. An export flattens the resolution and loses
+  # `[tool.uv] override-dependencies`, so the reviewed asteval security override
+  # stops applying and the resolver reports Checkov's vulnerable pin as a
+  # conflict. --inexact keeps the candidate artifact installed above and
+  # --no-install-project stops a source checkout replacing the artifact under
+  # qualification.
+  UV_PROJECT_ENVIRONMENT="$environment" uv sync \
+    --project "$repo_root" \
+    --locked \
+    --all-extras \
+    --all-groups \
+    --no-install-project \
+    --inexact
+  # Prove the override survived, reading what to expect from the manifest. A
+  # literal here would be a second source of truth no dependency tooling
+  # updates: the bump would land in pyproject and the lock while this stayed
+  # behind, and the check would fail closed against the version the project
+  # actually installs.
+  uv run --no-project --python "$python_bin" python - \
+    "$repo_root/pyproject.toml" "$declared_pins" <<'DECLARED'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+manifest, destination = (Path(value) for value in sys.argv[1:3])
+declared = tomllib.loads(manifest.read_text(encoding="utf-8"))
+overrides = declared.get("tool", {}).get("uv", {}).get("override-dependencies", [])
+exact = dict(
+    match.groups()
+    for match in (
+        re.fullmatch(r"\s*([A-Za-z0-9._-]+)\s*==\s*([^\s;]+)\s*", entry) for entry in overrides
+    )
+    if match
+)
+if not exact:
+    raise SystemExit("the manifest declares no exact dependency override to qualify")
+destination.write_text(
+    "".join(f"{name}=={version}\n" for name, version in exact.items()), encoding="utf-8"
+)
+DECLARED
+  "$environment/bin/python" - "$declared_pins" <<'INSTALLED'
+import sys
+from importlib.metadata import version
+from pathlib import Path
+
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    name, _, expected = line.partition("==")
+    installed = version(name)
+    if installed != expected:
+        raise SystemExit(f"{name} resolved to {installed}, not the declared override {expected}")
+INSTALLED
+  "$environment/bin/checkov" --version >/dev/null
+  echo "qualified $label locked assurance tools"
   "$environment/bin/python" - "$workdir/$label-coverage" <<'PY'
 import json
 import subprocess

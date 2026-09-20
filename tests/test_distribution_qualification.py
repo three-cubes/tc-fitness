@@ -29,3 +29,5 @@ def test_distribution_qualification_exercises_both_installed_artifact_paths() ->
     assert "qualified wheel rebuilt from sdist" in result.stdout
     assert "qualified direct-wheel coverage transaction" in result.stdout
     assert "qualified wheel-from-sdist coverage transaction" in result.stdout
+    assert "qualified direct-wheel locked assurance tools" in result.stdout
+    assert "qualified wheel-from-sdist locked assurance tools" in result.stdout
