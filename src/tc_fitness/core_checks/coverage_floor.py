@@ -30,7 +30,10 @@ from types import ModuleType
 from typing import Any
 
 from tc_fitness.core_checks import run_core_check
-from tc_fitness.core_checks._coverage_evidence import resolve_coverage_filename
+from tc_fitness.core_checks._coverage_evidence import (
+    reject_external_report,
+    resolve_coverage_filename,
+)
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -142,7 +145,25 @@ class CoverageFloor(FitnessRule):
         assert isinstance(rule, CoverageFloor)  # noqa: S101  # narrowing for mypy
         rule.floor_pct = float(config.get("floor_pct", DEFAULT_FLOOR_PCT))
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
+        reject_external_report(rule.coverage_report, rule._repo_root)
         return rule
+
+    def establish_baseline(self) -> Path:
+        """Refuse to freeze a state in which no evidence was measured at all.
+
+        Absent evidence produces the same violation key as a measured report
+        that falls short, so adopting a baseline while the report is missing
+        would record that key and turn the check permanently green — exactly
+        during onboarding, when the report is most likely not to have been
+        produced yet. Debt that was measured can be ratcheted; evidence that
+        was never produced cannot.
+        """
+        if not self._report_path().exists():
+            raise ValueError(
+                "cannot baseline absent coverage evidence: "
+                f"{self.coverage_report} does not exist; produce the report, then adopt"
+            )
+        return super().establish_baseline()
 
     def _report_path(self) -> Path:
         report = Path(self.coverage_report)

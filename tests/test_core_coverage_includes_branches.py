@@ -96,3 +96,17 @@ def test_no_repo_strings_in_executable_code() -> None:
             lowered = node.value.lower()
             for tok in ("kairix", "tc-agent-zone", "agent-zone", "kata"):
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
+
+
+def test_an_external_coverage_report_is_refused_at_configuration(tmp_path: Path) -> None:
+    """An out-of-repository report cannot be relativised, so the gate would crash."""
+    with pytest.raises(ValueError, match="inside the repository"):
+        build({"coverage_report": "/elsewhere/coverage.xml"}, repo_root=tmp_path)
+
+
+def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
+    """A baseline adopted with no report survives the report being deleted."""
+    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
+
+    with pytest.raises(ValueError, match="cannot baseline absent coverage evidence"):
+        rule.establish_baseline()

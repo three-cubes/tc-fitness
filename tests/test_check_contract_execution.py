@@ -806,3 +806,35 @@ def test_a_git_directory_pointer_in_a_fixture_is_rejected(tmp_path: Path) -> Non
 
     with pytest.raises(CheckContractError, match="Git directory pointer"):
         _fixture_path(manifest, "compliant")
+
+
+def test_the_fixture_environment_drops_every_repository_control_variable() -> None:
+    """An inherited GIT_DIR would reroute fixture commands into the caller's repository."""
+    from tc_fitness.check_contract_execution import _GIT_LOCAL_ENV_VARS
+
+    declared = set(
+        subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+    )
+
+    assert declared <= set(_GIT_LOCAL_ENV_VARS), declared - set(_GIT_LOCAL_ENV_VARS)
+
+
+def test_an_inherited_git_dir_never_reaches_a_fixture_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The caller's repository must stay unreachable from fixture materialisation."""
+    from tc_fitness.check_contract_execution import _fixture_git_environment
+
+    monkeypatch.setenv("GIT_DIR", "/somewhere/else/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/somewhere/else")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/somewhere/else/index")
+
+    environment = _fixture_git_environment()
+
+    assert "GIT_DIR" not in environment
+    assert "GIT_WORK_TREE" not in environment
+    assert "GIT_INDEX_FILE" not in environment
+    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"

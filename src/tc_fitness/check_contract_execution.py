@@ -169,6 +169,43 @@ _GIT_FIXTURE_TIMEOUT_SECONDS = 30
 _GIT_FIXTURE_MAX_BYTES = 1024 * 1024
 
 
+#: Repository-control variables Git itself enumerates via
+#: ``git rev-parse --local-env-vars``. Inherited from the caller, any one of
+#: them redirects a fixture command at an external repository —
+#: ``GIT_DIR=/path/to/repo/.git`` reroutes the fixture's own ``init`` and
+#: ``fast-import`` into the caller's objects and refs. Listed literally rather
+#: than queried so materialisation does not depend on the Git being shelled to.
+_GIT_LOCAL_ENV_VARS = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+)
+
+
+def _fixture_git_environment() -> dict[str, str]:
+    """Inherit the caller's environment minus anything that relocates a repository."""
+    environment = {key: value for key, value in os.environ.items() if key not in _GIT_LOCAL_ENV_VARS}
+    environment.update(
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+        GCM_INTERACTIVE="Never",
+    )
+    return environment
+
+
 def _run_fixture_git(
     repo: Path,
     arguments: list[str],
@@ -186,13 +223,7 @@ def _run_fixture_git(
             capture_output=True,
             check=False,
             timeout=_GIT_FIXTURE_TIMEOUT_SECONDS,
-            env={
-                **os.environ,
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_CONFIG_GLOBAL": os.devnull,
-                "GIT_TERMINAL_PROMPT": "0",
-                "GCM_INTERACTIVE": "Never",
-            },
+            env=_fixture_git_environment(),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise CheckContractError(f"cannot materialise Git contract fixture: {type(exc).__name__}") from exc
