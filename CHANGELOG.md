@@ -78,7 +78,9 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
   (`min_version_parts`, since "1.0" collides with ordinary numeric strings),
   the manifest is never its own offender, whole-line comments are documentation
   rather than binding, and a repo declaring no exact pins is a vacuous pass so
-  adoption breaks nothing. `exempt_files` covers a genuine coincidence.
+  adoption breaks nothing. Consumer-owned `roots` and `extensions` define the
+  executable source in scope, while `min_version_parts` avoids broad version
+  collisions; findings are never suppressed per file.
 
 ### Added
 
