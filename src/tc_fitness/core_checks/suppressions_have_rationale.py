@@ -11,8 +11,8 @@ Ported from kairix ``check-suppressions-have-rationale.sh`` (F3, via the
 tc-agent-zone Python port) and re-expressed as a configurable, repo-agnostic
 rule. The bare-suppression patterns are the rule's own shape
 (``DEFAULT_BARE_PATTERNS``), overridable via a ``bare_patterns`` knob; the
-consumer supplies ``roots`` / ``exempt_files`` via ``[tool.tc_fitness]``. No
-repo paths are baked in.
+consumer supplies ``roots`` via ``[tool.tc_fitness]``. No repo paths are baked
+in.
 """
 
 from __future__ import annotations

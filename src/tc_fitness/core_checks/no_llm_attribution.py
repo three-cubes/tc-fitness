@@ -84,8 +84,9 @@ REMEDIATION = _remediation(
         "remove the AI/LLM self-attribution — strip the `Co-Authored-By: <model>` / "
         "`Generated with <tool>` trailer, the robot emoji, or the `noreply@anthropic.com` "
         "identity. Agent work is authored by the canonical bot/human, never advertised as "
-        "model-generated. If an in-source string is genuinely functional (names the tool "
-        "without claiming authorship), add its path to this check's `exempt_files`."
+        "model-generated. A genuinely functional string can name the tool without the "
+        "attribution shape: write the model or vendor identifier alone, without a "
+        "`Co-Authored-By`/`Generated with` trailer or an `@anthropic.com` address."
     ),
     nxt="re-run this check to confirm it goes green.",
     run="python -m tc_fitness.core_checks.no_llm_attribution",

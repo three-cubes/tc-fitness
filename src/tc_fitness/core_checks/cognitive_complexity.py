@@ -11,7 +11,7 @@ Ported from kairix ``scripts/checks/check_cognitive_complexity.py`` (F16) and
 re-expressed as a configurable, repo-agnostic rule: the only domain-intrinsic
 number is S3776's own default ceiling (15), exposed as a ``threshold`` knob the
 consumer overrides via ``[tool.tc_fitness]``. No repo paths or globs are baked
-in — the consumer supplies ``roots`` / ``exempt_files``.
+in — the consumer supplies ``roots``.
 """
 
 from __future__ import annotations

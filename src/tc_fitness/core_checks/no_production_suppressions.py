@@ -4,14 +4,14 @@ Production code must be correct, not silenced. A lint / coverage / Sonar
 suppression in production source (``# noqa:``, ``# NOSONAR``,
 ``# pragma: no cover``) is an escape hatch: if a finding is wrong, fix the
 structure or delete the dead code rather than tagging it for the linter to
-ignore. Tooling and test scaffolding are NOT production code, so the consumer
-supplies an exempt-prefix set and the test-file basename rule.
+ignore. Tooling and test scaffolding are NOT production code, so a consumer
+keeps them outside the ``roots`` this check scans; test files are recognised by
+the rule's own basename convention.
 
 Ported from tc-agent-zone ``scripts/checks/no_production_suppressions.py`` and
 re-expressed as a configurable, repo-agnostic rule. The suppression tokens are
 the rule's own shape (domain-intrinsic ``DEFAULT_SUPPRESSION_PATTERNS``),
-overridable via a ``suppression_patterns`` knob; the exempt path prefixes and
-test-basename regex come from config. No repo paths are baked in.
+overridable via a ``suppression_patterns`` knob. No repo paths are baked in.
 """
 
 from __future__ import annotations
@@ -40,9 +40,9 @@ DEFAULT_TEST_FILE_REGEX = r"^(test_.+\.py|.+_test\.py)$"
 REMEDIATION = _remediation(
     fix=(
         "remove the suppression and address the underlying finding (refactor, "
-        "delete dead code, or fix the bug); if the file is genuinely tooling "
-        "not production logic, move it under an exempt path or list it in "
-        "exempt_files."
+        "delete dead code, or fix the bug); a file that is genuinely tooling "
+        "rather than production logic belongs outside the `roots` this check "
+        "scans, so move it there instead of suppressing the finding in place."
     ),
     nxt="re-run this check to confirm the gate goes green.",
     run="python -m tc_fitness.core_checks.no_production_suppressions",

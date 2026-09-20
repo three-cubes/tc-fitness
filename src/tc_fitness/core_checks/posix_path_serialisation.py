@@ -13,11 +13,10 @@ terminated. The compliant forms (``p.relative_to(r).as_posix()`` and the
 redundant ``str(p.relative_to(r).as_posix())``) are not flagged.
 
 Ported from tc-agent-zone ``scripts/checks/posix_path_serialisation.py`` and
-re-expressed as a configurable, repo-agnostic rule: the scan roots, in-scope
-extensions, and exempt path SEGMENTS all arrive from the consumer's
-``[tool.tc_fitness]`` config — NO repo paths or globs are baked in. Domain-
-intrinsic defaults (the ``.py`` extension, ``__pycache__``/``.venv`` cache
-segments) are the rule's own shape, overridable via config.
+re-expressed as a configurable, repo-agnostic rule: the scan roots and
+in-scope extensions arrive from the consumer's ``[tool.tc_fitness]`` config —
+NO repo paths or globs are baked in. The ``.py`` extension default is the
+rule's own shape, overridable via config.
 """
 
 from __future__ import annotations

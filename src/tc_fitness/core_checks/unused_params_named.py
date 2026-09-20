@@ -8,8 +8,8 @@ the slot; otherwise delete it.
 
 Ported from kairix ``scripts/checks/check_unused_params_named.py`` (F19) and
 re-expressed as a configurable, repo-agnostic rule. The detection is pure AST
-with no domain-intrinsic threshold; the consumer supplies ``roots`` /
-``exempt_files`` via ``[tool.tc_fitness]``. No repo paths or globs are baked in.
+with no domain-intrinsic threshold; the consumer supplies ``roots`` via
+``[tool.tc_fitness]``. No repo paths or globs are baked in.
 """
 
 from __future__ import annotations
