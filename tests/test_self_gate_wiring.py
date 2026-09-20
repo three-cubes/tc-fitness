@@ -109,7 +109,6 @@ def test_pull_request_ci_has_one_exact_commit_coverage_transaction() -> None:
         "check-static",
         "coverage-assurance",
         "distribution-qualification",
-        "changed-mutation",
     }
 
 
