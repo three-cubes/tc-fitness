@@ -68,7 +68,11 @@ def repository(root: Path, *, covered: bool = True) -> tuple[str, str]:
     # The trusted self-assurance profile must ignore those selectors.
     (root / "pyproject.toml").write_text(
         "[project]\nname='coverage-transaction-fixture'\nversion='0.0.0'\n"
-        "requires-python='>=3.12,<3.13'\n"
+        # Pinned to exactly the interpreter running the test. A literal range
+        # would admit only the version it was written for, and `uv lock`
+        # refuses an interpreter the manifest does not accept, so every test
+        # here fails on any other leg of the matrix.
+        f"requires-python='=={sys.version_info.major}.{sys.version_info.minor}.*'\n"
         "[project.optional-dependencies]\nassurance=['coverage==7.14.2','pytest==9.1.0']\n"
         "[tool.pytest.ini_options]\ntestpaths=['missing']\naddopts='--ignore=tests'\n"
         "[tool.tc_fitness.core_checks.coverage_floor]\nroots=['missing']\nfloor_pct=0\n"

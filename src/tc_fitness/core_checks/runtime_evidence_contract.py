@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import os
 import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -537,9 +539,23 @@ def _safe_artifact_path(base: Path, value: object) -> Path | None:
     if relative.is_absolute() or ".." in relative.parts:
         return None
     root = base.resolve()
+    candidate = root / Path(*relative.parts)
     try:
-        path = (root / Path(*relative.parts)).resolve()
-    except (OSError, RuntimeError, ValueError):
+        path = Path(os.path.realpath(candidate, strict=True))
+    except OSError as exc:
+        # A symlink loop is an unresolvable path, not an absent one, and the
+        # two must be told apart on every interpreter. Python 3.13 stopped
+        # raising for loops in non-strict resolution, so relying on that would
+        # read a loop as unsafe on 3.12 and as a merely missing artifact on
+        # 3.13. Strict resolution raises ELOOP on both; an absent artifact
+        # raises ENOENT and falls through to the existence check that names it.
+        if exc.errno == errno.ELOOP:
+            return None
+        try:
+            path = candidate.resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None
+    except (RuntimeError, ValueError):
         return None
     try:
         path.relative_to(root)
