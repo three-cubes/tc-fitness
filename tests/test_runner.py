@@ -449,6 +449,44 @@ def test_parallel_conditional_subprocess_uses_a_real_environment_path(
     assert "runtime input consumed" in _plain(capsys.readouterr().out)
 
 
+def test_parallel_replay_classifies_a_subprocess_skip_exit_code(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The buffer-and-replay path has its own ``SKIP_EXIT_CODE`` check to cover.
+
+    ``_run_one_subprocess`` (streamed straight to fd1) already proves exit 77
+    is classified as a skip; ``--parallel``/``--staged`` route through the
+    SEPARATE capturing replay function instead, which re-implements the same
+    classification over the buffered output and needs its own test.
+    """
+    _write_sh_check(checks_dir, "check-skip.sh", SKIP_EXIT_CODE, echo="SKIP skip1: no input")
+    rules = (RuleEntry(id="SKIP1", gate="skip1", check="skip1", script="check-skip.sh"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    assert verdict.ran == 0
+    assert verdict.skipped == 1
+    assert "PASS [SKIP1]" not in _plain(capsys.readouterr().out)
+
+
+def test_parallel_replay_classifies_a_declared_skip_marker_on_a_zero_exit(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A detector that exits 0 but prints its own ``SKIP <id>: reason`` marker
+    must be recognised on the replay path too, reading the reason from the
+    BUFFERED stdout rather than being counted as an ordinary pass."""
+    _write_sh_check(checks_dir, "check-marker.sh", 0, echo="SKIP marker1: tool not installed")
+    rules = (RuleEntry(id="marker1", gate="marker1", check="marker1", script="check-marker.sh"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+    out = _plain(capsys.readouterr().out)
+
+    assert verdict.ran == 0
+    assert verdict.skipped == 1
+    assert verdict.skips == {"marker1": "tool not installed"}
+    assert "PASS [marker1]" not in out
+
+
 @pytest.mark.parametrize(("footer_contents", "printed"), [("fix path from a file", True), ("", False)])
 def test_failed_check_uses_the_consumer_footer_file_when_nonempty(
     checks_dir: Path,
@@ -755,6 +793,44 @@ def test_conditional_builtin_env_resolution(
     monkeypatch.delenv("MY_COVERAGE_XML", raising=False)
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
     assert verdict.ok  # default path resolved + exists
+
+
+def test_conditional_check_hook_declining_a_rule_falls_back_to_builtin_resolution(
+    checks_dir: Path, repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``conditional_check`` hook may return ``None`` to decline a rule.
+
+    The docstring on :data:`ConditionalCheck` promises the built-in env-var
+    resolution then applies, exactly as if no hook were installed at all —
+    this is what lets a consumer's hook narrow itself to the rules it cares
+    about and let every other ``subprocess_arg_env`` rule through unmodified.
+    """
+    report = repo_root / "coverage.xml"
+    report.write_text("<coverage/>")
+    (checks_dir / "check-cov4.sh").write_text(
+        f'#!/usr/bin/env bash\n[ "$1" = "{report}" ] && exit 0 || exit 9\n'
+    )
+    (checks_dir / "check-cov4.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="COV4",
+            gate="cov4",
+            check="cov4",
+            summary="cov4",
+            script="check-cov4.sh",
+            subprocess_arg_env="MY_COVERAGE_XML_4",
+            subprocess_arg_default="coverage.xml",
+        ),
+    )
+    monkeypatch.delenv("MY_COVERAGE_XML_4", raising=False)
+
+    def declining_hook(_entry: RuleEntry) -> ConditionalResult | None:
+        return None
+
+    verdict = run(
+        rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, conditional_check=declining_hook
+    )
+    assert verdict.ok  # the hook declined; the built-in default path resolved + exists
 
 
 # --------------------------------------------------------------------------- #
