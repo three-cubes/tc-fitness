@@ -7,20 +7,14 @@ import os
 import sys
 from typing import Any
 
-REQUIRED_WORKERS = (
-    "check-static",
-    "tests",
-    "coverage-assurance",
-    "distribution-qualification",
-)
-
 
 def _worker_results(value: object) -> dict[str, str] | None:
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or not value:
         return None
     results: dict[str, str] = {}
-    for worker in REQUIRED_WORKERS:
-        details = value.get(worker)
+    for worker, details in value.items():
+        if not isinstance(worker, str):
+            return None
         if not isinstance(details, dict):
             return None
         result = details.get("result")
@@ -43,7 +37,10 @@ def main() -> int:
 
     results = _worker_results(needs)
     if results is None:
-        print("Quality gate cannot evaluate workers: required worker result is missing", file=sys.stderr)
+        print(
+            "Quality gate cannot evaluate workers: no worker results were supplied or a result is invalid",
+            file=sys.stderr,
+        )
         return 1
     failed = [f"{worker}={result}" for worker, result in results.items() if result != "success"]
     if failed:

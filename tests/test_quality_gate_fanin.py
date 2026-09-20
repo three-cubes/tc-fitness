@@ -28,10 +28,9 @@ def _run(needs: dict[str, dict[str, str]]) -> subprocess.CompletedProcess[str]:
 
 
 def test_fan_in_accepts_only_successful_required_workers() -> None:
-    """Branch protection can pass only when both matrix workers report success."""
+    """Branch protection passes when every worker supplied by ``needs`` succeeds."""
     needs = {
         "check-static": {"result": "success"},
-        "tests": {"result": "success"},
         "coverage-assurance": {"result": "success"},
         "distribution-qualification": {"result": "success"},
     }
@@ -45,7 +44,6 @@ def test_fan_in_rejects_a_non_successful_required_worker() -> None:
     result = _run(
         {
             "check-static": {"result": "success"},
-            "tests": {"result": "success"},
             "coverage-assurance": {"result": "success"},
             "distribution-qualification": {"result": "cancelled"},
         }
@@ -55,13 +53,32 @@ def test_fan_in_rejects_a_non_successful_required_worker() -> None:
     assert "distribution-qualification=cancelled" in result.stderr
 
 
-@pytest.mark.parametrize("state", ["failure", "cancelled", "skipped", None])
-def test_coverage_failure_or_missing_worker_cannot_pass_branch_protection(state: str | None) -> None:
+@pytest.mark.parametrize("state", ["failure", "cancelled", "skipped"])
+def test_coverage_failure_cannot_pass_branch_protection(state: str) -> None:
     needs = {
         "check-static": {"result": "success"},
-        "tests": {"result": "success"},
         "distribution-qualification": {"result": "success"},
     }
-    if state is not None:
-        needs["coverage-assurance"] = {"result": state}
+    needs["coverage-assurance"] = {"result": state}
     assert _run(needs).returncode == 1
+
+
+def test_fan_in_rejects_an_unlisted_worker_that_did_not_succeed() -> None:
+    """The evaluator derives workers from ``needs`` instead of a stale duplicate list."""
+    result = _run(
+        {
+            "check-static": {"result": "success"},
+            "new-qualification-worker": {"result": "failure"},
+        }
+    )
+
+    assert result.returncode == 1
+    assert "new-qualification-worker=failure" in result.stderr
+
+
+def test_fan_in_rejects_an_empty_needs_object() -> None:
+    """A wiring defect cannot turn an empty fan-in into a successful gate."""
+    result = _run({})
+
+    assert result.returncode == 1
+    assert "no worker results were supplied" in result.stderr
