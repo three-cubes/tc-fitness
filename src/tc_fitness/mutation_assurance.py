@@ -7,10 +7,11 @@ import ast
 import fnmatch
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, requires, version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -29,7 +30,35 @@ from tc_fitness.mutation_scope import (
 )
 from tc_fitness.runner import run_bounded_process
 
-TOOL_VERSION = "3.6.0"
+#: The distribution whose manifest declares the pinned mutation tool.
+DISTRIBUTION = "three-cubes-fitness"
+#: The mutation tool this module requires at exactly the pinned version.
+TOOL_NAME = "mutmut"
+_EXACT_PIN_RE = re.compile(rf"^\s*{TOOL_NAME}\s*==\s*([0-9][^;\s,\]]*)", re.IGNORECASE)
+
+
+def pinned_tool_version() -> str:
+    """Return the mutmut version this distribution's manifest pins.
+
+    Read rather than restated. A literal here would be a second source of
+    truth that no dependency tooling updates: a bump would land in the
+    manifest and the lock while this stayed behind, and the equality below
+    would then fail closed against the version the project actually installs —
+    turning every routine dependency bump into a red build needing a manual
+    source edit in lockstep.
+    """
+    for requirement in requires(DISTRIBUTION) or []:
+        match = _EXACT_PIN_RE.match(requirement)
+        if match:
+            return match.group(1)
+    raise MutationError(
+        f"{DISTRIBUTION} does not pin {TOOL_NAME} at an exact version, so mutation evidence "
+        f"cannot be bound to a known tool; fix: declare {TOOL_NAME}==<version> in pyproject.toml; "
+        "next: re-run this command",
+        "dependency-unavailable",
+    )
+
+
 SCHEMA = "tc.fitness/mutation-receipt/v1"
 MAX_LOG_BYTES = 2 * 1024 * 1024
 
@@ -73,7 +102,7 @@ def _inputs(
         "executable_paths": archive_executables(after),
         "scope": scope,
         "engine": candidate_identity(),
-        "tool": {"name": "mutmut", "version": TOOL_VERSION},
+        "tool": {"name": TOOL_NAME, "version": pinned_tool_version()},
         "test_tiers": ["unit", "contract"],
     }
     return binding, head_files, policy
@@ -215,7 +244,7 @@ def execute_mutation(
     except PackageNotFoundError as exc:
         raise MutationError("required mutmut executable is unavailable", "dependency-unavailable") from exc
     executable = Path(sys.executable).with_name("mutmut")
-    if installed_version != TOOL_VERSION or not executable.is_file():
+    if installed_version != pinned_tool_version() or not executable.is_file():
         raise MutationError("mutation execution requires the exact pinned mutmut tool")
     if output.exists():
         raise MutationError("output already exists; retain the prior attempt and use a new directory")

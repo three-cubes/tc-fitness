@@ -150,11 +150,47 @@ qualify() {
     --all-groups \
     --no-install-project \
     --inexact
-  "$environment/bin/python" - <<'PY'
+  "$environment/bin/python" - "$repo_root" <<'PY'
+# Versions come from the manifest under qualification, never restated here:
+# this environment is synced --no-install-project so it cannot import the
+# distribution to read them back, and a literal would be a second source of
+# truth that no dependency bump updates.
+import re
+import sys
+import tomllib
 from importlib.metadata import version
+from pathlib import Path
 
-assert version("asteval") == "1.0.9"
-assert version("checkov") == "3.2.531"
+manifest = tomllib.loads((Path(sys.argv[1]) / "pyproject.toml").read_text(encoding="utf-8"))
+project = manifest.get("project", {})
+declared = list(project.get("dependencies", []) or [])
+for group in (project.get("optional-dependencies", {}) or {}).values():
+    declared.extend(group)
+for group in (manifest.get("dependency-groups", {}) or {}).values():
+    declared.extend(r for r in group if isinstance(r, str))
+uv = (manifest.get("tool", {}) or {}).get("uv", {}) or {}
+for key in ("override-dependencies", "constraint-dependencies"):
+    declared.extend(uv.get(key, []) or [])
+
+pins = {}
+for requirement in declared:
+    pin = re.match(r"^\s*([A-Za-z0-9._-]+)\s*==\s*([0-9][^;\s,\]]*)", requirement)
+    if pin:
+        pins.setdefault(pin.group(1).replace("_", "-").lower(), pin.group(2))
+
+for package in ("asteval", "checkov"):
+    expected = pins.get(package)
+    if expected is None:
+        raise SystemExit(
+            f"{package} is not pinned exactly in pyproject.toml, so the locked assurance "
+            f"tool cannot be qualified; fix: declare {package}==<version>; next: re-run this script"
+        )
+    installed = version(package)
+    if installed != expected:
+        raise SystemExit(
+            f"{package} {installed} is installed but pyproject.toml pins {expected}; "
+            "fix: re-sync the environment from the lockfile; next: re-run this script"
+        )
 PY
   "$environment/bin/checkov" --version >/dev/null
   echo "qualified $label locked assurance tools"
