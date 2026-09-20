@@ -36,6 +36,7 @@ from tc_fitness.core_checks._coverage_evidence import (
     CoverageCounts,
     count_class_coverage,
     coverage_integer,
+    reject_external_report,
     resolve_coverage_filename,
     validate_coverage_rate,
 )
@@ -187,6 +188,7 @@ class CoverageFloor(FitnessRule):
         assert isinstance(rule, CoverageFloor)  # noqa: S101  # narrowing for mypy
         rule.floor_pct = float(config.get("floor_pct", DEFAULT_FLOOR_PCT))
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
+        reject_external_report(rule.coverage_report, rule._repo_root)
         if "coverage_receipt" in config:
             if config.get("branch_floor_pct") is None:
                 raise ValueError("coverage receipt admission requires independent branch coverage")
@@ -340,8 +342,22 @@ class CoverageFloor(FitnessRule):
         return int(bool(failures))
 
     def establish_baseline(self) -> Path:
+        """Refuse to freeze a state that was never measured.
+
+        Strict mode has no baseline at all. Outside it, absent evidence
+        produces the same violation key as a measured report falling short, so
+        adopting while the report is missing records that key and turns the
+        check permanently green -- during onboarding, when the report is least
+        likely to exist. Measured debt can be ratcheted; evidence that was
+        never produced cannot.
+        """
         if self.branch_floor_pct is not None:
             raise ValueError("strict coverage cannot establish a baseline")
+        if not self._report_path().exists():
+            raise ValueError(
+                "cannot baseline absent coverage evidence: "
+                f"{self.coverage_report} does not exist; produce the report, then adopt"
+            )
         return super().establish_baseline()
 
 

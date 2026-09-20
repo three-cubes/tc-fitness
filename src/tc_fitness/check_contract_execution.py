@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -42,11 +43,20 @@ def payload_digest(value: object) -> str:
 
 
 def tree_digest(root: Path, *, ignore_caches: bool = False, ignore_native_results: bool = False) -> str:
-    """Bind names, bytes, file permissions and empty directory presence."""
+    """Bind names, bytes, object kind, permissions and empty directory presence.
+
+    The kind is bound as well as the permissions because everything that is not
+    a regular file digests its content as ``None``. Without it a directory and a
+    FIFO sharing a permission bit pattern produce identical entries, so a
+    fixture could be swapped for the other at the same path mid-execution and
+    the immutability check would still agree. ``lstat`` reads the object at the
+    path rather than what a symlink points at.
+    """
     files = {
         path.relative_to(root).as_posix(): {
             "content": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
-            "mode": path.stat().st_mode & 0o777,
+            "kind": stat.S_IFMT(path.lstat().st_mode),
+            "mode": path.lstat().st_mode & 0o777,
         }
         for path in sorted(root.rglob("*"))
         if not (ignore_caches and "__pycache__" in path.relative_to(root).parts)
@@ -176,6 +186,43 @@ _GIT_FIXTURE_TIMEOUT_SECONDS = 30
 _GIT_FIXTURE_MAX_BYTES = 1024 * 1024
 
 
+#: Repository-control variables Git itself enumerates via
+#: ``git rev-parse --local-env-vars``. Inherited from the caller, any one of
+#: them redirects a fixture command at an external repository —
+#: ``GIT_DIR=/path/to/repo/.git`` reroutes the fixture's own ``init`` and
+#: ``fast-import`` into the caller's objects and refs. Listed literally rather
+#: than queried so materialisation does not depend on the Git being shelled to.
+_GIT_LOCAL_ENV_VARS = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+)
+
+
+def _fixture_git_environment() -> dict[str, str]:
+    """Inherit the caller's environment minus anything that relocates a repository."""
+    environment = {key: value for key, value in os.environ.items() if key not in _GIT_LOCAL_ENV_VARS}
+    environment.update(
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+        GCM_INTERACTIVE="Never",
+    )
+    return environment
+
+
 def _run_fixture_git(
     repo: Path,
     arguments: list[str],
@@ -193,13 +240,7 @@ def _run_fixture_git(
             capture_output=True,
             check=False,
             timeout=_GIT_FIXTURE_TIMEOUT_SECONDS,
-            env={
-                **os.environ,
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_CONFIG_GLOBAL": os.devnull,
-                "GIT_TERMINAL_PROMPT": "0",
-                "GCM_INTERACTIVE": "Never",
-            },
+            env=_fixture_git_environment(),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise CheckContractError(f"cannot materialise Git contract fixture: {type(exc).__name__}") from exc
@@ -277,6 +318,16 @@ def _fixture_path(manifest: Path, name: str) -> Path:
     ]
     if any(path.is_symlink() for path in ancestors) or any(path.is_symlink() for path in fixture.rglob("*")):
         raise CheckContractError("contract fixtures cannot contain symlinks")
+    # A `.git` FILE is a pointer, not a repository: `gitdir: /elsewhere` sends
+    # every Git-backed check off to read commits and diffs from a mutable
+    # repository outside the fixture, while both fixture digests only ever see
+    # the unchanged pointer text. Rejecting symlinks does not cover it, because
+    # the pointer is an ordinary regular file.
+    for pointer in (path for path in fixture.rglob(".git") if path.is_file()):
+        raise CheckContractError(
+            "contract fixtures cannot contain a Git directory pointer: "
+            + pointer.relative_to(fixture).as_posix()
+        )
     if (fixture / ".architecture" / "baseline").exists():
         raise CheckContractError("contract fixtures cannot contain a suppression baseline")
     return fixture
