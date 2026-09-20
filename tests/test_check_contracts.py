@@ -33,7 +33,7 @@ def _write(path: Path, text: str) -> Path:
 def test_shipped_core_registry_has_exact_behavioural_contract_coverage() -> None:
     contracts = validate_contract_registry(CORE_CHECKS, SHIPPED_CONTRACTS)
 
-    assert len(contracts) == len(CORE_CHECKS) == 53
+    assert len(contracts) == len(CORE_CHECKS) == 54
     assert {contract.check for contract in contracts} == set(CORE_CHECKS)
 
 

@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_duplicated_dependency_pin
+config: {"roots":["src"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-duplicated-dependency-pin
+          path: src/example.py
+          message_contains: "3.6.0"
+dependencies: []

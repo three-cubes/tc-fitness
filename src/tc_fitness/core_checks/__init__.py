@@ -172,6 +172,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:new_code_coverage",
     "core:no_commented_out_code",
     "core:no_duplicate_string",
+    "core:no_duplicated_dependency_pin",
     "core:no_env_monkeypatch",
     "core:no_hardcoded_repo_paths",
     "core:no_internal_monkeypatch",
