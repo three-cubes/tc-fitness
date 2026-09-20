@@ -546,3 +546,33 @@ def test_validator_rejects_unknown_case(tmp_path: Path) -> None:
     manifest = make_contract(tmp_path)
     with pytest.raises(CheckContractError, match="unknown contract case"):
         validate(manifest, "absent", tmp_path / "absent.json", 0, datetime.now(UTC))
+
+
+def test_swapping_a_directory_for_a_fifo_changes_the_tree_digest(tmp_path: Path) -> None:
+    """Two objects that digest no content must still be told apart by kind."""
+    from tc_fitness.check_contract_execution import tree_digest
+
+    root = tmp_path / "fixture"
+    (root / "slot").mkdir(parents=True)
+    (root / "slot").chmod(0o755)
+    as_directory = tree_digest(root)
+
+    (root / "slot").rmdir()
+    os.mkfifo(root / "slot", 0o755)
+
+    assert tree_digest(root) != as_directory
+
+
+def test_a_git_directory_pointer_in_a_fixture_is_rejected(tmp_path: Path) -> None:
+    """A gitfile would let a Git-backed check read a repository the digest never sees."""
+    from tc_fitness.check_contract_execution import _fixture_path
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = tmp_path / "contract.yaml"
+    manifest.write_text("schema: x\n", encoding="utf-8")
+    fixture = tmp_path / "compliant"
+    fixture.mkdir()
+    (fixture / ".git").write_text("gitdir: /outside/worktree-metadata\n", encoding="utf-8")
+
+    with pytest.raises(CheckContractError, match="Git directory pointer"):
+        _fixture_path(manifest, "compliant")
