@@ -69,7 +69,7 @@ Exactly one of ``run`` / ``shell`` / ``catalogue`` is required per step.
 from __future__ import annotations
 
 import heapq
-import tomllib  # stdlib since 3.11; requires-python is >=3.12
+import tomllib  # stdlib since 3.11, so always present under requires-python
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path

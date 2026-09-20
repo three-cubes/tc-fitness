@@ -7,22 +7,35 @@ name = "three-cubes-fitness"
 version = "0.16.1"
 description = "Shared architecture-fitness primitives and the single runnable quality gate for Three Cubes repositories: hard-gating checks, agent-actionable diagnostics, the unified ratchet grammar, and catalogue-driven local/CI orchestration."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Three Cubes" }]
 keywords = ["fitness-functions", "architecture", "ratchet", "ci", "quality-gate"]
 classifiers = [
   "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
 
+# Near-stdlib at runtime. The `tc-fitness run` gate orchestrator uses the stdlib
+# `tomllib` (3.11+) to read the consumer's `[tool.tc_fitness]` config.
+#
 # Check-contract manifests and exact-source coverage admission are shipped
 # public surfaces, so their parsers must exist in every default installation.
 # The producer's generated configuration sets `[run] patch = subprocess`, which
 # Coverage.py introduced in 7.10; an earlier release measures no child process.
-dependencies = ["coverage>=7.10", "PyYAML>=6.0"]
+#
+# `packaging` is the reference implementation of the specifications it reads:
+# PEP 508 requirements, PEP 440 versions and PEP 503 names. Hand-rolled regexes
+# over those grammars were wrong in both directions -- they missed
+# `foo (==1.2.3)` and `foo==v1.2.3` while accepting the prefix match
+# `foo==1.2.*` as exact -- and each correction revealed the next case. It ships
+# with every pip and uv installation.
+#
+# It is imported lazily, inside the two functions that parse requirements, so
+# importing this package remains a stdlib-only operation: a bare checkout still
+# reports its version and degrades legibly.
+dependencies = ["coverage>=7.10", "packaging>=23.2", "PyYAML>=6.0"]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and
@@ -121,7 +134,7 @@ ignore = ["E501", "RUF022"]
 "src/tc_fitness/core_checks/osv_scanner_sca.py" = ["S404", "S603"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = true
 warn_unused_ignores = true
 files = ["src/tc_fitness"]

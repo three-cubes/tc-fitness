@@ -107,12 +107,12 @@ def test_pull_request_ci_has_one_exact_commit_coverage_transaction() -> None:
         command.index("make prepare") < command.index("make assert-clean") < command.index("assure-coverage")
     )
 
-    assert set(jobs["quality-gate"]["needs"]) == {
-        "check-static",
-        "tests",
-        "coverage-assurance",
-        "distribution-qualification",
-    }
+    # Derived, not restated: a job added without joining the fan-in would be
+    # advisory, since the fan-in is what the branch requires. `no-attribution`
+    # is the one exception -- it is required in its own right, so routing it
+    # through the fan-in would only delay the verdict it already gives.
+    required_in_its_own_right = {"quality-gate", "no-attribution"}
+    assert set(jobs["quality-gate"]["needs"]) == set(jobs) - required_in_its_own_right
 
 
 def test_the_coverage_job_outlasts_the_measurement_backstop() -> None:
@@ -142,17 +142,45 @@ def test_the_measurement_backstop_is_not_a_budget() -> None:
     assert coverage_admission.MEASUREMENT_BACKSTOP_SECONDS >= 3600
 
 
-def test_the_suite_runs_on_every_supported_interpreter() -> None:
-    """The coverage transaction runs one interpreter; compatibility needs them all."""
+def _pinned_interpreters(node: object) -> set[str]:
+    """Every interpreter the workflow pins, wherever it pins it."""
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "python-version":
+                found.update(str(v) for v in (value if isinstance(value, list) else [value]))
+            else:
+                found |= _pinned_interpreters(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _pinned_interpreters(item)
+    return {version for version in found if not version.startswith("${{")}
+
+
+def test_the_gate_runs_exactly_the_interpreters_the_package_advertises() -> None:
+    """Advertising a version nothing runs, and running one nothing advertises, both fail.
+
+    Held in both directions on purpose. One direction catches a classifier
+    added without a leg to prove it; the other catches a leg left behind when
+    a version is dropped, which is how a retired interpreter keeps costing
+    build minutes long after anything needs it.
+    """
     workflow = yaml.safe_load((REPOSITORY / ".github/workflows/ci.yml").read_text())
     manifest = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
 
     classifiers = manifest["project"].get("classifiers", [])
-    supported = {c.rsplit(" :: ", 1)[-1] for c in classifiers if "Programming Language :: Python :: 3." in c}
-    transaction = {"3.12"}
-    legs = set(workflow["jobs"]["tests"]["strategy"]["matrix"]["python-version"])
+    advertised = {c.rsplit(" :: ", 1)[-1] for c in classifiers if "Programming Language :: Python :: 3." in c}
 
-    assert supported <= legs | transaction, supported - (legs | transaction)
+    assert advertised == _pinned_interpreters(workflow)
+
+
+def test_the_type_checker_targets_the_floor_the_package_declares() -> None:
+    """A type check against a version nobody runs proves nothing about the one they do."""
+    manifest = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+    declared = Requirement("python" + manifest["project"]["requires-python"])
+    floor = next(s.version for s in declared.specifier if s.operator == ">=")
+
+    assert manifest["tool"]["mypy"]["python_version"] == floor
 
 
 def test_the_coverage_floor_supports_every_option_the_producer_emits() -> None:

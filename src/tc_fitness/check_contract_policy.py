@@ -84,6 +84,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "new_code_coverage": frozenset({"floor_pct", "coverage_report", "base_ref"}) | _COVERAGE_EVIDENCE_OPTIONS,
     "no_commented_out_code": frozenset({"min_run"}),
     "no_duplicate_string": frozenset({"min_length", "min_occurrences"}),
+    "no_duplicated_dependency_pin": frozenset({"manifest", "min_version_parts"}),
     "no_env_monkeypatch": frozenset({"env_prefixes"}),
     "no_hardcoded_repo_paths": frozenset({"needles"}),
     "no_internal_monkeypatch": frozenset({"internal_packages"}),

@@ -15,6 +15,57 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+### Removed
+
+- **Python 3.12 support.** `requires-python` is now `>=3.13`. This is the one
+  entry in this release that is not additive: a consumer resolving on 3.12 will
+  not receive this version. Nothing needed it — tc-agent-zone, the only
+  consumer, already declares `requires-python = ">=3.13"`, pins
+  `.python-version` to 3.13 and runs every CI job on it.
+
+  Carrying the second interpreter cost a duplicated static-gate leg, a
+  duplicated distribution-qualification leg, and a standalone `tests` job that
+  existed only because the coverage transaction measured 3.12 while 3.13 went
+  unrun. All three are gone; the transaction runs the suite on 3.13, which is
+  the interpreter consumers actually use. The wiring test now holds in both
+  directions, so a classifier without a leg and a leg without a classifier both
+  fail.
+
+### Added
+
+- **`lib.pinned_version(distribution, package)`** — reads back the exact version
+  a distribution's manifest pins a package at, so enforcement can keep working
+  without a second copy of the number in source. Raises a named
+  `PinnedVersionError` naming the repair when the distribution is not
+  installed, does not require the package, or requires it at anything other
+  than an exact `==` version; each is a different fix, so a silent default
+  would let a caller enforce against a version nothing declares. This is the
+  pattern `no_duplicated_dependency_pin` directs an agent to.
+- **CORE check `no_duplicated_dependency_pin`** — flags a source literal that
+  restates the version of an exact pin the project's own manifest declares.
+  A project pinning `tool==1.2.3` already has one source of truth for that
+  version; restating it in source creates a second one that no dependency
+  tooling updates, so a bump lands in the manifest and the lock while the
+  literal stays behind. Where the literal is *enforced*, the code then fails
+  closed against a version the project no longer installs, and an automated
+  dependency PR cannot go green without a human editing source in lockstep.
+
+  Pins are read from every table that can carry an exact version — `[project]`
+  dependencies, each optional-dependencies group, each PEP 735
+  dependency-group, `[build-system] requires`, and uv's `override-dependencies`
+  / `constraint-dependencies`. An override is often exactly where a transitive
+  version gets fixed, so reading only `[project]` would miss it while the
+  source restating it looked clean. Shell is in scope alongside Python by
+  default: a qualification script asserting an installed version is the same
+  second source of truth.
+
+  Narrow by design: a literal is flagged only when it equals a version the
+  project itself pins exactly. Two-component versions are ignored by default
+  (`min_version_parts`, since "1.0" collides with ordinary numeric strings),
+  the manifest is never its own offender, whole-line comments are documentation
+  rather than binding, and a repo declaring no exact pins is a vacuous pass so
+  adoption breaks nothing. `exempt_files` covers a genuine coincidence.
+
 ### Added
 
 - **A detector can declare itself skipped, and the runner reports it** — a check
@@ -45,6 +96,15 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
   unexpected evidence; unavailable declared executables are explicit errors.
 
 ### Changed
+
+- **A failed measurement reports itself where the operator is looking.** The
+  transaction is now the only job that runs the suite, so it owns the
+  diagnosis. On failure it names the side and both log paths in the payload —
+  a producer failure previously reported `phase: transaction, side: null` and
+  named no file at all — and repeats the failing command's own output on
+  stderr, bounded to the last `LOG_TAIL_LINES` lines. stdout stays
+  machine-readable. Diagnosing a failed test no longer costs an artifact
+  download, in CI or under `make check`.
 
 - **Contract assurance rejects mutable or suppressed proof** — snapshot inputs
   and candidate source before dispatch, reject execution-time mutations and

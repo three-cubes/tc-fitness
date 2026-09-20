@@ -206,7 +206,10 @@ root.mkdir()
 (root / "tests").mkdir()
 (root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
 (root / "pyproject.toml").write_text(
-    "[project]\nname='installed-assurance-fixture'\nversion='0.0.0'\nrequires-python='>=3.12'\n"
+    # Bound to the interpreter this qualification lane runs, so a literal
+    # floor cannot outlive the version it was written for.
+    f"[project]\nname='installed-assurance-fixture'\nversion='0.0.0'"
+    f"\nrequires-python='>={sys.version_info.major}.{sys.version_info.minor}'\n"
     "[project.optional-dependencies]\ndev=['coverage==7.14.2','pytest==9.1.0']\n"
 )
 
