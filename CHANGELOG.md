@@ -17,6 +17,33 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ### Added
 
+- **CORE check `no_duplicated_dependency_pin`** — flags a source literal that
+  restates the version of an exact pin the project's own manifest declares.
+  A project pinning `tool==1.2.3` already has one source of truth for that
+  version; restating it in source creates a second one that no dependency
+  tooling updates, so a bump lands in the manifest and the lock while the
+  literal stays behind. Where the literal is *enforced*, the code then fails
+  closed against a version the project no longer installs, and an automated
+  dependency PR cannot go green without a human editing source in lockstep.
+
+  Pins are read from every table that can carry an exact version — `[project]`
+  dependencies, each optional-dependencies group, each PEP 735
+  dependency-group, `[build-system] requires`, and uv's `override-dependencies`
+  / `constraint-dependencies`. An override is often exactly where a transitive
+  version gets fixed, so reading only `[project]` would miss it while the
+  source restating it looked clean. Shell is in scope alongside Python by
+  default: a qualification script asserting an installed version is the same
+  second source of truth.
+
+  Narrow by design: a literal is flagged only when it equals a version the
+  project itself pins exactly. Two-component versions are ignored by default
+  (`min_version_parts`, since "1.0" collides with ordinary numeric strings),
+  the manifest is never its own offender, whole-line comments are documentation
+  rather than binding, and a repo declaring no exact pins is a vacuous pass so
+  adoption breaks nothing. `exempt_files` covers a genuine coincidence.
+
+### Added
+
 - **A detector can declare itself skipped, and the runner reports it** — a check
   that cannot run (its tool is absent, its input has not been produced, its env
   gate is unset) conventionally prints `SKIP <name>: why` and exits 0. Exiting 0

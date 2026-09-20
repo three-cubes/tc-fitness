@@ -1,0 +1,168 @@
+"""Tests for the CORE check no_duplicated_dependency_pin."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from tc_fitness.core_checks.no_duplicated_dependency_pin import (
+    NoDuplicatedDependencyPin,
+    build,
+    declared_exact_pins,
+    restated_pins,
+)
+
+_MANIFEST = """
+[project]
+name = "demo"
+dependencies = ["mutmut==3.6.0", "requests>=2.0"]
+
+[project.optional-dependencies]
+dev = ["ruff==0.15.18"]
+
+[dependency-groups]
+test = ["pytest==8.4.1"]
+"""
+
+
+def _repo(tmp_path: Path, manifest: str = _MANIFEST) -> Path:
+    (tmp_path / "pyproject.toml").write_text(manifest, encoding="utf-8")
+    (tmp_path / "src").mkdir(exist_ok=True)
+    return tmp_path
+
+
+def _rule(root: Path, **config: object) -> NoDuplicatedDependencyPin:
+    return build({"roots": ["src"], **config}, repo_root=root)
+
+
+# -- reading the declarations ------------------------------------------------
+
+
+def test_pins_are_read_from_every_declaration_site(tmp_path: Path) -> None:
+    """A pin binds the same whichever table declares it."""
+    pins = declared_exact_pins(_repo(tmp_path) / "pyproject.toml")
+    assert pins == {"3.6.0": ["mutmut"], "0.15.18": ["ruff"], "8.4.1": ["pytest"]}
+
+
+def test_a_uv_override_is_a_pin(tmp_path: Path) -> None:
+    """An override is often exactly where a transitive version gets fixed.
+
+    Reading only ``[project]`` misses it while the source restating it looks
+    clean — the gap that let asteval==1.0.9 through an earlier scan.
+    """
+    manifest = (
+        '[project]\nname = "d"\ndependencies = []\n\n[tool.uv]\noverride-dependencies = ["asteval==1.0.9"]\n'
+    )
+    root = _repo(tmp_path, manifest)
+    assert declared_exact_pins(root / "pyproject.toml") == {"1.0.9": ["asteval"]}
+
+
+def test_a_uv_constraint_is_a_pin(tmp_path: Path) -> None:
+    manifest = (
+        '[project]\nname = "d"\ndependencies = []\n\n[tool.uv]\nconstraint-dependencies = ["thing==4.5.6"]\n'
+    )
+    root = _repo(tmp_path, manifest)
+    assert declared_exact_pins(root / "pyproject.toml") == {"4.5.6": ["thing"]}
+
+
+def test_a_build_requirement_is_a_pin(tmp_path: Path) -> None:
+    manifest = '[build-system]\nrequires = ["hatchling==1.27.0"]\n\n[project]\nname = "d"\n'
+    root = _repo(tmp_path, manifest)
+    assert declared_exact_pins(root / "pyproject.toml") == {"1.27.0": ["hatchling"]}
+
+
+def test_a_range_specifier_is_not_a_pin(tmp_path: Path) -> None:
+    root = _repo(tmp_path, '[project]\nname = "d"\ndependencies = ["requests>=2.31.0"]\n')
+    assert declared_exact_pins(root / "pyproject.toml") == {}
+
+
+def test_two_component_versions_are_ignored_by_default(tmp_path: Path) -> None:
+    """ "1.0" collides with ordinary numeric strings too often to be worth flagging."""
+    root = _repo(tmp_path, '[project]\nname = "d"\ndependencies = ["thing==1.0"]\n')
+    assert declared_exact_pins(root / "pyproject.toml") == {}
+
+
+def test_an_unreadable_manifest_yields_no_pins(tmp_path: Path) -> None:
+    """Vacuous beats noisy: a repo whose manifest cannot be parsed is not an offender."""
+    (tmp_path / "pyproject.toml").write_text("this is not = valid toml [[", encoding="utf-8")
+    assert declared_exact_pins(tmp_path / "pyproject.toml") == {}
+
+
+def test_a_missing_manifest_yields_no_pins(tmp_path: Path) -> None:
+    assert declared_exact_pins(tmp_path / "absent.toml") == {}
+
+
+# -- spotting the restatement ------------------------------------------------
+
+
+def test_a_literal_restating_a_pin_is_found() -> None:
+    assert restated_pins('TOOL_VERSION = "3.6.0"\n', {"3.6.0": ["mutmut"]}) == [(1, "3.6.0")]
+
+
+def test_a_version_the_project_does_not_pin_is_ignored() -> None:
+    assert restated_pins('SCHEMA_VERSION = "9.9.9"\n', {"3.6.0": ["mutmut"]}) == []
+
+
+def test_a_commented_version_is_documentation_not_a_binding() -> None:
+    assert restated_pins('# pinned at "3.6.0" upstream\n', {"3.6.0": ["mutmut"]}) == []
+
+
+# -- the rule end to end -----------------------------------------------------
+
+
+def test_source_restating_a_pin_violates(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "src" / "assurance.py").write_text('TOOL_VERSION = "3.6.0"\n', encoding="utf-8")
+    assert _rule(root).collect_violations() == {Path("src/assurance.py")}
+
+
+def test_deriving_the_version_instead_passes(tmp_path: Path) -> None:
+    """The remediation the check recommends must actually clear it."""
+    root = _repo(tmp_path)
+    (root / "src" / "assurance.py").write_text(
+        "from importlib.metadata import requires\n\nTOOL_VERSION = _pinned(requires('demo'), 'mutmut')\n",
+        encoding="utf-8",
+    )
+    assert _rule(root).collect_violations() == set()
+
+
+def test_a_shell_script_restating_a_pin_violates(tmp_path: Path) -> None:
+    """Shell is in scope by default.
+
+    A qualification script asserting an installed version is the same second
+    source of truth as a Python constant, and scoping the rule to .py alone
+    would let the pattern live on in exactly the scripts that enforce it
+    hardest.
+    """
+    root = _repo(tmp_path)
+    (root / "src" / "qualify.sh").write_text('assert version("mutmut") == "3.6.0"\n', encoding="utf-8")
+    assert _rule(root).collect_violations() == {Path("src/qualify.sh")}
+
+
+def test_a_repo_declaring_no_exact_pins_is_vacuous(tmp_path: Path) -> None:
+    """Adopting the check must not fail a repo that pins nothing exactly."""
+    root = _repo(tmp_path, '[project]\nname = "d"\ndependencies = ["requests>=2.0"]\n')
+    (root / "src" / "a.py").write_text('X = "3.6.0"\n', encoding="utf-8")
+    assert _rule(root).collect_violations() == set()
+
+
+def test_the_manifest_itself_is_never_its_own_offender(tmp_path: Path) -> None:
+    """pyproject.toml declaring the pin is the source of truth, not a restatement."""
+    root = _repo(tmp_path)
+    rule = _rule(root, roots=["."], extensions=[".toml"])
+    assert not rule.file_has_violation(root / "pyproject.toml")
+
+
+def test_an_exempt_file_is_skipped(tmp_path: Path) -> None:
+    """A literal genuinely unrelated to the pin it matches has an escape."""
+    root = _repo(tmp_path)
+    (root / "src" / "coincidence.py").write_text('RATIO = "3.6.0"\n', encoding="utf-8")
+    rule = _rule(root, exempt_files=["src/coincidence.py"])
+    assert rule.collect_violations() == set()
+
+
+def test_min_version_parts_is_configurable(tmp_path: Path) -> None:
+    """A consumer that wants two-component pins caught can ask for them."""
+    root = _repo(tmp_path, '[project]\nname = "d"\ndependencies = ["thing==1.0"]\n')
+    (root / "src" / "a.py").write_text('X = "1.0"\n', encoding="utf-8")
+    assert _rule(root).collect_violations() == set()
+    assert _rule(root, min_version_parts=2).collect_violations() == {Path("src/a.py")}
