@@ -99,3 +99,10 @@ def test_python_module_entrypoint_runs_the_real_hard_gate(tmp_path: Path) -> Non
         sys.argv = previous_argv
 
     assert exc.value.code == 0
+
+
+@pytest.mark.parametrize("chokepoints", ["src/client.py", ["src/client.py", 7]])
+def test_chokepoint_configuration_requires_a_string_list(tmp_path: Path, chokepoints: object) -> None:
+    """A misdeclared chokepoint must fail the gate, not silently match nothing."""
+    with pytest.raises(ValueError, match="chokepoint_files must be a list"):
+        build({"chokepoint_files": chokepoints}, repo_root=tmp_path)
