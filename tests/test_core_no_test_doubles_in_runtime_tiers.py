@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_test_doubles_in_runtime_tiers import (
@@ -11,6 +12,8 @@ from tc_fitness.core_checks.no_test_doubles_in_runtime_tiers import (
     build,
     file_has_runtime_tier_test_double,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, content: str) -> Path:

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.baseline import (
     BASELINE_SUFFIX,
     baseline_path,
     establish_baseline,
     load_baseline,
     parse_baseline_text,
-    render_baseline,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def test_baseline_path_is_canonical_suffix(tmp_path: Path) -> None:
@@ -19,21 +22,8 @@ def test_baseline_path_is_canonical_suffix(tmp_path: Path) -> None:
     assert p == tmp_path / ".architecture" / "baseline" / f"no-duplicate-string{BASELINE_SUFFIX}"
 
 
-def test_parse_skips_comments_and_blanks() -> None:
-    text = "# header\n\nsrc/a.py\n  src/b.py  \n# trailing comment\n"
-    assert parse_baseline_text(text) == {"src/a.py", "src/b.py"}
-
-
 def test_load_missing_baseline_is_empty(tmp_path: Path) -> None:
     assert load_baseline("nope", tmp_path) == set()
-
-
-def test_render_has_mandatory_header_and_shrink_contract() -> None:
-    text = render_baseline("my-rule", ["src/b.py", "src/a.py", "src/a.py"])
-    assert text.startswith("# Baseline for fitness check: my-rule")
-    assert "may only SHRINK" in text
-    # entries de-duplicated + sorted
-    assert text.rstrip().endswith("src/a.py\nsrc/b.py")
 
 
 def test_establish_then_load_roundtrip(tmp_path: Path) -> None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.license_present import (
     DEFAULT_MARKERS,
     LicensePresent,
@@ -11,6 +13,8 @@ from tc_fitness.core_checks.license_present import (
     file_missing_license,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:

@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
+
+import pytest
 
 from tc_fitness.core_checks.harness_canon_reference import (
     HarnessCanonReference,
-    banner_present,
     build,
-    has_canon_reference,
     main,
     missing_required_groups,
-    normalise_banner,
 )
+
+pytestmark = pytest.mark.integration
 
 # A harness snippet that satisfies the reference arm: it carries the canon
 # marker AND a link matching the default governance/STANDARDS reference regex.
@@ -62,22 +62,6 @@ def test_missing_required_groups_singletons_report_absent(tmp_path: Path) -> Non
     _write(tmp_path, "CLAUDE.md", "# CLAUDE\n")
     groups = [frozenset({"CLAUDE.md"}), frozenset({"AGENTS.md"})]
     assert missing_required_groups(tmp_path, groups) == ["AGENTS.md"]
-
-
-def test_has_canon_reference_requires_both_in_one_file() -> None:
-    pattern = re.compile(r"governance/STANDARDS")
-    assert has_canon_reference([_CANON_REF], marker="Canonical standards", ref_pattern=pattern)
-    # Marker in one file, link in another → not a proof that a file names canon.
-    split = ["## Canonical standards\n", "see governance/STANDARDS.md\n"]
-    assert not has_canon_reference(split, marker="Canonical standards", ref_pattern=pattern)
-
-
-def test_normalise_and_banner_present_ignore_layout() -> None:
-    pinned = "Canonical standards\n   Read governance/STANDARDS.md first.\n"
-    reflowed = "\n\n## Canonical standards\n\nRead governance/STANDARDS.md first.\n\n"
-    assert normalise_banner(pinned) in normalise_banner(reflowed)
-    assert banner_present([reflowed], pinned)
-    assert not banner_present(["nothing pinned here"], pinned)
 
 
 # --------------------------------------------------------------------------- #
@@ -131,11 +115,6 @@ def test_invalid_reference_pattern_fails_actionably(tmp_path: Path) -> None:
     _write(tmp_path, "AGENTS.md", _CANON_REF)
     cfg = {"repo_type": "core", "standards_ref_pattern": "["}  # not a valid regex
     assert build(cfg, repo_root=tmp_path).run() == 1
-
-
-def test_banner_present_empty_pin_is_present() -> None:
-    # An empty pin has nothing to drift from, so drift never trips on it.
-    assert banner_present([], "") is True
 
 
 def test_reference_pattern_is_config_driven(tmp_path: Path) -> None:

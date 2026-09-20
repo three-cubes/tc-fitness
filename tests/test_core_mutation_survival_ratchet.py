@@ -5,11 +5,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.mutation_survival_ratchet import (
     build,
     main,
     report_is_malformed,
 )
+
+pytestmark = pytest.mark.integration
 
 _VALID = '{"schema_version": 1, "packages": {"pkg": {"survived": 0, "killed": 9}}}'
 _BAD_VERSION = '{"schema_version": 2, "packages": {}}'

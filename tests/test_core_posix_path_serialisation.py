@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.posix_path_serialisation import (
     PosixPathSerialisation,
     build,
     main,
     module_has_os_native_serialisation,
 )
+
+pytestmark = pytest.mark.integration
 
 _BAD = "rel = str(path.relative_to(root))\n"
 _OK_AS_POSIX = "rel = path.relative_to(root).as_posix()\n"

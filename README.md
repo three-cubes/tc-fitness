@@ -4,6 +4,10 @@
 run `tc-fitness run` and it runs your linters, type-check, tests, coverage,
 security scan, and architecture rules, then gives you one pass or fail.
 
+Supported platform evidence covers Linux on Python 3.12 and 3.13, plus macOS
+CLI, Git and filesystem qualification on Python 3.12. Windows is unsupported
+until it has an equivalent installed-distribution qualification lane.
+
 **The tool knows HOW to run the checks. Your repo says WHAT to check** — you list
 the checks in a `[tool.tc_fitness]` block in your `pyproject.toml`, and
 tc-fitness runs them in order and gives you a single verdict.
@@ -301,6 +305,8 @@ must be classified before assurance can use them. Adoption flags must be false,
 exclusion lists must be empty, and cutover, informational-job and test-filename
 exemption overrides are forbidden. OSV requires explicit `required: true`;
 mutation-report contracts require explicit `allow_missing_current: false`.
+Tier-marker contracts require explicit `require_module_marker: true` so
+contract assurance cannot fall back to generic function-level classification.
 Mutation `baseline_report` is a bound input report, not a suppression list.
 Normal scope, thresholds and expected identities remain detector policy inputs.
 The output directory must exist, and the ledger must be a new path outside the
@@ -355,6 +361,27 @@ Checks emit findings through `tc_fitness.check_evidence.report_finding` at the
 actual decision point. `gate()`-based checks, including `license_present`, already
 use this interface. Custom checks must emit their own structured findings;
 console output is never parsed and detectors are never invoked twice.
+
+### Pytest tier assurance
+
+Canonical pytest tier assurance uses two complementary checks. Configure
+`core:every_test_has_tier_marker` with `require_module_marker = true` to require
+one literal module declaration, `pytestmark = pytest.mark.<tier>`, using
+`unit`, `contract`, `integration` or `e2e`. In this mode, `tier_markers` cannot
+change the vocabulary. Reusing `pytestmark`, aliasing pytest's marker namespace,
+and additional explicit tier applications fail; ordinary attributes and
+non-tier marks remain valid. The generic default retains configurable tiers
+and function-level markers for existing consumers.
+
+Also run `pytest -p tc_fitness.pytest_tiers --strict-markers` (register the four
+tiers in pytest configuration). This public plugin checks actual markers at
+collection finish, including parametrised, inherited and deselected items.
+Missing tiers, two identical tier marks and multiple different tiers fail with
+the node ID and exact marker list. It catches dynamic decorators and hook-added
+tiers without interpreting Python or starting another pytest process. tc-fitness
+enables it in its own pytest `addopts`; its source self-check uses the unsuppressed
+violation set. Collection assurance checks the items that pytest collects, not
+the correctness of tier selection or code that changes markers after collection.
 
 ## Library modules
 

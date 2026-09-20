@@ -5,11 +5,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.coverage_includes_branches import (
     build,
     main,
     report_lacks_branches,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, body: str) -> Path:

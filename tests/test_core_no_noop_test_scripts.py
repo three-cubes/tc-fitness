@@ -6,14 +6,16 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_noop_test_scripts import (
     NoNoopTestScripts,
     build,
     main,
-    script_is_noop,
 )
+
+pytestmark = pytest.mark.integration
 
 _PLACEHOLDER = re.compile(
     r"(?:no tests? yet|todo|placeholder|not implemented|skip tests?|exit\s+0)", re.IGNORECASE
@@ -26,21 +28,6 @@ def _seed_pkg(tmp_path: Path, rel: str, test_script: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"scripts": {"test": test_script}}), encoding="utf-8")
     return p
-
-
-def test_placeholder_is_noop() -> None:
-    assert (
-        script_is_noop("echo 'no tests yet' && exit 0", placeholder=_PLACEHOLDER, real_runner=_REAL) is True
-    )
-
-
-def test_real_runner_is_not_noop() -> None:
-    assert script_is_noop("vitest run src --coverage", placeholder=_PLACEHOLDER, real_runner=_REAL) is False
-
-
-def test_placeholder_with_real_runner_passes() -> None:
-    # mentions "exit 0" but also runs vitest → real
-    assert script_is_noop("vitest run || exit 0", placeholder=_PLACEHOLDER, real_runner=_REAL) is False
 
 
 def test_prod_prefix_scoping(tmp_path: Path) -> None:

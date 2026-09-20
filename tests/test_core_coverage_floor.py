@@ -5,11 +5,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.coverage_floor import (
     build,
     main,
     parse_coverage_report,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _report(line_rates: dict[str, float], *, source: str = "src") -> str:

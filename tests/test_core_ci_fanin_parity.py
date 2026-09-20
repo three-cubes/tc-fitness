@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.ci_fanin_parity import (
     CiFaninParity,
     build,
     main,
     workflow_fanin_is_dishonest,
 )
+
+pytestmark = pytest.mark.integration
 
 _HONEST = """
 name: ci

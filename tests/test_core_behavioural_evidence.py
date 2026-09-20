@@ -9,6 +9,8 @@ from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.behavioural_evidence import BehaviouralEvidence, build
 
+pytestmark = pytest.mark.integration
+
 
 def _seed(repo: Path, rel: str, body: str = "") -> Path:
     path = repo / rel

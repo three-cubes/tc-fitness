@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_internal_patches_ts import (
     NoInternalPatchesTs,
     build,
     file_mocks_internal_ts,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _INTERNAL = frozenset({"mcp-x", "mcp-kairix"})
 _EXEMPT_EXACT = frozenset({"fs", "axios", "console"})

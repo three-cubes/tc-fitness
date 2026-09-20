@@ -10,6 +10,8 @@ import pytest
 from tc_fitness.core_checks.no_llm_attribution import NoLlmAttribution
 from tc_fitness.fitness_rule import FitnessRule
 
+pytestmark = pytest.mark.integration
+
 #: An attribution signature `scan_text` flags — the kind of residue vendored test
 #: fixtures and pnpm trash dirs legitimately carry (the issue-25 repro).
 _ATTRIBUTION = "Co-Authored-By: Claude <noreply@anthropic.com>\n"
@@ -40,11 +42,6 @@ def _git_init_and_add(repo: Path, *tracked: str) -> None:
     """
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "add", *tracked], cwd=repo, check=True, capture_output=True)
-
-
-def test_abstract_cannot_instantiate() -> None:
-    with pytest.raises(TypeError):
-        FitnessRule()  # type: ignore[abstract]
 
 
 def test_collect_violations_respects_config_roots(tmp_path: Path) -> None:

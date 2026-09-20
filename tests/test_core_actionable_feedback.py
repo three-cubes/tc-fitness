@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.actionable_feedback import (
     ActionableFeedback,
     build,
     main,
     module_has_unactionable_error,
 )
+
+pytestmark = pytest.mark.integration
 
 _BAD = """
 def check(errors):

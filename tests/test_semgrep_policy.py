@@ -8,6 +8,8 @@ import pytest
 
 from tc_fitness import materialize_owasp_permissions_policy
 
+pytestmark = pytest.mark.integration
+
 _RULE_FRAGMENT = """\
 rules:
 - id: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions

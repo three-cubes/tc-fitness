@@ -5,10 +5,14 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.untrusted_automation_boundary import (
     build,
     workflow_has_untrusted_automation_boundary_violation,
 )
+
+pytestmark = pytest.mark.integration
 
 _CONFIG = {
     "workflows": [".github/workflows/responder.yml"],

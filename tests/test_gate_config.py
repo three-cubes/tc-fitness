@@ -26,6 +26,8 @@ from tc_fitness.gate_config import (
     parse_core_check_configs,
 )
 
+pytestmark = pytest.mark.integration
+
 # --------------------------------------------------------------------------- #
 # resolution
 # --------------------------------------------------------------------------- #

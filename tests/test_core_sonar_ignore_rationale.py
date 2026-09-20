@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.sonar_ignore_rationale import (
     DEFAULT_RULE_KEY_PATTERN,
     SonarIgnoreRationale,
@@ -12,6 +14,8 @@ from tc_fitness.core_checks.sonar_ignore_rationale import (
     file_has_unjustified_ignore,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _JUSTIFIED = """\
 # python:S5547 - HMAC-SHA1 used only for legacy fingerprinting, never for security.

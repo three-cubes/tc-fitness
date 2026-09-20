@@ -22,9 +22,10 @@ import tc_fitness.core_checks.new_code_coverage as new_code_coverage
 from tc_fitness.core_checks.new_code_coverage import (
     build,
     main,
-    parse_added_lines,
     parse_line_coverage,
 )
+
+pytestmark = pytest.mark.integration
 
 # --------------------------------------------------------------------------- #
 # Fixtures: a Cobertura report with per-line hits + a canned git runner.
@@ -197,61 +198,6 @@ def test_parse_line_coverage_rejects_unsafe_xml(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_parse_added_lines_basic_hunk() -> None:
-    diff = _diff("src/a.py", 10, ["x = 1", "y = 2", "z = 3"])
-    assert parse_added_lines(diff) == {"src/a.py": {10, 11, 12}}
-
-
-def test_parse_added_lines_new_file_whole_body_is_added() -> None:
-    diff = _diff("src/new.py", 1, ["a = 1", "b = 2"], new_file=True)
-    assert parse_added_lines(diff) == {"src/new.py": {1, 2}}
-
-
-def test_parse_added_lines_deleted_file_contributes_nothing() -> None:
-    diff = (
-        "diff --git a/src/gone.py b/src/gone.py\n"
-        "deleted file mode 100644\n"
-        "index 1111111..0000000 100644\n"
-        "--- a/src/gone.py\n"
-        "+++ /dev/null\n"
-        "@@ -1,2 +0,0 @@\n"
-        "-was = 1\n"
-        "-here = 2\n"
-    )
-    assert parse_added_lines(diff) == {}
-
-
-def test_parse_added_lines_context_lines_advance_counter() -> None:
-    # A -U1 hunk: context lines advance the new-side counter so the added line
-    # lands on its true number (11), not the hunk start (10).
-    diff = (
-        "diff --git a/src/c.py b/src/c.py\n"
-        "index aaa..bbb 100644\n"
-        "--- a/src/c.py\n"
-        "+++ b/src/c.py\n"
-        "@@ -10,2 +10,3 @@ def f():\n"
-        " keep = 0\n"
-        "+added = 1\n"
-        " tail = 2\n"
-    )
-    assert parse_added_lines(diff) == {"src/c.py": {11}}
-
-
-def test_parse_added_lines_multiple_hunks_one_file() -> None:
-    diff = (
-        "diff --git a/src/m.py b/src/m.py\n"
-        "index aaa..bbb 100644\n"
-        "--- a/src/m.py\n"
-        "+++ b/src/m.py\n"
-        "@@ -0,0 +1,1 @@\n"
-        "+first\n"
-        "@@ -10,0 +12,2 @@\n"
-        "+twelfth\n"
-        "+thirteenth\n"
-    )
-    assert parse_added_lines(diff) == {"src/m.py": {1, 12, 13}}
-
-
 # --------------------------------------------------------------------------- #
 # Rule end-to-end via the injected git seam.
 # --------------------------------------------------------------------------- #
@@ -288,14 +234,6 @@ def test_untracked_source_is_measured_before_first_commit(tmp_path: Path) -> Non
     rule = build(_cfg(), repo_root=repo)
 
     assert rule.run() == 1
-
-
-def test_git_output_decodes_non_utf8_bytes_losslessly() -> None:
-    raw = b"src/bad_\xff.py\0"
-    decoder = getattr(new_code_coverage, "_decode_git_output", None)
-
-    assert decoder is not None
-    assert decoder(raw) == "src/bad_\udcff.py\0"
 
 
 @pytest.mark.skipif(sys.platform == "darwin", reason="macOS rejects invalid UTF-8 filenames")

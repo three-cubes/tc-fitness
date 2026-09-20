@@ -6,6 +6,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.suppressions_have_rationale import (
     DEFAULT_BARE_PATTERNS,
     SuppressionsHaveRationale,
@@ -13,6 +15,8 @@ from tc_fitness.core_checks.suppressions_have_rationale import (
     file_has_bare_suppression,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _BARE = "x = 1  # NOSONAR\n"
 _WITH_REASON = "x = 1  # NOSONAR - internal log path; not user-controlled\n"

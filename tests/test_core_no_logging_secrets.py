@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_logging_secrets import (
     DEFAULT_DIRECT_SINKS,
     DEFAULT_LOG_METHODS,
@@ -14,6 +16,8 @@ from tc_fitness.core_checks.no_logging_secrets import (
     main,
     module_logs_secret,
 )
+
+pytestmark = pytest.mark.integration
 
 _PATTERNS = tuple(re.compile(p) for p in DEFAULT_SECRET_PATTERNS)
 

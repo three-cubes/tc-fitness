@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_production_suppressions import (
     NoProductionSuppressions,
     build,
     file_contains_suppression,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _SUPPRESSED = "result = parse(payload)  # noqa: BLE001\n"
 _CLEAN = "result = parse(payload)  # finding fixed upstream\n"

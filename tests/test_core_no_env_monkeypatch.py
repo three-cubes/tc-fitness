@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_env_monkeypatch import (
@@ -12,6 +13,8 @@ from tc_fitness.core_checks.no_env_monkeypatch import (
     file_has_env_monkeypatch,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _SETENV = """
 def test_x(monkeypatch, tmp_path):

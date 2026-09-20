@@ -6,6 +6,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.ci_silencers_have_rationale import (
     DEFAULT_RATIONALE_TOKENS,
     DEFAULT_SILENCER_PATTERNS,
@@ -15,6 +17,8 @@ from tc_fitness.core_checks.ci_silencers_have_rationale import (
     file_has_unjustified_silencer,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _BARE = """\
 jobs:

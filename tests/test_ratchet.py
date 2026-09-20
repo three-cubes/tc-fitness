@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from tc_fitness.ratchet import (
     BARE_SUPPRESSION_PATTERNS,
     COVERAGE_OVERRIDE_RE,
@@ -24,6 +26,8 @@ from tc_fitness.ratchet import (
     make_override_re,
     parse_overrides,
 )
+
+pytestmark = pytest.mark.unit
 
 # --------------------------------------------------------------------------- #
 # Drift zone 1 — ONE override-rationale min-length (40, strictly-less-than)

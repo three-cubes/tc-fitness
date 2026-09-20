@@ -23,6 +23,8 @@ from tc_fitness.core_checks._runtime_contracts import (
 )
 from tc_fitness.runner import run
 
+pytestmark = pytest.mark.integration
+
 _SOURCE_SHA = "a" * 40
 _IMAGE_DIGEST = "sha256:" + "b" * 64
 _CONFIGURATION_IDENTITY = "sha256:" + "c" * 64

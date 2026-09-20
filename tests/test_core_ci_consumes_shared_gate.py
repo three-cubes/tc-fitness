@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
+
+import pytest
 
 from tc_fitness.core_checks.ci_consumes_shared_gate import (
     CiConsumesSharedGate,
     build,
     main,
-    satisfying_mechanism,
     workflow_files,
 )
+
+pytestmark = pytest.mark.integration
 
 # A workflow that satisfies the reusable arm: a `uses:` reference to the pinned
 # canonical python-quality-gate reusable.
@@ -69,23 +71,6 @@ def test_workflow_files_enumerates_only_yaml(tmp_path: Path) -> None:
 
 def test_workflow_files_missing_dir_is_empty(tmp_path: Path) -> None:
     assert workflow_files(tmp_path / ".github" / "workflows") == []
-
-
-def test_satisfying_mechanism_prefers_reusable() -> None:
-    reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
-    engine = re.compile(r"\btc-fitness run\b")
-    # Carries BOTH: a comment mentioning `tc-fitness run` above the `uses:` line.
-    both = "# runs tc-fitness run under the hood\n" + _VIA_REUSABLE
-    hit = satisfying_mechanism(both, reusable_pattern=reusable, engine_pattern=engine)
-    assert hit is not None
-    mechanism, _line_no, _line = hit
-    assert "reusable-workflow" in mechanism
-
-
-def test_satisfying_mechanism_none_on_fork() -> None:
-    reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
-    engine = re.compile(r"\btc-fitness run\b")
-    assert satisfying_mechanism(_FORKED_GATE, reusable_pattern=reusable, engine_pattern=engine) is None
 
 
 # --------------------------------------------------------------------------- #

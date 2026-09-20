@@ -18,6 +18,8 @@ from tc_fitness.core_checks.canonical_commit_identity import (
     main,
 )
 
+pytestmark = pytest.mark.integration
+
 BOT = "295831460+three-cubes-agent[bot]@users.noreply.github.com"
 HUMAN = "dan@example.com"
 ALLOW = {"allowed_emails": [BOT, HUMAN]}

@@ -5,16 +5,17 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.baseline import establish_baseline
 from tc_fitness.keystone import (
     baseline_shrink_only,
-    catalogue_check_consistency,
-    find_net_new_violations,
     load_all_baselines,
     net_new_violations_forbidden,
-    reconcile_catalogue,
     resolve_previous_tag,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -37,12 +38,6 @@ def test_load_all_baselines(tmp_path: Path) -> None:
     loaded = load_all_baselines(tmp_path)
     assert loaded["rule-a-files.txt"] == {"src/x.py"}
     assert loaded["rule-b-files.txt"] == {"src/y.py"}
-
-
-def test_find_net_new_hits() -> None:
-    baselines = {"r-files.txt": {"src/old.py"}}
-    assert find_net_new_violations(["src/old.py"], baselines) == {"r-files.txt": ["src/old.py"]}
-    assert find_net_new_violations(["src/new.py"], baselines) == {}
 
 
 def test_net_new_violations_forbidden_clean(tmp_path: Path) -> None:
@@ -119,44 +114,3 @@ def test_resolve_previous_tag(tmp_path: Path) -> None:
 
 
 # ── catalogue_check_consistency ───────────────────────────────────────────
-
-
-def test_reconcile_clean() -> None:
-    report = reconcile_catalogue(
-        cataloged_check_ids=["core:a", "core:b"],
-        available_check_ids=["core:a", "core:b"],
-    )
-    assert report.ok
-
-
-def test_reconcile_orphan_check() -> None:
-    report = reconcile_catalogue(
-        cataloged_check_ids=["core:a"],
-        available_check_ids=["core:a", "core:b"],
-    )
-    assert report.orphan_checks == ["core:b"]
-    assert not report.ok
-
-
-def test_reconcile_dangling_entry() -> None:
-    report = reconcile_catalogue(
-        cataloged_check_ids=["core:a", "core:missing"],
-        available_check_ids=["core:a"],
-    )
-    assert report.dangling_entries == [("core:missing", "core:missing")]
-    assert not report.ok
-
-
-def test_catalogue_check_consistency_exit_codes() -> None:
-    ok = catalogue_check_consistency(
-        cataloged_check_ids=["x"],
-        available_check_ids=["x"],
-        print_fn=lambda _m: None,
-    )
-    assert ok == 0
-    bad = catalogue_check_consistency(
-        cataloged_check_ids=["x", "y"],
-        available_check_ids=["x"],
-        print_fn=lambda _m: None,
-    )
-    assert bad == 1

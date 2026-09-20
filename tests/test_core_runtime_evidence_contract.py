@@ -20,6 +20,8 @@ from tc_fitness.core_checks.runtime_evidence_contract import (
 )
 from tc_fitness.runner import run
 
+pytestmark = pytest.mark.integration
+
 _NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 _SOURCE_SHA = "a" * 40
 _IMAGE_DIGEST = "sha256:" + "b" * 64
