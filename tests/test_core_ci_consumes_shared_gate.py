@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks.ci_consumes_shared_gate import (
     CiConsumesSharedGate,
     build,
@@ -214,3 +215,16 @@ def test_no_repo_strings_in_executable_code() -> None:
             lowered = node.value.lower()
             for tok in repo_tokens:
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
+
+
+def test_a_configured_name_is_the_name_the_finding_carries(tmp_path: Path) -> None:
+    """A contract expectation keyed on the configured identity must be able to match."""
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("on: push\njobs:\n  a:\n    steps: []\n", encoding="utf-8")
+    rule = build({"name": "house-ci-gate"}, repo_root=tmp_path)
+
+    with capture_check_evidence() as evidence:
+        assert rule.run() == 1
+
+    assert [f.rule for f in evidence.findings] == ["house-ci-gate"]

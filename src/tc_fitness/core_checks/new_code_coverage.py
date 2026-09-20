@@ -435,7 +435,7 @@ class NewCodeCoverage(FitnessRule):
         print(f"FAIL [arch:{self._name}] — new code below the {self.floor_pct:g}% coverage floor:")
         finding = f"new code below the {self.floor_pct:g}% coverage floor"
         for path in violations:
-            report_finding(self.name, self._repo_relative(path).as_posix(), finding)
+            report_finding(self._name, self._repo_relative(path).as_posix(), finding)
             print(f"  {path}")
         print()
         print(self.remediation)

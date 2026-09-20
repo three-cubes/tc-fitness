@@ -236,12 +236,24 @@ def _function_tier_marker(node: ast.FunctionDef | ast.AsyncFunctionDef, tiers: f
     return out & tiers
 
 
+def _is_collected_test_function(name: str) -> bool:
+    """Match pytest's own default for collecting a test function.
+
+    ``python_functions`` defaults to ``test``, not ``test_``. Requiring the
+    underscore leaves ``def testThing()`` collected by pytest but invisible
+    here, so a module holding only such tests reads as having none and escapes
+    the tier requirement entirely. File names are a separate default —
+    ``python_files`` is ``test_*.py`` — and keep their underscore.
+    """
+    return name.startswith("test")
+
+
 def _untagged_functions(tree: ast.Module, tiers: frozenset[str]) -> list[str]:
     out: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
-        if not node.name.startswith("test_"):
+        if not _is_collected_test_function(node.name):
             continue
         if not _function_tier_marker(node, tiers):
             out.append(node.name)
@@ -269,7 +281,7 @@ def file_missing_tier_marker(
     except (SyntaxError, UnicodeDecodeError, OSError):
         return False
     has_tests = any(
-        isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test_")
+        isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _is_collected_test_function(node.name)
         for node in ast.walk(tree)
     )
     if require_module_marker:

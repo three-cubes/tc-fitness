@@ -469,3 +469,14 @@ def _assert_no_repo_identity(module_file: Path) -> None:
             lowered = node.value.lower()
             for tok in ("kairix", "tc-agent-zone", "agent-zone", "kata"):
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
+
+
+def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Path) -> None:
+    """An external report is legitimate; its finding still has to relativise."""
+    external = tmp_path / "evidence" / "coverage.xml"
+    external.parent.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    rule = build({"coverage_report": str(external)}, repo_root=repo)
+
+    assert rule.enumerate_files() == [repo / "coverage.xml"]

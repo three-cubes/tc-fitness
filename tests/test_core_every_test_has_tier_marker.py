@@ -813,3 +813,12 @@ def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.every_test_has_tier_marker as mod
 
     assert_no_repo_identity(mod.__file__)
+
+
+def test_a_camelcase_test_function_is_collected_and_must_declare_a_tier(tmp_path: Path) -> None:
+    """pytest collects `testThing`, so a module holding only one is not tier-free."""
+    module = tmp_path / "tests" / "test_camel.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def testThing():\n    assert True\n", encoding="utf-8")
+
+    assert file_missing_tier_marker(module, tiers=frozenset({"unit", "contract", "integration", "e2e"}))

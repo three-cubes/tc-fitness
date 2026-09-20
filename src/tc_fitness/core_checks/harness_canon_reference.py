@@ -257,7 +257,7 @@ class HarnessCanonReference(FitnessRule):
 
         if failures:
             for failure in failures:
-                report_finding(self.name, ".", failure)
+                report_finding(self._name, ".", failure)
             print(f"FAIL [{self._name}] — agent harness has drifted from the shared canon:")
             for failure in failures:
                 print(f"  - {failure}")

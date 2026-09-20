@@ -25,10 +25,23 @@ _COLLECTED_ITEMS = pytest.StashKey[list[pytest.Item]]()
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
-    """Exclude only complete manifest-bound fixture registries from outer discovery."""
+    """Exclude only the fixture directories a manifest actually declares.
+
+    The registry directory is not itself the boundary. Ignoring it would also
+    hide any real ``test_*.py`` authored beside the declared fixtures, since
+    ``registered_contract_directory`` verifies that each declared fixture
+    exists without binding or rejecting the other files in the directory. The
+    ignore therefore applies to the declared fixture subdirectories, which is
+    the same scope the static tier check exempts.
+    """
     del config
-    if registered_contract_directory(collection_path, CORE_CHECKS) is not None:
-        return True
+    resolved = collection_path.resolve()
+    for registry in (resolved, *resolved.parents):
+        contract = registered_contract_directory(registry, CORE_CHECKS)
+        if contract is None:
+            continue
+        declared = {(registry / case.fixture).resolve() for case in contract.cases}
+        return any(resolved == fixture or fixture in resolved.parents for fixture in declared) or None
     return None
 
 

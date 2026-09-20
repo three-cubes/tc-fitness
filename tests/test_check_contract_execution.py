@@ -1123,3 +1123,65 @@ def test_public_runner_captures_custom_check_violation_findings(tmp_path: Path, 
     assert finding["path"] == expected[1]
     assert expected[2] in finding["message"]
     assert finding["status"] == "fail"
+
+
+def test_swapping_a_directory_for_a_fifo_changes_the_tree_digest(tmp_path: Path) -> None:
+    """Two objects that digest no content must still be told apart by kind."""
+    from tc_fitness.check_contract_execution import tree_digest
+
+    root = tmp_path / "fixture"
+    (root / "slot").mkdir(parents=True)
+    (root / "slot").chmod(0o755)
+    as_directory = tree_digest(root)
+
+    (root / "slot").rmdir()
+    os.mkfifo(root / "slot", 0o755)
+
+    assert tree_digest(root) != as_directory
+
+
+def test_a_git_directory_pointer_in_a_fixture_is_rejected(tmp_path: Path) -> None:
+    """A gitfile would let a Git-backed check read a repository the digest never sees."""
+    from tc_fitness.check_contract_execution import _fixture_path
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = tmp_path / "contract.yaml"
+    manifest.write_text("schema: x\n", encoding="utf-8")
+    fixture = tmp_path / "compliant"
+    fixture.mkdir()
+    (fixture / ".git").write_text("gitdir: /outside/worktree-metadata\n", encoding="utf-8")
+
+    with pytest.raises(CheckContractError, match="Git directory pointer"):
+        _fixture_path(manifest, "compliant")
+
+
+def test_the_fixture_environment_drops_every_repository_control_variable() -> None:
+    """An inherited GIT_DIR would reroute fixture commands into the caller's repository."""
+    from tc_fitness.check_contract_execution import _GIT_LOCAL_ENV_VARS
+
+    declared = set(
+        subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+    )
+
+    assert declared <= set(_GIT_LOCAL_ENV_VARS), declared - set(_GIT_LOCAL_ENV_VARS)
+
+
+def test_an_inherited_git_dir_never_reaches_a_fixture_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The caller's repository must stay unreachable from fixture materialisation."""
+    from tc_fitness.check_contract_execution import _fixture_git_environment
+
+    monkeypatch.setenv("GIT_DIR", "/somewhere/else/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/somewhere/else")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/somewhere/else/index")
+
+    environment = _fixture_git_environment()
+
+    assert "GIT_DIR" not in environment
+    assert "GIT_WORK_TREE" not in environment
+    assert "GIT_INDEX_FILE" not in environment
+    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"

@@ -117,15 +117,26 @@ class CoverageIncludesBranches(FitnessRule):
         return report if report.is_absolute() else self._repo_root / report
 
     def enumerate_files(self) -> list[Path]:
-        """The single artifact this rule judges: the coverage report itself."""
-        return [self._report_path()]
+        """The single artifact this rule judges: the coverage report itself.
+
+        Keyed inside the repository root even when the report legitimately sits
+        outside it. The gate relativises every violation to that root, so an
+        external absolute path would raise instead of producing the fail-closed
+        missing-evidence verdict.
+        """
+        report = self._report_path()
+        try:
+            return [self._repo_root / report.resolve().relative_to(self._repo_root.resolve())]
+        except ValueError:
+            return [self._repo_root / report.name]
 
     def is_in_scope(self, rel: str) -> bool:
         """Admit the configured report regardless of where it sits."""
         return True
 
     def file_has_violation(self, path: Path) -> bool:
-        return report_lacks_branches(path)
+        # The key is repository-relative; the report it stands for may not be.
+        return report_lacks_branches(self._report_path())
 
 
 def build(
