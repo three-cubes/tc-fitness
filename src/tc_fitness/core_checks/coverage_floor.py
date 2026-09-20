@@ -36,7 +36,6 @@ from tc_fitness.core_checks._coverage_evidence import (
     CoverageCounts,
     count_class_coverage,
     coverage_integer,
-    reject_external_report,
     resolve_coverage_filename,
     validate_coverage_rate,
 )
@@ -188,7 +187,6 @@ class CoverageFloor(FitnessRule):
         assert isinstance(rule, CoverageFloor)  # noqa: S101  # narrowing for mypy
         rule.floor_pct = float(config.get("floor_pct", DEFAULT_FLOOR_PCT))
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
-        reject_external_report(rule.coverage_report, rule._repo_root)
         if "coverage_receipt" in config:
             if config.get("branch_floor_pct") is None:
                 raise ValueError("coverage receipt admission requires independent branch coverage")
@@ -242,6 +240,23 @@ class CoverageFloor(FitnessRule):
         elif critical:
             raise ValueError("critical branch files require branch_floor_pct")
         return rule
+
+    def _report_key(self) -> Path:
+        """Repository-relative identity for the report, even when it lives outside.
+
+        The gate relativises every violation to the repository root, so an
+        absolute report outside it would raise rather than produce the
+        fail-closed missing-evidence verdict. Configuring one is legitimate —
+        the coverage transaction measures a snapshot and writes the report into
+        separate evidence storage — so the violation is keyed by file name
+        instead of rejected. That keeps the finding inside the root without
+        pretending the file is there.
+        """
+        report = self._report_path()
+        try:
+            return report.resolve().relative_to(self._repo_root.resolve())
+        except ValueError:
+            return Path(report.name)
 
     def _report_path(self) -> Path:
         if self.receipt_config is not None:
@@ -309,11 +324,11 @@ class CoverageFloor(FitnessRule):
         if self.branch_floor_pct is not None:
             return [self._repo_root / relative for relative in self._strict_failures]
         if not self._coverage:
-            return [self._report_path()]
+            return [self._repo_root / self._report_key()]
         return super().enumerate_files()
 
     def is_in_scope(self, rel: str) -> bool:
-        report_rel = self._repo_relative(self._report_path()).as_posix()
+        report_rel = self._report_key().as_posix()
         return rel == report_rel or super().is_in_scope(rel)
 
     def file_has_violation(self, path: Path) -> bool:
@@ -321,7 +336,7 @@ class CoverageFloor(FitnessRule):
         rel = self._repo_relative(path).as_posix()
         if self.branch_floor_pct is not None:
             return rel in self._strict_failures
-        report_rel = self._repo_relative(self._report_path()).as_posix()
+        report_rel = self._report_key().as_posix()
         if rel == report_rel:
             return not self._coverage
         measured = self._coverage.get(rel)

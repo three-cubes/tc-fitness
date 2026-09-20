@@ -169,10 +169,15 @@ def test_no_repo_strings_in_executable_code() -> None:
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
 
 
-def test_an_external_coverage_report_is_refused_at_configuration(tmp_path: Path) -> None:
-    """An out-of-repository report cannot be relativised, so the gate would crash."""
-    with pytest.raises(ValueError, match="inside the repository"):
-        build({"coverage_report": "/elsewhere/coverage.xml"}, repo_root=tmp_path)
+def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Path) -> None:
+    """An external report is legitimate; its finding still has to relativise."""
+    external = tmp_path / "evidence" / "coverage.xml"
+    external.parent.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    rule = build({"coverage_report": str(external)}, repo_root=repo)
+
+    assert rule.enumerate_files() == [repo / "coverage.xml"]
 
 
 def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
