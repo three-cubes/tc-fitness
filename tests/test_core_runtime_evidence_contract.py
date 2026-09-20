@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import os
 import threading
-import time
 import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -485,20 +483,16 @@ def test_fifo_invalid_then_valid_evidence_cannot_split_status_from_findings(tmp_
 
     def writer() -> None:
         with evidence_path.open("wb", buffering=0) as pipe:
+            # Replace the pathname while the application holds the first FIFO
+            # inode. A second writer on the replacement can therefore connect
+            # only to a genuine second application open, never to the tail of
+            # the first read.
+            evidence_path.unlink()
+            os.mkfifo(evidence_path)
             pipe.write(b"{}")
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            try:
-                descriptor = os.open(evidence_path, os.O_WRONLY | os.O_NONBLOCK)
-            except OSError as exc:
-                if exc.errno != errno.ENXIO:
-                    raise
-                time.sleep(0.01)
-                continue
-            with os.fdopen(descriptor, "wb", closefd=True) as pipe:
-                pipe.write(valid)
+        with evidence_path.open("wb", buffering=0) as pipe:
+            pipe.write(valid)
             valid_written.set()
-            return
 
     thread = threading.Thread(target=writer, daemon=True)
     thread.start()
@@ -516,10 +510,44 @@ def test_fifo_invalid_then_valid_evidence_cannot_split_status_from_findings(tmp_
             repo_root=tmp_path,
             core_check_configs={"runtime_evidence_contract": _config()},
         )
-    thread.join(timeout=2)
+    second_application_read = valid_written.is_set()
+    cleanup_reader = os.open(evidence_path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        thread.join(timeout=2)
+    finally:
+        os.close(cleanup_reader)
 
     assert not thread.is_alive()
-    assert not valid_written.is_set()
+    assert not second_application_read
     assert not verdict.ok
     assert evidence.findings
     assert evidence.results[0].status == "fail"
+
+
+def test_replaced_fifo_protocol_detects_a_deliberate_second_read(tmp_path: Path) -> None:
+    """Sabotage control: the inode-separated protocol observes a real re-open."""
+    _seed(tmp_path)
+    valid = (tmp_path / "evidence.json").read_bytes()
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.unlink()
+    os.mkfifo(evidence_path)
+    second_written = threading.Event()
+
+    def writer() -> None:
+        with evidence_path.open("wb", buffering=0) as pipe:
+            evidence_path.unlink()
+            os.mkfifo(evidence_path)
+            pipe.write(b"{}")
+        with evidence_path.open("wb", buffering=0) as pipe:
+            pipe.write(valid)
+            second_written.set()
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+
+    assert evidence_path.read_bytes() == b"{}"
+    assert evidence_path.read_bytes() == valid
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert second_written.is_set()
