@@ -1202,28 +1202,59 @@ def write_skip_report(path: Path | None, verdict: Verdicts) -> None:
 
 
 def run_contract_case(manifest: Path, case_id: str, ledger: Path) -> dict[str, Any]:
-    """Invoke this environment's installed public CLI and validate its ledger.
+    """Invoke the public CLI in a child process and validate its ledger.
 
     This process boundary belongs with the runner's existing trusted dispatch:
-    the executable is an absolute path from the interpreter's installation,
-    arguments are separate tokens, and no shell interprets fixture content.
+    the executable is this interpreter, arguments are separate tokens, and no
+    shell interprets fixture content.
+
+    The child runs the package as a module rather than the installed console
+    script, with the caller's import path handed across explicitly. A console
+    script resolved from the environment's bin directory runs whatever is
+    *installed*, which is not necessarily the candidate under test: the ledger
+    it writes records the installed tree's identity while the caller validates
+    against its own, and the two disagree whenever the caller is running from
+    anywhere else — a source checkout, or a relocated tree such as the one a
+    mutation run executes in. Evidence bound to a candidate nobody is testing
+    is the failure this contract exists to prevent, so the child is given the
+    caller's candidate to run.
+
+    ``sys.path`` additions made at runtime are not inherited by a subprocess,
+    so PYTHONPATH carries them; the existing value is preserved after them.
     """
-    import sysconfig
     from datetime import UTC, datetime
 
     from tc_fitness.check_contract_execution import validate_contract_ledger
 
+    inherited = os.environ.get("PYTHONPATH")
+    search_path = [entry for entry in sys.path if entry]
+    if inherited:
+        search_path.extend(inherited.split(os.pathsep))
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join(dict.fromkeys(search_path))}
+
     started = datetime.now(UTC)
     process = subprocess.run(
         [
-            str(Path(sysconfig.get_path("scripts")) / "tc-fitness"),
-            "run", "--contract", str(manifest.resolve()),
-            "--case", case_id, "--ledger", str(ledger.resolve()),
+            sys.executable,
+            "-m",
+            "tc_fitness",
+            "run",
+            "--contract",
+            str(manifest.resolve()),
+            "--case",
+            case_id,
+            "--ledger",
+            str(ledger.resolve()),
         ],
         check=False,
+        env=environment,
     )
     return validate_contract_ledger(
-        manifest, case_id, ledger, process_exit=process.returncode, started_after=started,
+        manifest,
+        case_id,
+        ledger,
+        process_exit=process.returncode,
+        started_after=started,
     )
 
 
