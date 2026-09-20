@@ -1,0 +1,127 @@
+"""Tests for the exemplar CORE check no_duplicate_string (v0.6.0)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from tc_fitness.core_checks.no_duplicate_string import (
+    NoDuplicateString,
+    build,
+    module_has_duplicate,
+)
+
+pytestmark = pytest.mark.integration
+
+_DUP = """
+def a() -> None:
+    raise ValueError("search query must be empty")
+
+def b() -> None:
+    raise ValueError("search query must be empty")
+
+def c() -> None:
+    raise ValueError("search query must be empty")
+"""
+
+_CLEAN = """
+_MSG = "search query must be empty"
+
+def a() -> None:
+    raise ValueError(_MSG)
+"""
+
+
+def _seed(tmp_path: Path, rel: str, body: str) -> Path:
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def test_detection_core_flags_duplicate(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "dup.py", _DUP)
+    assert module_has_duplicate(p, min_length=10, min_occurrences=3) is True
+
+
+def test_detection_core_clean(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "clean.py", _CLEAN)
+    assert module_has_duplicate(p, min_length=10, min_occurrences=3) is False
+
+
+def test_docstring_not_counted(tmp_path: Path) -> None:
+    body = '"""this is a long module docstring repeated"""\n' * 1  # single docstring
+    p = _seed(tmp_path, "d.py", body)
+    assert module_has_duplicate(p, min_length=10, min_occurrences=3) is False
+
+
+def test_malformed_and_non_utf8_modules_are_ignored(tmp_path: Path) -> None:
+    syntax = _seed(tmp_path, "syntax.py", "value = (\n")
+    encoding = tmp_path / "encoding.py"
+    encoding.write_bytes(b'a = "a repeated message"\n\xff')
+
+    assert module_has_duplicate(syntax, min_length=1, min_occurrences=1) is False
+    assert module_has_duplicate(encoding, min_length=1, min_occurrences=1) is False
+
+
+def test_short_and_whitespace_literals_do_not_meet_minimum_length(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "short.py",
+        'first = "short"\nsecond = "short"\nthird = "short"\n'
+        'blank1 = "          "\nblank2 = "          "\nblank3 = "          "\n',
+    )
+
+    assert module_has_duplicate(path, min_length=10, min_occurrences=3) is False
+
+
+def test_modules_without_countable_string_literals_are_clean(tmp_path: Path) -> None:
+    path = _seed(tmp_path, "numbers.py", "answer = 42\n")
+
+    assert module_has_duplicate(path, min_length=1, min_occurrences=1) is False
+
+
+def test_threshold_is_config_driven(tmp_path: Path) -> None:
+    p = _seed(tmp_path, "two.py", 'a="abcdefghij"\nb="abcdefghij"\n')
+    # default 3 occurrences → clean; lower to 2 via config → violation.
+    assert module_has_duplicate(p, min_length=10, min_occurrences=3) is False
+    rule = build({"roots": ["."], "min_occurrences": 2}, repo_root=tmp_path)
+    assert rule.file_has_violation(p) is True
+
+
+def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/dup.py", _DUP)
+    _seed(tmp_path, "vendor/dup.py", _DUP)
+    rule = NoDuplicateString.from_config({"roots": ["src"]}, repo_root=tmp_path)
+    assert {str(p) for p in rule.collect_violations()} == {"src/dup.py"}
+
+
+def test_no_repo_strings_in_executable_code() -> None:
+    # DESIGN LAW: a CORE module's LOGIC carries no repo identity (no taz/kairix
+    # paths, globs, or thresholds). Provenance docstrings/comments may name the
+    # donor repo, so this strips comments + docstrings via AST and scans only
+    # the executable string literals + identifiers.
+    import ast
+
+    import tc_fitness.core_checks.no_duplicate_string as mod
+
+    text = Path(mod.__file__).read_text(encoding="utf-8")  # type: ignore[arg-type]
+    tree = ast.parse(text)
+    docstring_node_ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            doc = ast.get_docstring(node, clean=False)
+            if doc is not None and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                    docstring_node_ids.add(id(first.value))
+
+    repo_tokens = ("kairix", "tc-agent-zone", "agent-zone", "kata")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstring_node_ids:
+                continue
+            lowered = node.value.lower()
+            for tok in repo_tokens:
+                assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"

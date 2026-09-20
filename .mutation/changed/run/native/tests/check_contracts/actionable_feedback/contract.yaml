@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:actionable_feedback
+config: {"roots":["src"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: actionable-feedback
+          path: src/example.py
+          message_contains: "agent-actionable correction"
+dependencies: []

@@ -1,0 +1,207 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "three-cubes-fitness"
+version = "0.16.1"
+description = "Shared architecture-fitness primitives and the single runnable quality gate for Three Cubes repositories: hard-gating checks, agent-actionable diagnostics, the unified ratchet grammar, and catalogue-driven local/CI orchestration."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Three Cubes" }]
+keywords = ["fitness-functions", "architecture", "ratchet", "ci", "quality-gate"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+# Check-contract manifests and exact-source coverage admission are shipped
+# public surfaces, so their parsers must exist in every default installation.
+dependencies = ["coverage>=7.5", "PyYAML>=6.0"]
+
+[project.scripts]
+# The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and
+# CI's reusable workflow invokes the same binary — one definition of the gate.
+tc-fitness = "tc_fitness.gate:main"
+tc-fitness-runtime-contract = "tc_fitness.runtime_contract:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.15,<0.16",
+  "mypy>=1.11",
+  "mutmut==3.6.0",
+  "checkov==3.2.531",
+]
+
+[tool.uv]
+# Checkov 3.2.531 (and the current 3.3.19 release) declares asteval==1.0.6,
+# which is affected by GHSA-89v8-rhwq-hf77 and GHSA-9w56-46f6-3qhx.  The fixed
+# 1.0.9 release is API-compatible with Checkov's use and is exercised by the
+# real Checkov contract tests and the repository OSV scan.
+override-dependencies = ["asteval==1.0.9"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tc_fitness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "-p", "tc_fitness.pytest_tiers"]
+markers = [
+  "unit: in-process transformation or predicate with no process boundary",
+  "contract: public input/output or protocol contract using controlled local collaborators",
+  "integration: real package, filesystem, Git or child-process composition",
+  "e2e: installed distribution through its supported user entrypoint",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+# Pragmatic, security-aware default set. S (bandit) is on so the gate's own
+# subprocess use is reviewed; the two genuinely-config-driven subprocess calls in
+# gate.py carry inline `# noqa: S603/S602` with a rationale.
+select = ["E", "F", "I", "UP", "B", "S", "RUF"]
+# E501  — line length is governed by `line-length`, not a hard error.
+# RUF022 — the `__all__` lists are grouped by source module with comments
+#          (lib / ratchet / catalogue / context / gate / runner), a deliberate
+#          readability layout that an isort-style alphabetic sort would destroy.
+ignore = ["E501", "RUF022"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use `assert`, build synthetic subprocess fixtures, and
+# reference tmp paths.
+"tests/**" = ["S101", "S108", "S603", "S607", "S404"]
+# The runner IS a check dispatcher: launching `bash` / the python interpreter on
+# a config-declared script path is its whole job (S603/S607), and its
+# type-narrowing `assert cfg.checks_dir is not None` post-`__post_init__` guards
+# (S101) are invariants the loader establishes, not input validation.
+"src/tc_fitness/runner.py" = ["S101", "S603", "S607"]
+# The branch-naming gate shells out to `git` by name (S607) — a fixed, trusted
+# argv0, not a partial path under attacker control.
+"src/tc_fitness/checks/branch_naming.py" = ["S607"]
+# The default file enumeration lists tracked files via `git ls-files` by name
+# with a fixed argv0 and the config-declared repo root — the same trusted-argv0
+# posture as branch_naming, not input under attacker control (S603/S607).
+"src/tc_fitness/fitness_rule.py" = ["S603", "S607"]
+# The keystone drift-enders resolve git history (prev-tag, added-files, baseline
+# content at a ref) by invoking `git` by name with a fixed argv0 and
+# config-declared refs — the same trusted-argv0 posture as branch_naming, not
+# input under attacker control (S603/S607).
+"src/tc_fitness/keystone.py" = ["S603", "S607"]
+# canonical_commit_identity gates commit author/committer metadata by invoking
+# `git log` by name with a fixed argv0 and config-declared refs — the same
+# trusted-argv0 posture as keystone/branch_naming (S603/S607).
+"src/tc_fitness/core_checks/canonical_commit_identity.py" = ["S603", "S607"]
+# new_code_coverage resolves the changed-line set by invoking `git merge-base` /
+# `git diff` by name with a fixed argv0; the only caller-controlled token (the
+# base ref) is validated against a safe-ref charset before use — the same
+# trusted-argv0 posture as canonical_commit_identity/branch_naming (S603/S607).
+"src/tc_fitness/core_checks/new_code_coverage.py" = ["S603", "S607"]
+# contract_change_has_test resolves the changed-FILE set by invoking `git
+# merge-base` / `git diff --name-only` by name with a fixed argv0; the only
+# caller-controlled token (the base ref) is validated against a safe-ref charset
+# before use — the same trusted-argv0 posture as new_code_coverage (S603/S607).
+"src/tc_fitness/core_checks/contract_change_has_test.py" = ["S603", "S607"]
+# checkov_iac_security runs the trusted `checkov` binary (resolved to an absolute
+# path via shutil.which) over the consumer's config-declared scan dir, as a fixed
+# argv list with no shell — the same trusted-binary posture the gate itself uses;
+# a missing required executable fails closed. The argv is not attacker-controlled
+# input (S404 the import, S603 the call).
+"src/tc_fitness/core_checks/checkov_iac_security.py" = ["S404", "S603"]
+# osv_scanner_sca resolves the trusted scanner executable with shutil.which and
+# passes a fixed argv list without a shell. Consumer values are exact versions
+# and repo-contained lockfile paths, not executable input.
+"src/tc_fitness/core_checks/osv_scanner_sca.py" = ["S404", "S603"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+files = ["src/tc_fitness"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/tc_fitness"]
+
+[tool.coverage.report]
+exclude_lines = []
+partial_branches = []
+
+[[tool.mypy.overrides]]
+# PyYAML is a required runtime dependency, but does not ship type stubs.
+module = ["yaml"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# defusedxml is an OPTIONAL preference: the coverage CORE checks try it for a
+# hardened XXE-safe parse and fall back to the stdlib (after an explicit
+# DTD/entity rejection) when it is absent, so its stubs are not a hard
+# dependency of the type check.
+module = ["defusedxml", "defusedxml.*"]
+ignore_missing_imports = true
+
+# ── tc-fitness gate declaration — the engine eats its own dog food ───────────
+# `uv run tc-fitness run` owns deterministic static evaluation: ruff, format,
+# strict typing and branch naming. `make check` composes that static gate with
+# one fresh exact-base/candidate coverage transaction; CI uses the same split so
+# its Python matrix never repeats the full coverage measurement.
+[tool.tc_fitness]
+name = "three-cubes-fitness self gate"
+
+# ruff lint over the package + tests — the engine's own source style gate.
+[[tool.tc_fitness.steps]]
+id = "ruff"
+summary = "ruff check src tests"
+run = ["ruff", "check", "src", "tests"]
+fix = "run `ruff check --fix src tests`"
+next = "re-run `tc-fitness run`"
+
+# Preparation formats the complete Python source and test trees. Evaluation
+# verifies the same complete surface.
+[[tool.tc_fitness.steps]]
+id = "ruff-format"
+summary = "ruff format --check src tests"
+run = ["ruff", "format", "--check", "src", "tests"]
+fix = "run `make prepare`"
+next = "re-run `make check`"
+
+# mypy --strict over the package. `strict = true` + `files = ["src/tc_fitness"]`
+# live in [tool.mypy], so a bare `mypy` is already the strict, scoped check.
+# Dropped from the `--staged` <60s smoke (skip_when_staged): a whole-package
+# strict type check is a full-tree leg, not a per-staged-file smoke. The full
+# `tc-fitness run` (CI + the merge bar) still runs it.
+[[tool.tc_fitness.steps]]
+id = "mypy"
+summary = "mypy --strict src/tc_fitness"
+run = ["mypy"]
+skip_when_staged = true
+fix = "resolve the type error mypy reports"
+next = "re-run `tc-fitness run`"
+
+# The engine's OWN branch-naming gate, run against the gate. branch_naming is an
+# engine-shipped module (`tc_fitness.checks.branch_naming`) with a `python -m`
+# entrypoint; it gates the LIVE branch name (not a per-file baseline), so it is
+# not a `core:`/FitnessRule check — the faithful binding is its module
+# entrypoint. The engine thus dogfoods its own convention check.
+[[tool.tc_fitness.steps]]
+id = "branch-naming"
+summary = "branch_naming (engine's own convention gate)"
+run = ["python", "-m", "tc_fitness.checks.branch_naming"]
+fix = "rename the branch to the Linear <user>/<team>-<number>-<slug> shape"
+next = "re-run `make check-static`"
+
+[tool.mutmut]
+source_paths = ["src"]
+pytest_add_cli_args_test_selection = ["tests"]
+pytest_add_cli_args = ["-m", "unit or contract"]
+also_copy = [".github", ".gitignore", ".python-version", ".release-prepared.json", ".uv-version", "AGENTS.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "Makefile", "README.md", "docs", "mutation.toml", "scripts", "uv.lock"]
+max_stack_depth = -1
+mutate_only_covered_lines = false
+timeout_multiplier = 5
+timeout_constant = 1

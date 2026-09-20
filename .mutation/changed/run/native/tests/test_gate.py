@@ -1,0 +1,817 @@
+"""End-to-end tests for the ``tc-fitness run`` gate orchestrator.
+
+Each test builds a synthetic repo (a tmp dir with a ``[tool.tc_fitness]`` config
+and the step scripts/catalogue it references) and drives ``run_gate`` / ``main``,
+so the orchestrator is exercised exactly as a consumer's CI / ``make check``
+would invoke it — without depending on any real repo.
+
+The proofs:
+
+- a ``run`` (argv) step passes / fails on the child's exit code;
+- a ``shell`` step runs through the shell (pipelines / ``$(...)`` work);
+- step order is config order; a FAIL prints its agent-actionable fix:/next:;
+- ``continue_on_error`` records a FAIL but does NOT gate the aggregate;
+- ``allow_missing`` skips a missing program; without it a missing program FAILs;
+- a ``catalogue`` step dispatches the consumer's RuleEntry catalogue through the
+  shared runner, and ``--gate ID`` targets one rule;
+- ``--only ID`` restricts to a subset; ``fail_fast`` stops at the first failure;
+- the aggregate exit is 0 iff no gating step failed; a missing config exits 2.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from tc_fitness.gate import main, run_gate
+from tc_fitness.gate_config import load_config
+
+pytestmark = pytest.mark.integration
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+def _write_config(repo: Path, body: str) -> None:
+    # Write the gate config to a `.tc-fitness.toml` dedicated file, whose whole
+    # document IS the config — so a top-level `[[steps]]` array nests correctly
+    # without a `[tool.tc_fitness]` wrapper. (One test below covers the
+    # pyproject `[tool.tc_fitness]` path explicitly; the rest use the dedicated
+    # file purely to keep the TOML readable.)
+    (repo / ".tc-fitness.toml").write_text(body)
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _clean_sys_modules() -> object:
+    before = set(sys.modules)
+    yield
+    for name in set(sys.modules) - before:
+        if name.startswith(("check_", "_synthetic_cat", "synthetic_cat", "scripts")):
+            del sys.modules[name]
+
+
+# --------------------------------------------------------------------------- #
+# run (argv) steps
+# --------------------------------------------------------------------------- #
+
+
+def test_run_step_passes_on_zero_exit(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(repo, '[[steps]]\nid = "ok"\nsummary = "true step"\nrun = ["true"]\n')
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert outcome.exit_code == 0
+    assert "run [ok] true step" in out
+    assert "PASS [ok] true step" in out
+    assert ": PASS ===" in out
+
+
+def test_run_step_fails_on_nonzero_exit_and_prints_fix_next(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "bad"\nrun = ["false"]\nfix = "stop returning 1"\nnext = "re-run tc-fitness run"\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert not outcome.ok
+    assert outcome.exit_code == 1
+    assert outcome.gating_failures == ["bad"]
+    assert "FAIL [bad]" in out
+    assert "fix: stop returning 1" in out
+    assert "next: re-run tc-fitness run" in out
+
+
+def test_step_env_is_passed_to_child(repo: Path) -> None:
+    # The child exits 0 IFF it sees the step-declared env var.
+    _write_config(
+        repo,
+        '[[steps]]\nid = "env"\nshell = "[ \\"$GATE_MARK\\" = \\"yes\\" ]"\nenv = { GATE_MARK = "yes" }\n',
+    )
+    assert run_gate(load_config(repo), repo).ok
+
+
+def test_step_cwd_is_relative_to_repo_root(repo: Path) -> None:
+    sub = repo / "subdir"
+    sub.mkdir()
+    (sub / "marker.txt").write_text("x")
+    _write_config(repo, '[[steps]]\nid = "cwd"\ncwd = "subdir"\nshell = "test -f marker.txt"\n')
+    assert run_gate(load_config(repo), repo).ok
+
+
+# --------------------------------------------------------------------------- #
+# shell steps
+# --------------------------------------------------------------------------- #
+
+
+def test_shell_step_runs_through_shell(repo: Path) -> None:
+    # A pipeline only works through the shell.
+    _write_config(repo, '[[steps]]\nid = "pipe"\nshell = "echo hi | grep -q hi"\n')
+    assert run_gate(load_config(repo), repo).ok
+
+
+# --------------------------------------------------------------------------- #
+# missing program
+# --------------------------------------------------------------------------- #
+
+
+def test_missing_program_fails_by_default(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(repo, '[[steps]]\nid = "gone"\nrun = ["definitely-not-a-real-prog-xyz"]\n')
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert not outcome.ok
+    assert "not on PATH" in out
+
+
+def test_missing_program_skips_when_allow_missing(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "opt"\nrun = ["definitely-not-a-real-prog-xyz"]\nallow_missing = true\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok  # a skip never gates
+    assert outcome.skipped == 1
+    assert "SKIP [opt]" in out
+
+
+# --------------------------------------------------------------------------- #
+# continue_on_error
+# --------------------------------------------------------------------------- #
+
+
+def test_continue_on_error_fail_does_not_gate(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "soft"\nrun = ["false"]\ncontinue_on_error = true\n'
+        '[[steps]]\nid = "hard"\nrun = ["true"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    # The soft step FAILs but is non-gating, so the aggregate is PASS.
+    assert outcome.ok
+    assert outcome.gating_failures == []
+    assert "FAIL [soft]" in out
+    assert ": PASS ===" in out
+
+
+# --------------------------------------------------------------------------- #
+# ordering, only, fail_fast
+# --------------------------------------------------------------------------- #
+
+
+def test_steps_run_in_config_order(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "first"\nrun = ["true"]\n'
+        '[[steps]]\nid = "second"\nrun = ["true"]\n'
+        '[[steps]]\nid = "third"\nrun = ["true"]\n',
+    )
+    run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert out.index("run [first]") < out.index("run [second]") < out.index("run [third]")
+
+
+def test_only_restricts_to_named_steps(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["false"]\n',  # would fail if run
+    )
+    outcome = run_gate(load_config(repo), repo, only=["a"])
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok  # b was not run
+    assert "run [a]" in out
+    assert "run [b]" not in out
+
+
+def test_fail_fast_stops_at_first_gating_failure(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        'fail_fast = true\n[[steps]]\nid = "x"\nrun = ["false"]\n[[steps]]\nid = "y"\nrun = ["true"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert not outcome.ok
+    assert "run [y]" not in out  # never reached
+    assert "fail_fast" in out
+
+
+# --------------------------------------------------------------------------- #
+# catalogue step — dispatch the consumer's RuleEntry catalogue via the runner
+# --------------------------------------------------------------------------- #
+
+
+def _write_synthetic_catalogue(repo: Path) -> None:
+    """A repo whose catalogue lives at scripts/checks/synthetic_cat.py with two
+    check modules (one pass, one fail) — exercises the in-process dispatch."""
+    checks = repo / "scripts" / "checks"
+    checks.mkdir(parents=True)
+    (checks / "__init__.py").write_text("")
+    (repo / "scripts" / "__init__.py").write_text("")
+    (checks / "check_alpha.py").write_text("def main():\n    return 0\n")
+    (checks / "check_beta.py").write_text("def main():\n    return 0\n")
+    (checks / "synthetic_cat.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "ALL_ENTRIES = (\n"
+        "    RuleEntry(id='A1', gate='a1', check='alpha', summary='alpha'),\n"
+        "    RuleEntry(id='B1', gate='b1', check='beta', summary='beta'),\n"
+        ")\n"
+    )
+
+
+def test_catalogue_step_dispatches_rules(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        "[[steps]]\n"
+        'id = "fitness"\n'
+        'summary = "architecture fitness functions"\n'
+        'catalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    # The runner's own per-rule ledger prints inline under the step.
+    assert "PASS [A1] alpha" in out
+    assert "PASS [B1] beta" in out
+    assert "PASS [fitness]" in out
+
+
+def test_catalogue_step_fails_when_a_rule_fails(repo: Path) -> None:
+    checks = repo / "scripts" / "checks"
+    checks.mkdir(parents=True)
+    (checks / "__init__.py").write_text("")
+    (repo / "scripts" / "__init__.py").write_text("")
+    (checks / "check_bad.py").write_text("def main():\n    return 1\n")
+    (checks / "cat2.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "ALL_ENTRIES = (RuleEntry(id='X1', gate='x1', check='bad', summary='bad'),)\n"
+    )
+    _write_config(
+        repo,
+        '[[steps]]\nid = "f"\ncatalogue = "scripts.checks.cat2:ALL_ENTRIES"\nchecks_dir = "scripts/checks"\n',
+    )
+    assert not run_gate(load_config(repo), repo).ok
+
+
+def test_catalogue_step_gate_id_targets_one_rule(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "f"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+    run_gate(load_config(repo), repo, gate_id="A1")
+    out = _plain(capsys.readouterr().out)
+    assert "run [A1]" in out
+    assert "run [B1]" not in out  # only A1 targeted
+
+
+def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "f"\ncatalogue = "nope.module:ALL_ENTRIES"\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert not outcome.ok
+    assert "could not load catalogue" in out
+
+
+def test_catalogue_step_rejects_entries_outside_the_public_schema(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (repo / "invalid_catalogue.py").write_text("ENTRIES = (object(),)\n")
+    _write_config(
+        repo,
+        '[[steps]]\nid = "f"\ncatalogue = "invalid_catalogue:ENTRIES"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert not outcome.ok
+    assert "could not load catalogue" in _plain(capsys.readouterr().out)
+
+
+# --------------------------------------------------------------------------- #
+# --staged smoke tier — the <60s fast-feedback entrypoint
+# --------------------------------------------------------------------------- #
+
+
+def test_staged_catalogue_step_uses_staged_selection(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # With --staged and NO staged paths, the runner's staged selection runs
+    # every rule (fail-safe), printing its staged banner — proving the catalogue
+    # was dispatched in --staged mode, not --all.
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+    outcome = run_gate(load_config(repo), repo, staged=True)
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert "staged smoke" in out  # the smoke banner
+    assert "staged selection:" in out  # the runner's --staged ledger footer
+
+
+def test_staged_skips_steps_flagged_skip_when_staged(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # An expensive full-tree leg flagged skip_when_staged is dropped from the
+    # smoke with a transparent SKIP; the cheap leg still runs.
+    _write_config(
+        repo,
+        '[[steps]]\nid = "cheap"\nrun = ["true"]\n'
+        '[[steps]]\nid = "expensive"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+    outcome = run_gate(load_config(repo), repo, staged=True)
+    out = _plain(capsys.readouterr().out)
+    # The failing expensive leg was skipped, so the smoke is green.
+    assert outcome.ok
+    assert "SKIP [expensive]" in out
+    assert "skip_when_staged" in out
+    assert "PASS [cheap]" in out
+
+
+def test_non_staged_run_still_runs_skip_when_staged_steps(repo: Path) -> None:
+    # skip_when_staged ONLY affects --staged; a normal full run still executes
+    # the flagged step (so it gates as before).
+    _write_config(
+        repo,
+        '[[steps]]\nid = "expensive"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+    assert not run_gate(load_config(repo), repo, staged=False).ok
+
+
+def test_staged_gate_id_wins_over_staged(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # An explicit --gate target is the narrower intent and wins over --staged.
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "f"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+    run_gate(load_config(repo), repo, gate_id="A1", staged=True)
+    out = _plain(capsys.readouterr().out)
+    assert "run [A1]" in out
+    assert "run [B1]" not in out  # gate_id narrowed, not staged-selected
+
+
+def test_main_staged_flag_threads_through(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "cheap"\nrun = ["true"]\n'
+        '[[steps]]\nid = "expensive"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+    # Without --staged the failing expensive step gates → exit 1.
+    assert main(["run", "--repo-root", str(repo)]) == 1
+    # With --staged it is dropped → exit 0.
+    assert main(["run", "--repo-root", str(repo), "--staged"]) == 0
+    assert "SKIP [expensive]" in _plain(capsys.readouterr().out)
+
+
+def _shard_probe_config(repo: Path, *, with_shard_args: bool) -> Path:
+    """A run step that dumps its trailing argv + COVERAGE_FILE to a marker file.
+
+    Uses ``sys.executable`` as argv[0] so the PATH check passes; the substituted
+    ``shard_args`` (when declared) land as trailing ``sys.argv`` the probe echoes
+    back, and the engine's ``COVERAGE_FILE`` override lands in the probe's env.
+    """
+    marker = repo / "argv.txt"
+    script = repo / "dump.py"
+    script.write_text(
+        "import os, sys, pathlib\n"
+        f"pathlib.Path({str(marker)!r}).write_text("
+        "' '.join(sys.argv[1:]) + '|' + os.environ.get('COVERAGE_FILE', ''))\n"
+    )
+    shard_line = 'shard_args = ["--splits", "{total}", "--group", "{index}"]\n' if with_shard_args else ""
+    _write_config(
+        repo,
+        f'[[steps]]\nid = "t"\nrun = [{sys.executable!r}, {str(script)!r}]\n{shard_line}',
+    )
+    return marker
+
+
+def test_shard_appends_shard_args_and_sets_coverage_file(repo: Path) -> None:
+    marker = _shard_probe_config(repo, with_shard_args=True)
+    assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
+    # {total}->4, {index}->2 appended as trailing argv; COVERAGE_FILE scoped to i.
+    assert marker.read_text() == "--splits 4 --group 2|.coverage.2"
+
+
+def test_no_shard_leaves_command_untouched(repo: Path) -> None:
+    marker = _shard_probe_config(repo, with_shard_args=True)
+    assert run_gate(load_config(repo), repo, shard=None).ok
+    # Back-compat: no --shard → no trailing argv, no COVERAGE_FILE override.
+    assert marker.read_text() == "|"
+
+
+def test_shard_ignores_step_without_shard_args(repo: Path) -> None:
+    marker = _shard_probe_config(repo, with_shard_args=False)
+    assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
+    # Opt-in only: a step without shard_args is untouched even under --shard.
+    assert marker.read_text() == "|"
+
+
+def test_assure_coverage_help_is_routed_to_its_public_parser(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["assure-coverage", "--help"])
+
+    assert exc.value.code == 0
+    assert "--evidence-dir EVIDENCE_DIR" in capsys.readouterr().out
+
+
+def test_python_module_cli_shows_help_from_a_real_child_process(repo: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.gate", "--help"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "The single runnable quality gate" in result.stdout
+
+
+@pytest.mark.parametrize("spec", ["5/4", "0/4", "abc", "2/0", "2"])
+def test_main_invalid_shard_returns_two(repo: Path, capsys: pytest.CaptureFixture[str], spec: str) -> None:
+    _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
+    assert main(["run", "--repo-root", str(repo), "--shard", spec]) == 2
+    assert "FAIL --shard" in _plain(capsys.readouterr().err)
+
+
+def test_main_shard_flag_threads_through(repo: Path) -> None:
+    _write_config(repo, '[[steps]]\nid = "t"\nrun = ["true"]\n')
+    assert main(["run", "--repo-root", str(repo), "--shard", "1/2"]) == 0
+
+
+def test_main_changed_files_from_threads_diff_scope_through_catalogue(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checks = repo / "scripts" / "checks"
+    checks.mkdir(parents=True)
+    (checks / "__init__.py").write_text("")
+    (repo / "scripts" / "__init__.py").write_text("")
+    (checks / "check_src.py").write_text("def main():\n    return 0\n")
+    (checks / "check_tests.py").write_text("def main():\n    return 1\n")
+    (checks / "changed_cat.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "ALL_ENTRIES = (\n"
+        "    RuleEntry(id='SRC', gate='src', check='src', summary='src', staged_scope=('src',)),\n"
+        "    RuleEntry(id='TESTS', gate='tests', check='tests', summary='tests', staged_scope=('tests',)),\n"
+        ")\n"
+    )
+    changed = repo / "changed-files.txt"
+    changed.write_text("src/app.py\n", encoding="utf-8")
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.changed_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n'
+        '[[steps]]\nid = "expensive"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+
+    rc = main(["run", "--repo-root", str(repo), "--changed-files-from", str(changed)])
+    out = _plain(capsys.readouterr().out)
+
+    assert rc == 0
+    assert "changed smoke" in out
+    assert "run [SRC]" in out
+    assert "skip [TESTS]" in out
+    assert "SKIP [expensive]" in out
+
+
+def test_main_changed_files_from_missing_file_fails_closed(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "expensive"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+
+    rc = main(["run", "--repo-root", str(repo), "--changed-files-from", str(repo / "missing.txt")])
+    err = _plain(capsys.readouterr().err)
+
+    assert rc == 2
+    assert "FAIL --changed-files-from" in err
+    assert "missing.txt" in err
+
+
+# --------------------------------------------------------------------------- #
+# main() — the console entrypoint
+# --------------------------------------------------------------------------- #
+
+
+def test_main_run_returns_zero_on_pass(repo: Path) -> None:
+    _write_config(repo, '[[steps]]\nid = "ok"\nrun = ["true"]\n')
+    assert main(["run", "--repo-root", str(repo)]) == 0
+
+
+def test_main_run_returns_one_on_failure(repo: Path) -> None:
+    _write_config(repo, '[[steps]]\nid = "bad"\nrun = ["false"]\n')
+    assert main(["run", "--repo-root", str(repo)]) == 1
+
+
+def test_main_missing_config_returns_two(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    rc = main(["run", "--repo-root", str(repo)])
+    err = _plain(capsys.readouterr().err)
+    assert rc == 2
+    assert "fix:" in err
+
+
+def test_main_run_reads_pyproject_tool_block(repo: Path) -> None:
+    # The end-to-end path through a real [tool.tc_fitness] block in pyproject.toml
+    # (not the dedicated file) — the canonical consumer shape.
+    (repo / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\n\n"
+        "[tool.tc_fitness]\n"
+        'name = "demo gate"\n\n'
+        "[[tool.tc_fitness.steps]]\n"
+        'id = "ok"\n'
+        'run = ["true"]\n'
+    )
+    assert main(["run", "--repo-root", str(repo)]) == 0
+
+
+def test_main_only_flag_threads_through(repo: Path) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["false"]\n',
+    )
+    # --only a skips the failing b → exit 0.
+    assert main(["run", "--repo-root", str(repo), "--only", "a"]) == 0
+
+
+# --------------------------------------------------------------------------- #
+# concern-parallelism: stage / depends_on / tags / --tier (v0.10.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_same_stage_members_run_concurrently(repo: Path) -> None:
+    # Two shells in one stage rendezvous: each touches its marker then polls for
+    # the sibling's. They pass ONLY if run concurrently (sequential execution
+    # would block on a marker the not-yet-started sibling never creates → exit 1).
+    wait = "for _ in $(seq 1 50); do [ -f {o} ] && exit 0; sleep 0.1; done; exit 1"
+    _write_config(
+        repo,
+        f'[[steps]]\nid = "a"\nstage = "p"\nshell = "touch a.m; {wait.format(o="b.m")}"\n'
+        f'[[steps]]\nid = "b"\nstage = "p"\nshell = "touch b.m; {wait.format(o="a.m")}"\n',
+    )
+    assert run_gate(load_config(repo), repo).ok
+
+
+def test_depends_on_is_a_barrier(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "one"\nstage = "s1"\nshell = "echo one >> order.txt"\n'
+        '[[steps]]\nid = "two"\nstage = "s2"\ndepends_on = ["s1"]\nshell = "echo two >> order.txt"\n',
+    )
+    assert run_gate(load_config(repo), repo).ok
+    assert (repo / "order.txt").read_text() == "one\ntwo\n"  # barrier held
+    out = _plain(capsys.readouterr().out)
+    assert out.index("run [one]") < out.index("run [two]")
+
+
+def test_failing_stage_member_gates_and_siblings_still_run(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "good"\nstage = "p"\nrun = ["true"]\n'
+        '[[steps]]\nid = "bad"\nstage = "p"\nrun = ["false"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert not outcome.ok
+    assert "bad" in outcome.gating_failures
+    assert "PASS [good]" in out  # the concurrent sibling ran despite the failure
+
+
+def test_all_singleton_stages_match_sequential_output(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    seq = '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["true"]\n[[steps]]\nid = "c"\nrun = ["true"]\n'
+    _write_config(repo, seq)
+    run_gate(load_config(repo), repo)
+    sequential = _plain(capsys.readouterr().out)
+    staged = (
+        '[[steps]]\nid = "a"\nstage = "sa"\nrun = ["true"]\n'
+        '[[steps]]\nid = "b"\nstage = "sb"\nrun = ["true"]\n'
+        '[[steps]]\nid = "c"\nstage = "sc"\nrun = ["true"]\n'
+    )
+    _write_config(repo, staged)
+    run_gate(load_config(repo), repo)
+    scheduled = _plain(capsys.readouterr().out)
+    # Distinct singleton stages reproduce the live sequential path byte-for-byte.
+    assert scheduled == sequential
+
+
+def test_tier_selects_tagged_steps(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "s"\ntags = ["smoke"]\nrun = ["true"]\n'
+        '[[steps]]\nid = "f"\ntags = ["full"]\nrun = ["false"]\n'
+        '[[steps]]\nid = "plain"\nrun = ["false"]\n',
+    )
+    # --tier smoke runs only the smoke-tagged step; the failing full/plain steps
+    # are filtered out → exit 0.
+    assert main(["run", "--repo-root", str(repo), "--tier", "smoke"]) == 0
+    out = _plain(capsys.readouterr().out)
+    assert "run [s]" in out
+    assert "run [f]" not in out
+    assert "run [plain]" not in out
+
+
+def test_catalogue_step_runs_concurrently_with_subprocess_step(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\nstage = "p"\n'
+        'catalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\nchecks_dir = "scripts/checks"\n'
+        '[[steps]]\nid = "lint"\nstage = "p"\nrun = ["true"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo)
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert "PASS [lint]" in out  # subprocess leg (pool)
+    assert "run [fitness]" in out  # in-process catalogue leg (main thread) replayed cleanly
+
+
+def test_unknown_only_selector_runs_nothing_and_reports_valid_ids(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(repo, '[[steps]]\nid = "known"\nrun = ["false"]\n')
+
+    outcome = run_gate(load_config(repo), repo, only=["missing"])
+
+    assert outcome.ok
+    output = _plain(capsys.readouterr().out)
+    assert "unknown step id(s): ['missing']" in output
+    assert "run [known]" not in output
+
+
+def test_scheduled_smoke_skips_expensive_member_and_replays_stderr(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "cheap"\nstage = "parallel"\nshell = "echo diagnostic >&2"\n'
+        '[[steps]]\nid = "other"\nstage = "parallel"\nrun = ["true"]\n'
+        '[[steps]]\nid = "expensive"\nstage = "parallel"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo, staged=True)
+
+    captured = capsys.readouterr()
+    assert outcome.ok
+    assert "SKIP [expensive]" in _plain(captured.out)
+    assert "diagnostic" in captured.err
+
+
+def test_scheduled_fail_fast_stops_before_next_stage(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        'fail_fast = true\n[[steps]]\nid = "bad"\nstage = "first"\nrun = ["false"]\n'
+        '[[steps]]\nid = "later"\nstage = "second"\ndepends_on = ["first"]\nshell = "touch later"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert not outcome.ok
+    assert not (repo / "later").exists()
+    assert "stopping after the failing stage (first)" in _plain(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("allow_missing", [False, True])
+def test_scheduled_missing_program_obeys_allow_missing(
+    repo: Path, capsys: pytest.CaptureFixture[str], allow_missing: bool
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "missing"\nstage = "parallel"\nrun = ["definitely-not-a-real-prog-xyz"]\n'
+        + ("allow_missing = true\n" if allow_missing else "")
+        + '[[steps]]\nid = "companion"\nstage = "parallel"\nrun = ["true"]\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert outcome.ok is allow_missing
+    assert ("SKIP [missing]" if allow_missing else "FAIL [missing]") in _plain(capsys.readouterr().out)
+
+
+def test_main_rejects_partial_or_mixed_contract_invocation(repo: Path) -> None:
+    contract = repo / "contract.yaml"
+    ledger = repo / "ledger.json"
+    contract.write_text("schema: invalid\n")
+    with pytest.raises(SystemExit):
+        main(["run", "--contract", str(contract)])
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "run",
+                "--contract",
+                str(contract),
+                "--case",
+                "case",
+                "--ledger",
+                str(ledger),
+                "--repo-root",
+                str(repo),
+            ]
+        )
+
+
+def test_main_returns_two_for_invalid_contract(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    contract = repo / "contract.yaml"
+    ledger = repo / "ledger.json"
+    contract.write_text("schema: invalid\n")
+
+    code = main(
+        [
+            "run",
+            "--contract",
+            str(contract),
+            "--case",
+            "case",
+            "--ledger",
+            str(ledger),
+        ]
+    )
+
+    assert code == 2
+    assert "FAIL check contract" in _plain(capsys.readouterr().err)
+
+
+def test_main_routes_mutation_subcommand_to_its_public_parser() -> None:
+    with pytest.raises(SystemExit):
+        main(["mutation"])
+
+
+def test_catalogue_preserves_repo_path_that_caller_already_owns(repo: Path) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+    path = str(repo)
+    sys.path.insert(0, path)
+    try:
+        assert run_gate(load_config(repo), repo).ok
+        assert path in sys.path
+    finally:
+        sys.path.remove(path)
+
+
+def test_in_memory_configuration_has_no_file_banner(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from tc_fitness.gate_config import GateConfig, StepSpec
+
+    config = GateConfig(name="in-memory", steps=(StepSpec(id="ok", run=("true",)),))
+
+    assert run_gate(config, repo).ok
+    assert "(config:" not in _plain(capsys.readouterr().out)
+
+
+def test_scheduled_shard_reaches_opted_in_command(repo: Path) -> None:
+    marker = repo / "marker.txt"
+    (repo / "probe.py").write_text(
+        "import os,sys\nfrom pathlib import Path\n"
+        "Path('marker.txt').write_text(sys.argv[1] + '|' + os.environ['COVERAGE_FILE'])\n"
+    )
+    _write_config(
+        repo,
+        f'[[steps]]\nid = "probe"\nstage = "parallel"\nrun = ["{sys.executable}", "probe.py"]\n'
+        'shard_args = ["{index}/{total}"]\n'
+        '[[steps]]\nid = "companion"\nstage = "parallel"\nrun = ["true"]\n',
+    )
+
+    assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
+    assert marker.read_text() == "2/4|.coverage.2"
+
+
+def test_module_entrypoint_runs_public_gate(repo: Path) -> None:
+    _write_config(repo, '[[steps]]\nid = "ok"\nrun = ["true"]\n')
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.gate", "run", "--repo-root", str(repo)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+
+    assert result.returncode == 0
+    assert "PASS [ok]" in _plain(result.stdout)

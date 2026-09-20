@@ -1,0 +1,27 @@
+name: Resolve reviewed uv version
+description: Validate .uv-version and expose its exact value to setup-uv.
+
+outputs:
+  version:
+    description: Exact reviewed uv version.
+    value: ${{ steps.pin.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate repository uv pin
+      id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        pin_file=.uv-version
+        [[ -f "$pin_file" ]] || {
+          echo "::error title=Missing uv pin::.uv-version must contain one exact x.y.z version." >&2
+          exit 1
+        }
+        version="$(tr -d '\r\n' < "$pin_file")"
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+          echo "::error title=Invalid uv pin::.uv-version must contain one exact x.y.z version." >&2
+          exit 1
+        }
+        printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"

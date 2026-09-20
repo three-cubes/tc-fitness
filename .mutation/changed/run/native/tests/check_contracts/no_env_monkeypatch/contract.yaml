@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_env_monkeypatch
+config: {"roots":["src"],"env_prefixes":["APP_"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-env-monkeypatch
+          path: src/example.py
+          message_contains: "boundary object"
+dependencies: []

@@ -1,0 +1,23 @@
+schema: tc.fitness/check-contract/v1
+check: core:every_test_has_tier_marker
+config:
+  roots:
+  - tests
+  require_module_marker: true
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: every-test-has-tier-marker
+      path: tests/test_example.py
+      message_contains: add pytestmark
+dependencies: []

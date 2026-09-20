@@ -1,0 +1,77 @@
+"""Tests for the keystone drift-enders (v0.6.0)."""
+
+from __future__ import annotations
+
+import pytest
+
+from tc_fitness.keystone import (
+    catalogue_check_consistency,
+    reconcile_catalogue,
+)
+
+pytestmark = pytest.mark.unit
+
+
+# ── net_new_violations_forbidden ──────────────────────────────────────────
+
+
+# ── baseline_shrink_only ──────────────────────────────────────────────────
+
+
+# ── catalogue_check_consistency ───────────────────────────────────────────
+
+
+def test_reconcile_clean() -> None:
+    report = reconcile_catalogue(
+        cataloged_check_ids=["core:a", "core:b"],
+        available_check_ids=["core:a", "core:b"],
+    )
+    assert report.ok
+
+
+def test_reconcile_orphan_check() -> None:
+    report = reconcile_catalogue(
+        cataloged_check_ids=["core:a"],
+        available_check_ids=["core:a", "core:b"],
+    )
+    assert report.orphan_checks == ["core:b"]
+    assert not report.ok
+
+
+def test_reconcile_dangling_entry() -> None:
+    report = reconcile_catalogue(
+        cataloged_check_ids=["core:a", "core:missing"],
+        available_check_ids=["core:a"],
+    )
+    assert report.dangling_entries == [("core:missing", "core:missing")]
+    assert not report.ok
+
+
+def test_catalogue_check_consistency_exit_codes() -> None:
+    ok = catalogue_check_consistency(
+        cataloged_check_ids=["x"],
+        available_check_ids=["x"],
+        print_fn=lambda _m: None,
+    )
+    assert ok == 0
+    bad = catalogue_check_consistency(
+        cataloged_check_ids=["x", "y"],
+        available_check_ids=["x"],
+        print_fn=lambda _m: None,
+    )
+    assert bad == 1
+
+
+def test_catalogue_check_consistency_reports_orphan_check_and_remediation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = catalogue_check_consistency(
+        cataloged_check_ids=["core:present"],
+        available_check_ids=["core:present", "core:orphan"],
+        remediation="add the missing catalogue entry",
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert "core:orphan" in output
+    assert "add the missing catalogue entry" in output

@@ -1,0 +1,224 @@
+name: CI
+
+# Pull requests run the static gate across supported Python versions and one
+# exact-base/candidate coverage transaction. Main does not repeat the full gate:
+# the protected PR result is the reviewed merge evidence and release workflows
+# own post-merge publication.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-static:
+    name: Static self gate (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+
+      # Pinned + cached uv install (org standard). `--all-extras` provisions the
+      # `dev` optional-dependency group (ruff / mypy / pytest …) into the locked
+      # .venv, so the gate step runs the CI-equivalent toolchain.
+      - name: Locked uv install (org composite)
+        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
+        with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
+          python-version: ${{ matrix.python-version }}
+          sync-args: "--all-extras"
+
+      - name: Static self gate
+        run: |
+          make prepare
+          make check-static
+
+  coverage-assurance:
+    name: Fresh exact-base coverage assurance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+
+      - name: Locked uv install
+        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
+        with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
+          python-version: "3.12"
+          sync-args: "--all-extras"
+
+      - name: Measure and admit the exact candidate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVIDENCE_DIR: ${{ runner.temp }}/coverage-assurance
+        run: |
+          make prepare
+          make assert-clean
+          uv run --no-sync --no-build tc-fitness assure-coverage \
+            --base-commit "$BASE_SHA" \
+            --candidate-commit "$HEAD_SHA" \
+            --evidence-dir "$EVIDENCE_DIR"
+
+      - name: Retain exact coverage evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/coverage-assurance
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  distribution-qualification:
+    name: Distribution qualification (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+
+      - name: Locked uv install (org composite)
+        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
+        with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
+          python-version: ${{ matrix.python-version }}
+
+      - name: Qualify direct and rebuilt distributions
+        run: bash scripts/qualification/distribution.sh --python "${{ matrix.python-version }}"
+
+  changed-mutation:
+    name: Changed-code mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+      - name: Locked mutation toolchain
+        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
+        with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
+          python-version: "3.12"
+          sync-args: "--all-extras"
+      - name: Run exact-candidate mutation assurance
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: >-
+          uv run --no-sync --no-build tc-fitness mutation check
+          --base "$BASE_SHA" --head "$HEAD_SHA"
+          --output .mutation/changed --run-id "$RUN_ID" --attempt "$ATTEMPT"
+      - name: Retain native mutation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .mutation/changed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  quality-gate:
+    name: Quality gate
+    if: ${{ always() }}
+    needs: [check-static, coverage-assurance, distribution-qualification, changed-mutation]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Require every qualification worker to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/qualification/quality_gate_fanin.py
+
+  # no-attribution — the dedicated required context (Autonomous Delivery
+  # decision D1): reject AI/LLM self-attribution residue in the PR's commits +
+  # title/body. The engine dogfoods its OWN detector — it runs the in-repo
+  # `tc_fitness.core_checks.no_llm_attribution` module against the locked
+  # checkout via `uv run`, NOT a `git+` pin, so the CI leg is single-sourced
+  # with the shipped commit-msg hook and can never drift.
+  no-attribution:
+    name: no-attribution
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # pinned (org standard)
+        with:
+          version: ${{ steps.uv-version.outputs.version }}
+      - name: Reject AI/LLM self-attribution in commits + PR title/body
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # tc-fitness IS the engine (self): provision the package into the venv,
+          # then run its own module — never a git+ pin (single-sourced detector).
+          uv sync --all-extras
+          module="tc_fitness.core_checks.no_llm_attribution"
+          workdir="$(mktemp -d)"; trap 'rm -rf "$workdir"' EXIT; rc=0
+          scan() { if ! uv run --no-sync python -m "$module" --scan-file "$2"; then echo "::error::no-attribution: residue in $1." >&2; rc=1; fi; }
+          scan_advisory() { if ! uv run --no-sync python -m "$module" --scan-file "$2"; then echo "::warning::no-attribution: possible residue in $1 (advisory)." >&2; fi; }
+          shas="$(git rev-list "${PR_BASE_SHA}..${PR_HEAD_SHA}")"
+          while IFS= read -r sha; do [[ -z "$sha" ]] && continue; git log -1 --format=%B "$sha" > "$workdir/c-$sha.txt"; scan "commit $sha" "$workdir/c-$sha.txt"; done <<< "$shas"
+          printf '%s' "$PR_TITLE" > "$workdir/t.txt"; scan "PR title" "$workdir/t.txt"
+          printf '%s' "$PR_BODY" > "$workdir/b.txt"; scan_advisory "PR body" "$workdir/b.txt"
+          exit "$rc"

@@ -1,0 +1,30 @@
+schema: tc.fitness/check-contract/v1
+check: core:script_help_smoke
+config:
+  roots: [scripts]
+  python_executable: python3
+  help_timeout_seconds: 10
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: script-help-smoke
+          path: scripts/broken.py
+          message_contains: --help
+  - id: unavailable
+    fixture: unavailable
+    environment: {schema: tc.fitness/check-environment/v1, path: empty}
+    expected:
+      status: error
+      exit: nonzero
+      findings:
+        - rule: dependency-unavailable
+          path: .
+          message_contains: python3
+dependencies: [python3]

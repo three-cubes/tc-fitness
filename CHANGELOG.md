@@ -17,6 +17,14 @@ stdlib at runtime (PyYAML is an optional `yaml` extra) and must never import
 
 ### Added
 
+- **`lib.pinned_version(distribution, package)`** — reads back the exact version
+  a distribution's manifest pins a package at, so enforcement can keep working
+  without a second copy of the number in source. Raises a named
+  `PinnedVersionError` naming the repair when the distribution is not
+  installed, does not require the package, or requires it at anything other
+  than an exact `==` version; each is a different fix, so a silent default
+  would let a caller enforce against a version nothing declares. This is the
+  pattern `no_duplicated_dependency_pin` directs an agent to.
 - **CORE check `no_duplicated_dependency_pin`** — flags a source literal that
   restates the version of an exact pin the project's own manifest declares.
   A project pinning `tool==1.2.3` already has one source of truth for that

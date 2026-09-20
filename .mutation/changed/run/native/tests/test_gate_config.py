@@ -1,0 +1,441 @@
+"""Tests for the ``[tool.tc_fitness]`` gate-config loader.
+
+The config is the repo-owned declaration of the gate. These tests pin:
+
+- resolution order (``.tc-fitness.toml`` wins over ``pyproject.toml``);
+- the ``[tool.tc_fitness]`` sub-table extraction from a real pyproject;
+- the dedicated-file whole-document shape;
+- per-step validation (exactly one of run/shell/catalogue; id required;
+  catalogue must be ``module:attr``; dispatch vocabulary; env shape);
+- duplicate-id rejection;
+- every error is agent-actionable (carries ``fix:`` and ``next:``).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from tc_fitness.gate_config import (
+    GateConfigError,
+    StepSpec,
+    find_config_file,
+    load_config,
+    load_core_check_configs,
+    parse_config,
+    parse_core_check_configs,
+    plan_stages,
+)
+
+pytestmark = pytest.mark.integration
+
+# --------------------------------------------------------------------------- #
+# resolution
+# --------------------------------------------------------------------------- #
+
+
+def test_dedicated_file_wins_over_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.tc_fitness]\n")
+    (tmp_path / ".tc-fitness.toml").write_text("name = 'x'\n")
+    assert find_config_file(tmp_path) == tmp_path / ".tc-fitness.toml"
+
+
+def test_pyproject_used_when_no_dedicated_file(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.tc_fitness]\n")
+    assert find_config_file(tmp_path) == tmp_path / "pyproject.toml"
+
+
+def test_no_config_file_returns_none(tmp_path: Path) -> None:
+    assert find_config_file(tmp_path) is None
+
+
+def test_load_missing_config_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        load_config(tmp_path)
+    msg = str(exc.value)
+    assert "fix:" in msg and "next:" in msg
+
+
+# --------------------------------------------------------------------------- #
+# pyproject extraction
+# --------------------------------------------------------------------------- #
+
+
+def test_load_from_pyproject_sub_table(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\n\n"
+        "[tool.tc_fitness]\n"
+        'name = "demo gate"\n'
+        "fail_fast = true\n\n"
+        "[[tool.tc_fitness.steps]]\n"
+        'id = "ruff"\n'
+        'summary = "ruff lint"\n'
+        'run = ["ruff", "check", "."]\n'
+    )
+    cfg = load_config(tmp_path)
+    assert cfg.name == "demo gate"
+    assert cfg.fail_fast is True
+    assert len(cfg.steps) == 1
+    step = cfg.steps[0]
+    assert step.id == "ruff"
+    assert step.kind == "run"
+    assert step.run == ("ruff", "check", ".")
+
+
+def test_pyproject_without_tc_fitness_block_is_actionable(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+    with pytest.raises(GateConfigError) as exc:
+        load_config(tmp_path)
+    assert "[tool.tc_fitness]" in str(exc.value)
+    assert "fix:" in str(exc.value)
+
+
+def test_dedicated_file_whole_document_is_config(tmp_path: Path) -> None:
+    (tmp_path / ".tc-fitness.toml").write_text(
+        'name = "dedicated"\n\n[[steps]]\nid = "tests"\nshell = "pytest -q"\n'
+    )
+    cfg = load_config(tmp_path)
+    assert cfg.name == "dedicated"
+    assert cfg.steps[0].kind == "shell"
+    assert cfg.steps[0].shell == "pytest -q"
+
+
+# --------------------------------------------------------------------------- #
+# step validation
+# --------------------------------------------------------------------------- #
+
+
+def parse_config_table(steps_block: str, tmp_path: Path):
+    import tomllib
+
+    src = tmp_path / "pyproject.toml"
+    # Qualify a bare `[[steps]]` array to `[[tool.tc_fitness.steps]]` so it nests
+    # under the table rather than opening a new top-level array (TOML closes the
+    # `[tool.tc_fitness]` header the moment a `[[steps]]` line appears).
+    qualified = steps_block.replace("[[steps]]", "[[tool.tc_fitness.steps]]")
+    doc = "[tool.tc_fitness]\n" + qualified
+    table = tomllib.loads(doc)["tool"]["tc_fitness"]
+    return parse_config(table, source=src)
+
+
+def test_no_steps_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("name = 'x'\n", tmp_path)
+    assert "steps" in str(exc.value)
+    assert "fix:" in str(exc.value)
+
+
+def test_step_requires_exactly_one_action(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'x'\nrun = ['a']\nshell = 'b'\n", tmp_path)
+    assert "EXACTLY ONE" in str(exc.value)
+
+
+def test_step_with_no_action_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError):
+        parse_config_table("[[steps]]\nid = 'x'\n", tmp_path)
+
+
+def test_step_missing_id_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nrun = ['a']\n", tmp_path)
+    assert "id" in str(exc.value)
+
+
+def test_catalogue_must_be_module_attr(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'cat'\ncatalogue = 'not_a_ref'\n", tmp_path)
+    assert "module.path:attr" in str(exc.value)
+
+
+def test_valid_catalogue_step_parses(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\n"
+        "id = 'cat'\n"
+        "catalogue = 'scripts.checks._rule_catalogue:ALL_ENTRIES'\n"
+        "checks_dir = 'scripts/checks'\n"
+        "dispatch = 'subprocess'\n"
+        "parallel = true\n",
+        tmp_path,
+    )
+    step = cfg.steps[0]
+    assert step.kind == "catalogue"
+    assert step.catalogue == "scripts.checks._rule_catalogue:ALL_ENTRIES"
+    assert step.checks_dir == "scripts/checks"
+    assert step.dispatch == "subprocess"
+    assert step.parallel is True
+
+
+def test_invalid_dispatch_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table(
+            "[[steps]]\nid = 'c'\ncatalogue = 'm:A'\ndispatch = 'threads'\n",
+            tmp_path,
+        )
+    assert "dispatch" in str(exc.value)
+
+
+def test_run_must_be_list_of_strings(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'x'\nrun = 'ruff check'\n", tmp_path)
+    assert "list of strings" in str(exc.value)
+
+
+def test_env_must_be_string_table(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'x'\nrun = ['a']\nenv = { K = 1 }\n", tmp_path)
+    assert "env" in str(exc.value)
+
+
+def test_optional_step_fields_default(tmp_path: Path) -> None:
+    cfg = parse_config_table("[[steps]]\nid = 'x'\nrun = ['a']\n", tmp_path)
+    step = cfg.steps[0]
+    assert step.cwd == "."
+    assert step.env == {}
+    assert step.allow_missing is False
+    assert step.continue_on_error is False
+    assert step.fix == ""
+    assert step.next == ""
+    assert step.skip_when_staged is False
+    assert step.shard_args == ()
+    assert step.stage is None
+    assert step.depends_on == ()
+    assert step.tags == ()
+
+
+def test_stage_depends_on_tags_parse(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid = 'l'\nstage = 'lint'\ntags = ['smoke', 'full']\nrun = ['ruff']\n"
+        "[[steps]]\nid = 't'\nstage = 'test'\ndepends_on = ['lint']\nrun = ['pytest']\n",
+        tmp_path,
+    )
+    assert cfg.steps[0].stage == "lint"
+    assert cfg.steps[0].tags == ("smoke", "full")
+    assert cfg.steps[1].depends_on == ("lint",)
+
+
+def test_depends_on_cycle_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table(
+            "[[steps]]\nid = 'a'\nstage = 'A'\ndepends_on = ['B']\nrun = ['x']\n"
+            "[[steps]]\nid = 'b'\nstage = 'B'\ndepends_on = ['A']\nrun = ['x']\n",
+            tmp_path,
+        )
+    assert "cycle" in str(exc.value)
+
+
+def test_depends_on_unknown_stage_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'a'\nstage = 'A'\ndepends_on = ['Z']\nrun = ['x']\n", tmp_path)
+    assert "unknown stage" in str(exc.value)
+
+
+def test_stage_cannot_depend_on_itself(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError, match="depends on itself"):
+        parse_config_table(
+            "[[steps]]\nid = 'a'\nstage = 'build'\ndepends_on = ['build']\nrun = ['true']\n",
+            tmp_path,
+        )
+
+
+def test_non_strict_stage_planning_drops_a_filtered_dependency() -> None:
+    step = StepSpec(id="kept", run=("true",), stage="kept", depends_on=("filtered",))
+
+    stages = plan_stages((step,), strict=False)
+
+    assert len(stages) == 1
+    assert stages[0].name == "kept"
+    assert stages[0].depends_on == frozenset()
+
+
+def test_join_stage_waits_until_each_real_predecessor_is_ready() -> None:
+    steps = (
+        StepSpec(id="first", run=("true",), stage="first"),
+        StepSpec(id="second", run=("true",), stage="second"),
+        StepSpec(id="join", run=("true",), stage="join", depends_on=("first", "second")),
+    )
+
+    stages = plan_stages(steps)
+
+    assert tuple(stage.name for stage in stages) == ("first", "second", "join")
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("[tool]\ntc_fitness = 'not a table'\n", "must be a table"),
+        ("steps = [false]\n", "is not a table"),
+        ("[[steps]]\nid='x'\nshell=1\n", "`shell` must be a string"),
+        ("[[steps]]\nid='x'\nrun=['true']\nbaseline_free=1\n", "removed option `baseline_free`"),
+        ("[[steps]]\nid='x'\nrun=['true']\nstage=1\n", "`stage` must be a non-empty string"),
+    ],
+)
+def test_malformed_table_and_step_shapes_are_rejected(tmp_path: Path, body: str, message: str) -> None:
+    config = tmp_path / ("pyproject.toml" if body.startswith("[tool]") else ".tc-fitness.toml")
+    config.write_text(body)
+
+    with pytest.raises(GateConfigError, match=message):
+        load_config(tmp_path)
+
+
+def test_skip_when_staged_parses(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid = 'x'\nrun = ['a']\nskip_when_staged = true\n",
+        tmp_path,
+    )
+    assert cfg.steps[0].skip_when_staged is True
+
+
+@pytest.mark.parametrize(
+    ("step_body", "kind"),
+    [
+        ("catalogue = 'mod:RULES'", "catalogue"),
+        ("shell = 'pytest'", "shell"),
+    ],
+)
+def test_shard_args_on_a_step_that_cannot_split_is_rejected(
+    tmp_path: Path, step_body: str, kind: str
+) -> None:
+    """Only a `run` step is split, so declaring shard_args elsewhere must fail.
+
+    gate.py applies the shard arguments inside its `kind == "run"` branch, so a
+    shell or catalogue step accepts the key and ignores it. If the loader
+    allowed that, a repo could declare it, have its pipeline fan the step across
+    N runners, pay N times the compute and gain nothing — while every runner did
+    the whole job and the gate still reported green.
+    """
+    with pytest.raises(GateConfigError) as excinfo:
+        parse_config_table(
+            f"[[steps]]\nid = 'x'\n{step_body}\nshard_args = ['--splits', '{{total}}']\n",
+            tmp_path,
+        )
+    message = str(excinfo.value)
+    assert "shard_args" in message
+    assert kind in message
+    # The message has to name the wrong outcome, not just refuse: the failure it
+    # prevents is silent, so a reader who has not hit it needs telling why the
+    # key looks harmless.
+    assert "fix:" in message and "next:" in message
+
+
+@pytest.mark.parametrize("step_body", ["catalogue = 'mod:RULES'", "shell = 'pytest'"])
+def test_a_step_that_cannot_split_still_parses_without_shard_args(tmp_path: Path, step_body: str) -> None:
+    cfg = parse_config_table(f"[[steps]]\nid = 'x'\n{step_body}\n", tmp_path)
+    assert cfg.steps[0].shard_args == ()
+
+
+def test_shard_args_parses_to_tuple(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = ['--splits', '{total}', '--group', '{index}']\n",
+        tmp_path,
+    )
+    assert cfg.steps[0].shard_args == ("--splits", "{total}", "--group", "{index}")
+
+
+def test_shard_args_must_be_list_of_strings(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table("[[steps]]\nid = 'x'\nrun = ['pytest']\nshard_args = '--splits'\n", tmp_path)
+    assert "list of strings" in str(exc.value)
+
+
+def test_step_fix_next_and_flags_parse(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\n"
+        "id = 'x'\n"
+        "run = ['a']\n"
+        "allow_missing = true\n"
+        "continue_on_error = true\n"
+        'fix = "do the thing"\n'
+        'next = "re-run"\n'
+        'env = { K = "v" }\n',
+        tmp_path,
+    )
+    step = cfg.steps[0]
+    assert step.allow_missing is True
+    assert step.continue_on_error is True
+    assert step.fix == "do the thing"
+    assert step.next == "re-run"
+    assert step.env == {"K": "v"}
+
+
+def test_duplicate_step_ids_rejected(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_config_table(
+            "[[steps]]\nid = 'x'\nrun = ['a']\n[[steps]]\nid = 'x'\nrun = ['b']\n",
+            tmp_path,
+        )
+    assert "duplicate" in str(exc.value)
+
+
+def test_malformed_toml_is_actionable(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.tc_fitness\n")  # broken
+    with pytest.raises(GateConfigError) as exc:
+        load_config(tmp_path)
+    assert "fix:" in str(exc.value)
+
+
+# --------------------------------------------------------------------------- #
+# [tool.tc_fitness.core_checks.<module>] config blocks (v0.6.1)
+# --------------------------------------------------------------------------- #
+
+
+def test_core_check_configs_absent_is_empty(tmp_path: Path) -> None:
+    assert parse_core_check_configs({"steps": []}, source=tmp_path / "pyproject.toml") == {}
+
+
+def test_core_check_configs_parsed_keyed_by_module(tmp_path: Path) -> None:
+    table = {
+        "core_checks": {
+            "no_duplicate_string": {"roots": ["src"], "min_occurrences": 3},
+            "cognitive_complexity": {"roots": ["src", "tools"]},
+        }
+    }
+    parsed = parse_core_check_configs(table, source=tmp_path / "pyproject.toml")
+    assert parsed["no_duplicate_string"] == {"roots": ["src"], "min_occurrences": 3}
+    assert parsed["cognitive_complexity"] == {"roots": ["src", "tools"]}
+
+
+def test_core_check_configs_non_table_root_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_core_check_configs({"core_checks": "nope"}, source=tmp_path / "pyproject.toml")
+    assert "fix:" in str(exc.value)
+
+
+def test_core_check_configs_non_table_block_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError) as exc:
+        parse_core_check_configs(
+            {"core_checks": {"no_duplicate_string": "nope"}},
+            source=tmp_path / "pyproject.toml",
+        )
+    assert "no_duplicate_string" in str(exc.value)
+    assert "fix:" in str(exc.value)
+
+
+def test_load_core_check_configs_from_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.tc_fitness]\n"
+        "[[tool.tc_fitness.steps]]\n"
+        "id = 'fitness'\n"
+        "catalogue = 'scripts.checks.cat:ALL'\n"
+        "[tool.tc_fitness.core_checks.no_duplicate_string]\n"
+        "roots = ['src']\n"
+        "min_occurrences = 3\n"
+    )
+    configs = load_core_check_configs(tmp_path)
+    assert configs["no_duplicate_string"]["roots"] == ["src"]
+    assert configs["no_duplicate_string"]["min_occurrences"] == 3
+
+
+def test_load_core_check_configs_from_dedicated_file(tmp_path: Path) -> None:
+    # In a dedicated .tc-fitness.toml the whole document IS the config, so the
+    # block is a top-level [core_checks.<module>] table.
+    (tmp_path / ".tc-fitness.toml").write_text(
+        "[[steps]]\nid = 'f'\ncatalogue = 'scripts.checks.cat:ALL'\n[core_checks.no_duplicate_string]\nroots = ['lib']\n"
+    )
+    configs = load_core_check_configs(tmp_path)
+    assert configs["no_duplicate_string"]["roots"] == ["lib"]
+
+
+def test_load_core_check_configs_no_config_file_is_empty(tmp_path: Path) -> None:
+    assert load_core_check_configs(tmp_path) == {}

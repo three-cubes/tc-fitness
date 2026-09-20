@@ -1,0 +1,12 @@
+{
+    "exit_code_by_key": {
+        "tc_fitness.catalogue.x_is_dispatchable__mutmut_1": null,
+        "tc_fitness.catalogue.x_is_dispatchable__mutmut_2": null,
+        "tc_fitness.catalogue.x_is_dispatchable__mutmut_3": null,
+        "tc_fitness.catalogue.x_is_dispatchable__mutmut_4": null,
+        "tc_fitness.catalogue.x_is_dispatchable__mutmut_5": null
+    },
+    "type_check_error_by_key": {},
+    "durations_by_key": {},
+    "estimated_durations_by_key": {}
+}

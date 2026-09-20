@@ -30,8 +30,11 @@ on the default.
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import requires as metadata_requires
 from pathlib import Path
 from typing import Any
 
@@ -158,7 +161,9 @@ def gate(
     # Default path: byte-identical to v0.1.0 (no counts banner change).
     remaining = len(baseline)
     if remaining > 0:
-        print(f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered file(s) still present in baseline.")
+        print(
+            f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered file(s) still present in baseline."
+        )
     else:
         print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
     return 0
@@ -250,10 +255,18 @@ def gate_keys(
     # Default path: byte-identical to v0.2.0 (no counts banner change).
     remaining = len(baseline)
     if remaining > 0:
-        print(f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered key(s) still present in baseline.")
+        print(
+            f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered key(s) still present in baseline."
+        )
     else:
         print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
     return 0
+
+
+#: Requirement-name prefix of a PEP 508 requirement string.
+_REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9._-]+)")
+#: The exact-version part of a `package==<version>` requirement.
+_EXACT_PIN_VERSION_RE = re.compile(r"==\s*([0-9][^;\s,\]]*)")
 
 
 def repo_relative(path: Path, *, repo_root: Path | None = None) -> Path:
@@ -358,6 +371,71 @@ def remediation(
     return "\n".join(lines)
 
 
+class PinnedVersionError(RuntimeError):
+    """Raised when a distribution does not pin a package at an exact version."""
+
+
+def pinned_version(distribution: str, package: str) -> str:
+    """Return the exact version ``distribution`` pins ``package`` at.
+
+    The sanctioned alternative to restating a pin as a literal. A project that
+    declares ``package==1.2.3`` already has one source of truth for that
+    version; reading it back keeps enforcement intact while leaving the
+    manifest the only place a bump is edited.
+
+    Use this from code that ships inside ``distribution``. Code that runs
+    outside it — a qualification script against an environment synced without
+    the project — cannot import this, and should parse the manifest under test
+    directly rather than restate the version.
+
+    Args:
+        distribution: the installed distribution whose requirements to read
+            (its name on PyPI, not the import package).
+        package: the required package whose pin to return.
+
+    Raises:
+        PinnedVersionError: when the distribution is not installed, does not
+            require ``package``, or requires it at anything other than an exact
+            ``==`` version. Each case is a different repair, so each says which
+            it is rather than returning a silent default that would let the
+            caller enforce against a version nothing declares.
+    """
+    try:
+        requirements = metadata_requires(distribution) or []
+    except PackageNotFoundError as exc:
+        raise PinnedVersionError(
+            f"distribution {distribution!r} is not installed, so its pin for {package!r} cannot be read; "
+            f"fix: install {distribution!r} in this environment; "
+            f"next: re-run the caller; "
+            f'run: python -c "import importlib.metadata as m; m.requires({distribution!r})"'
+        ) from exc
+
+    normalised = package.replace("_", "-").lower()
+    seen: list[str] = []
+    for requirement in requirements:
+        match = _REQUIREMENT_NAME_RE.match(requirement)
+        if not match or match.group(1).replace("_", "-").lower() != normalised:
+            continue
+        seen.append(requirement)
+        pin = _EXACT_PIN_VERSION_RE.search(requirement)
+        if pin:
+            return pin.group(1)
+
+    if seen:
+        raise PinnedVersionError(
+            f"{distribution!r} requires {package!r} but not at an exact version ({seen[0]!r}); "
+            f"fix: pin it as {package}==<version> in the manifest, or stop asserting an exact version; "
+            f"next: re-run the caller; "
+            f'run: python -c "import importlib.metadata as m; print(m.requires({distribution!r}))"'
+        )
+    raise PinnedVersionError(
+        f"{distribution!r} does not require {package!r}, so there is no pin to read; "
+        f"fix: declare {package}==<version> in the manifest, or drop the version check; "
+        f"next: re-run the caller; "
+        f'run: python -c "import importlib.metadata as m; print(m.requires({distribution!r}))"'
+    )
+
+
 def emit_failures(check_name: str, fails: list[str], stream: Any = None) -> None:
     """Emit the canonical FAIL banner + bulleted failure list.
 
@@ -399,6 +477,8 @@ def missing_keys(parsed: dict[str, Any], required: tuple[str, ...]) -> list[str]
 
 
 __all__ = [
+    "PinnedVersionError",
+    "pinned_version",
     "REPO_ROOT",
     "actionable",
     "emit_failures",

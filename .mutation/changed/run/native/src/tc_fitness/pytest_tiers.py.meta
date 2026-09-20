@@ -1,0 +1,31 @@
+{
+    "exit_code_by_key": {
+        "tc_fitness.pytest_tiers.x_pytest_ignore_collect__mutmut_1": null,
+        "tc_fitness.pytest_tiers.x_pytest_ignore_collect__mutmut_2": null,
+        "tc_fitness.pytest_tiers.x_pytest_ignore_collect__mutmut_3": null,
+        "tc_fitness.pytest_tiers.x_pytest_ignore_collect__mutmut_4": null,
+        "tc_fitness.pytest_tiers.x_pytest_ignore_collect__mutmut_5": null,
+        "tc_fitness.pytest_tiers.x_pytest_ignore_collect__mutmut_6": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_1": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_2": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_3": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_4": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_5": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_6": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_7": null,
+        "tc_fitness.pytest_tiers.x_effective_tier_violations__mutmut_8": null,
+        "tc_fitness.pytest_tiers.x_pytest_itemcollected__mutmut_1": null,
+        "tc_fitness.pytest_tiers.x_pytest_itemcollected__mutmut_2": null,
+        "tc_fitness.pytest_tiers.x_pytest_itemcollected__mutmut_3": null,
+        "tc_fitness.pytest_tiers.x_pytest_itemcollected__mutmut_4": null,
+        "tc_fitness.pytest_tiers.x_pytest_itemcollected__mutmut_5": null,
+        "tc_fitness.pytest_tiers.x_pytest_deselected__mutmut_1": null,
+        "tc_fitness.pytest_tiers.x_pytest_deselected__mutmut_2": null,
+        "tc_fitness.pytest_tiers.x_pytest_deselected__mutmut_3": null,
+        "tc_fitness.pytest_tiers.x_pytest_deselected__mutmut_4": null,
+        "tc_fitness.pytest_tiers.x_pytest_deselected__mutmut_5": null
+    },
+    "type_check_error_by_key": {},
+    "durations_by_key": {},
+    "estimated_durations_by_key": {}
+}

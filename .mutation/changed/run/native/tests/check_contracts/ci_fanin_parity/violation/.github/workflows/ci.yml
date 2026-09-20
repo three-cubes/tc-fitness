@@ -1,0 +1,12 @@
+name: CI
+on: push
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest
+  gate:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo success

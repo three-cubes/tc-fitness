@@ -1,0 +1,112 @@
+"""Tests for the CORE check readme_resolver_coverage (v0.6.0)."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+from tc_fitness.core_checks.readme_resolver_coverage import (
+    build,
+    directory_missing_resolver,
+)
+
+pytestmark = pytest.mark.integration
+
+
+def _mkdir(tmp_path: Path, rel: str) -> Path:
+    p = tmp_path / rel
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _with_readme(tmp_path: Path, rel: str) -> Path:
+    d = _mkdir(tmp_path, rel)
+    (d / "README.md").write_text("resolver\n", encoding="utf-8")
+    return d
+
+
+def test_detection_missing(tmp_path: Path) -> None:
+    d = _mkdir(tmp_path, "platform")
+    assert directory_missing_resolver(d, resolver_file="README.md") is True
+
+
+def test_detection_present(tmp_path: Path) -> None:
+    d = _with_readme(tmp_path, "platform")
+    assert directory_missing_resolver(d, resolver_file="README.md") is False
+
+
+def test_top_level_scan_flags_missing(tmp_path: Path) -> None:
+    _mkdir(tmp_path, "platform")  # no README
+    _with_readme(tmp_path, "docs")
+    rule = build({}, repo_root=tmp_path)
+    assert {str(p) for p in rule.collect_violations()} == {"platform"}
+
+
+def test_exempt_dir_skipped(tmp_path: Path) -> None:
+    _mkdir(tmp_path, "logs")  # in default exempt_dirs
+    _mkdir(tmp_path, "platform")
+    rule = build({}, repo_root=tmp_path)
+    assert {str(p) for p in rule.collect_violations()} == {"platform"}
+
+
+def test_hidden_dir_skipped(tmp_path: Path) -> None:
+    _mkdir(tmp_path, ".github")
+    _mkdir(tmp_path, "platform")
+    rule = build({}, repo_root=tmp_path)
+    assert {str(p) for p in rule.collect_violations()} == {"platform"}
+
+
+def test_resolver_file_config_driven(tmp_path: Path) -> None:
+    d = _mkdir(tmp_path, "platform")
+    (d / "INDEX.md").write_text("x\n", encoding="utf-8")
+    # default README.md missing → violation; configure INDEX.md → clean.
+    assert build({}, repo_root=tmp_path).collect_violations() == {Path("platform")}
+    rule = build({"resolver_file": "INDEX.md"}, repo_root=tmp_path)
+    assert rule.collect_violations() == set()
+
+
+def test_exempt_dirs_cannot_hide_a_missing_resolver(tmp_path: Path) -> None:
+    _mkdir(tmp_path, "scratch")
+    with pytest.raises(ValueError, match="exempt_dirs"):
+        build({"exempt_dirs": ["scratch"]}, repo_root=tmp_path)
+
+
+def test_missing_scan_root_is_skipped_while_files_are_not_candidates(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
+    _mkdir(tmp_path, "docs/architecture")
+
+    rule = build({"roots": ["missing", "docs"]}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("docs/architecture")}
+
+
+def test_existing_resolver_directory_has_no_violation(tmp_path: Path) -> None:
+    _with_readme(tmp_path, "platform")
+
+    assert build({}, repo_root=tmp_path).collect_violations() == set()
+
+
+def test_no_repo_strings_in_executable_code() -> None:
+    import tc_fitness.core_checks.readme_resolver_coverage as mod
+
+    text = Path(mod.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    docstring_ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            doc = ast.get_docstring(node, clean=False)
+            if doc is not None and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                    docstring_ids.add(id(first.value))
+    repo_tokens = ("kairix", "tc-agent-zone", "agent-zone", "kata")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstring_ids:
+                continue
+            lowered = node.value.lower()
+            for tok in repo_tokens:
+                assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"

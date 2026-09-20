@@ -1,0 +1,76 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact tag; set this or bump.
+        required: false
+        type: string
+      bump:
+        description: "Semantic bump: major, minor, or patch."
+        required: false
+        type: string
+      release-date:
+        description: Optional ISO-8601 date; defaults to UTC today.
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Refuse main; preparation belongs in the reviewed feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "::error::dispatch Prepare release from the feature branch, not main" >&2
+            exit 1
+          fi
+      - name: Mint three-cubes-agent token
+        id: app
+        uses: three-cubes/tc-pipelines/.github/actions/github-app-token@c8369630218e674bc994e11b8d311245a51a44f3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Checkout feature branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ steps.app.outputs.token }}
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: ${{ steps.uv-version.outputs.version }}
+          enable-cache: false
+      - name: Prepare the release ledger
+        id: release
+        uses: three-cubes/tc-pipelines/actions/prepare-release-metadata@c8369630218e674bc994e11b8d311245a51a44f3
+        with:
+          version: ${{ inputs.version }}
+          bump: ${{ inputs.bump }}
+          release-date: ${{ inputs.release-date }}
+          version-file: ""
+      - name: Commit preparation for review
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "three-cubes-agent[bot]"
+          git config user.email "295831460+three-cubes-agent[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && {
+            echo "::error::preparation made no release-ledger change" >&2
+            exit 1
+          }
+          git commit -m "chore(release): prepare ${{ steps.release.outputs.version }}"
+          git push origin "HEAD:$GITHUB_REF_NAME"
