@@ -19,10 +19,11 @@ import pytest
 
 from tc_fitness import runner
 
+pytestmark = pytest.mark.unit
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.unit
 def test_module_entrypoint_exposes_the_same_cli_as_the_console_script() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "tc_fitness", "--help"],
@@ -35,7 +36,6 @@ def test_module_entrypoint_exposes_the_same_cli_as_the_console_script() -> None:
     assert "tc-fitness" in result.stdout
 
 
-@pytest.mark.unit
 def test_module_entrypoint_resolves_through_the_callers_import_path(tmp_path: Path) -> None:
     """A PYTHONPATH entry wins, which is what carries a relocated candidate.
 
@@ -60,7 +60,6 @@ def test_module_entrypoint_resolves_through_the_callers_import_path(tmp_path: Pa
     assert "shadow candidate" in result.stdout, result.stderr
 
 
-@pytest.mark.unit
 def test_contract_case_hands_the_callers_search_path_to_the_child(monkeypatch) -> None:
     """Runtime sys.path additions are not inherited, so PYTHONPATH carries them."""
     captured: dict[str, object] = {}
@@ -88,7 +87,6 @@ def test_contract_case_hands_the_callers_search_path_to_the_child(monkeypatch) -
     assert "/tmp/candidate-under-test" in search_path
 
 
-@pytest.mark.unit
 def test_contract_case_preserves_an_inherited_pythonpath(monkeypatch) -> None:
     """An operator's PYTHONPATH must survive, after the caller's own entries."""
     captured: dict[str, object] = {}

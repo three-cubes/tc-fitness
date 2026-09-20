@@ -29,7 +29,6 @@ import pytest
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.runner import (
     SKIP_EXIT_CODE,
-    Colours,
     ConditionalResult,
     RunnerConfig,
     Verdicts,
@@ -37,8 +36,6 @@ from tc_fitness.runner import (
     main_cli,
     make_env_path_conditional_check,
     run,
-    select_all,
-    select_gate,
     write_skip_report,
 )
 
