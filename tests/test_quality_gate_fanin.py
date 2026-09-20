@@ -31,6 +31,7 @@ def test_fan_in_accepts_only_successful_required_workers() -> None:
     """Branch protection can pass only when both matrix workers report success."""
     needs = {
         "check-static": {"result": "success"},
+        "tests": {"result": "success"},
         "coverage-assurance": {"result": "success"},
         "distribution-qualification": {"result": "success"},
     }
@@ -44,6 +45,7 @@ def test_fan_in_rejects_a_non_successful_required_worker() -> None:
     result = _run(
         {
             "check-static": {"result": "success"},
+            "tests": {"result": "success"},
             "coverage-assurance": {"result": "success"},
             "distribution-qualification": {"result": "cancelled"},
         }
@@ -57,6 +59,7 @@ def test_fan_in_rejects_a_non_successful_required_worker() -> None:
 def test_coverage_failure_or_missing_worker_cannot_pass_branch_protection(state: str | None) -> None:
     needs = {
         "check-static": {"result": "success"},
+        "tests": {"result": "success"},
         "distribution-qualification": {"result": "success"},
     }
     if state is not None:

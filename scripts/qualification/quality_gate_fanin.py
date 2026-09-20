@@ -9,6 +9,7 @@ from typing import Any
 
 REQUIRED_WORKERS = (
     "check-static",
+    "tests",
     "coverage-assurance",
     "distribution-qualification",
 )

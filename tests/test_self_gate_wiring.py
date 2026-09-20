@@ -107,6 +107,7 @@ def test_pull_request_ci_has_one_exact_commit_coverage_transaction() -> None:
 
     assert set(jobs["quality-gate"]["needs"]) == {
         "check-static",
+        "tests",
         "coverage-assurance",
         "distribution-qualification",
     }
@@ -137,3 +138,16 @@ def test_the_measurement_backstop_is_not_a_budget() -> None:
     The backstop must leave room for that rather than assume a quiet runner.
     """
     assert coverage_admission.MEASUREMENT_BACKSTOP_SECONDS >= 3600
+
+
+def test_the_suite_runs_on_every_supported_interpreter() -> None:
+    """The coverage transaction runs one interpreter; compatibility needs them all."""
+    workflow = yaml.safe_load((REPOSITORY / ".github/workflows/ci.yml").read_text())
+    manifest = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+
+    classifiers = manifest["project"].get("classifiers", [])
+    supported = {c.rsplit(" :: ", 1)[-1] for c in classifiers if "Programming Language :: Python :: 3." in c}
+    transaction = {"3.12"}
+    legs = set(workflow["jobs"]["tests"]["strategy"]["matrix"]["python-version"])
+
+    assert supported <= legs | transaction, supported - (legs | transaction)
