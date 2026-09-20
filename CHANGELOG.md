@@ -15,6 +15,18 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+## [0.17.1] — 2026-09-21
+
+### Fixed
+
+- `untrusted_automation_boundary` now recognises valid reusable-workflow jobs
+  (`jobs.<id>.uses`) as jobs without inline autonomous action steps. Mixed or
+  malformed `uses`/`steps` shapes still fail closed, while deployment workflows
+  no longer fail merely because they compose a reusable workflow.
+- Release preparation, auto-merge and release-on-merge now consume the current
+  immutable tc-pipelines authority, including the fix that preserves an
+  explicitly empty version-file input for pyproject-backed releases.
+
 ## [0.17.0] — 2026-09-21
 
 ### Removed

@@ -197,6 +197,39 @@ def test_valid_empty_jobs_and_no_untrusted_action_are_clean(tmp_path: Path) -> N
     assert build(_CONFIG, repo_root=tmp_path).run() == 0
 
 
+def test_reusable_workflow_jobs_without_untrusted_actions_are_clean(tmp_path: Path) -> None:
+    """A valid ``jobs.<id>.uses`` job is not malformed or autonomous."""
+    body = """
+name: deploy
+jobs:
+  validate:
+    steps:
+      - run: make check
+  deploy:
+    uses: example/pipelines/.github/workflows/deploy.yml@0123456789abcdef
+    secrets: inherit
+"""
+    _seed(tmp_path, body)
+
+    assert _violates(tmp_path / ".github/workflows/responder.yml") is False
+    assert build(_CONFIG, repo_root=tmp_path).collect_violations() == set()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "jobs:\n  deploy:\n    uses: 7\n",
+        "jobs:\n  deploy:\n    uses: example/pipelines/.github/workflows/deploy.yml@v1\n    steps: null\n",
+        "jobs:\n  deploy:\n    uses: example/pipelines/.github/workflows/deploy.yml@v1\n"
+        "    steps:\n      - run: make check\n",
+    ],
+)
+def test_malformed_reusable_workflow_jobs_are_incomplete(tmp_path: Path, body: str) -> None:
+    _seed(tmp_path, body)
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
 def test_normalised_contract_path_inside_runtime_root_is_clean(tmp_path: Path) -> None:
     body = _SAFE.replace("agentic/skills/ops/remediate/SKILL.md", "./agentic/ops/../skills/remediate.md")
     _seed(tmp_path, body)
