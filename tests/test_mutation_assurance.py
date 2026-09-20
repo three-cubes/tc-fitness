@@ -13,10 +13,12 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 
+from tc_fitness import mutation_assurance
 from tc_fitness.mutation_assurance import (
     _native_mutants,
     execute_mutation,
@@ -952,3 +954,54 @@ def test_public_admission_distinguishes_complete_logs_from_missing_native_invent
     _reseal_artifacts(output, receipt)
     with pytest.raises(MutationError, match=r"^missing or malformed mutation output: admission\.py\.meta$"):
         validate_mutation_receipt(root, base, head, output, run_id="local-test", attempt=1)
+
+
+# -- the mutmut pin is read from the manifest, never restated ----------------
+
+
+def test_pinned_tool_version_reads_the_declared_pin() -> None:
+    """The enforced version comes from the manifest, so a bump is one edit.
+
+    A literal here would be a second source of truth no dependency tooling
+    updates: the bump would land in the manifest and the lock while this stayed
+    behind, and the equality check would fail closed against the version the
+    project actually installs.
+    """
+    assert mutation_assurance.pinned_tool_version() == version(mutation_assurance.TOOL_NAME)
+
+
+def test_pinned_tool_version_prefers_the_exact_pin_among_requirements(monkeypatch) -> None:
+    monkeypatch.setattr(
+        mutation_assurance,
+        "requires",
+        lambda _d: ["ruff>=0.15,<0.16", "mutmut==3.6.0", "pytest>=8"],
+    )
+    assert mutation_assurance.pinned_tool_version() == "3.6.0"
+
+
+def test_pinned_tool_version_reads_an_extra_scoped_pin(monkeypatch) -> None:
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: ['mutmut==3.6.0; extra == "dev"'])
+    assert mutation_assurance.pinned_tool_version() == "3.6.0"
+
+
+def test_pinned_tool_version_rejects_a_range_and_names_the_repair(monkeypatch) -> None:
+    """Evidence cannot be bound to a tool the manifest does not pin exactly."""
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: ["mutmut>=3.6"])
+    with pytest.raises(mutation_assurance.MutationError) as excinfo:
+        mutation_assurance.pinned_tool_version()
+    message = str(excinfo.value)
+    assert "does not pin" in message
+    assert "fix:" in message and "next:" in message
+
+
+def test_pinned_tool_version_rejects_an_absent_requirement(monkeypatch) -> None:
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: ["ruff>=0.15"])
+    with pytest.raises(mutation_assurance.MutationError):
+        mutation_assurance.pinned_tool_version()
+
+
+def test_pinned_tool_version_tolerates_a_distribution_with_no_requirements(monkeypatch) -> None:
+    """`requires` returns None for a distribution declaring nothing."""
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: None)
+    with pytest.raises(mutation_assurance.MutationError):
+        mutation_assurance.pinned_tool_version()
