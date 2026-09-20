@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import requires as metadata_requires
 from pathlib import Path
 from typing import Any
 
@@ -260,6 +262,23 @@ def gate_keys(
     return 0
 
 
+def canonical_package_name(name: str) -> str:
+    """Normalise a package name the way PEP 503 does.
+
+    Delegated to `packaging`, the reference implementation: runs of `-`, `_`
+    and `.` are equivalent, so `zope.interface` and `zope-interface` name the
+    same distribution.
+
+    Imported here rather than at module scope so importing this package stays a
+    stdlib-only operation. A bare checkout can still report its version and
+    degrade legibly; only the callers that actually parse requirements need the
+    dependency present.
+    """
+    from packaging.utils import canonicalize_name
+
+    return str(canonicalize_name(name))
+
+
 def repo_relative(path: Path, *, repo_root: Path | None = None) -> Path:
     """Convert an absolute path under the repo root to a repo-relative Path."""
     root = repo_root if repo_root is not None else REPO_ROOT
@@ -362,6 +381,102 @@ def remediation(
     return "\n".join(lines)
 
 
+class PinnedVersionError(RuntimeError):
+    """Raised when a distribution does not pin a package at an exact version."""
+
+
+def pinned_version(distribution: str, package: str) -> str:
+    """Return the exact version ``distribution`` pins ``package`` at.
+
+    The sanctioned alternative to restating a pin as a literal. A project that
+    declares ``package==1.2.3`` already has one source of truth for that
+    version; reading it back keeps enforcement intact while leaving the
+    manifest the only place a bump is edited.
+
+    Use this from code that ships inside ``distribution``. Code that runs
+    outside it — a qualification script against an environment synced without
+    the project — cannot import this, and should parse the manifest under test
+    directly rather than restate the version.
+
+    Args:
+        distribution: the installed distribution whose requirements to read
+            (its name on PyPI, not the import package).
+        package: the required package whose pin to return.
+
+    Raises:
+        PinnedVersionError: when the distribution is not installed, does not
+            require ``package``, or requires it at anything other than an exact
+            ``==`` version. Each case is a different repair, so each says which
+            it is rather than returning a silent default that would let the
+            caller enforce against a version nothing declares.
+    """
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    try:
+        requirements = metadata_requires(distribution) or []
+    except PackageNotFoundError as exc:
+        raise PinnedVersionError(
+            f"distribution {distribution!r} is not installed, so its pin for {package!r} cannot be read; "
+            f"fix: install {distribution!r} in this environment; "
+            f"next: re-run the caller; "
+            f'run: python -c "import importlib.metadata as m; m.requires({distribution!r})"'
+        ) from exc
+
+    normalised = canonical_package_name(package)
+    seen: list[str] = []
+    exact: set[str] = set()
+    inexact = False
+    for requirement in requirements:
+        try:
+            parsed = Requirement(requirement)
+        except InvalidRequirement:
+            continue
+        if canonical_package_name(parsed.name) != normalised:
+            continue
+        seen.append(requirement)
+        pins = [
+            specifier.version
+            for specifier in parsed.specifier
+            if specifier.operator == "==" and not specifier.version.endswith(".*")
+        ]
+        if len(pins) == 1:
+            exact.add(pins[0])
+        else:
+            inexact = True
+
+    # More than one answer is no answer. Two exact pins under different markers,
+    # or an exact pin alongside a range, both mean the applicable version depends
+    # on the environment asking -- and a helper that exists to be the single
+    # authority on what the manifest pins cannot return different versions to
+    # different callers. Evaluating the markers here would do exactly that.
+    if len(exact) > 1 or (exact and inexact):
+        declared = ", ".join(sorted(exact)) if len(exact) > 1 else seen[0]
+        raise PinnedVersionError(
+            f"{distribution!r} declares {package!r} more than one way ({declared}), "
+            f"each applying under its own environment marker, so no single version is the pin; "
+            f"fix: read the version from the manifest condition that applies, or "
+            f"collapse the conditional declarations to one exact pin; "
+            f"next: re-run the caller; "
+            f'run: python -c "import importlib.metadata as m; print(m.requires({distribution!r}))"'
+        )
+    if exact:
+        return exact.pop()
+
+    if seen:
+        raise PinnedVersionError(
+            f"{distribution!r} requires {package!r} but not at an exact version ({seen[0]!r}); "
+            f"fix: pin it as {package}==<version> in the manifest, or stop asserting an exact version; "
+            f"next: re-run the caller; "
+            f'run: python -c "import importlib.metadata as m; print(m.requires({distribution!r}))"'
+        )
+    raise PinnedVersionError(
+        f"{distribution!r} does not require {package!r}, so there is no pin to read; "
+        f"fix: declare {package}==<version> in the manifest, or drop the version check; "
+        f"next: re-run the caller; "
+        f'run: python -c "import importlib.metadata as m; print(m.requires({distribution!r}))"'
+    )
+
+
 def emit_failures(check_name: str, fails: list[str], stream: Any = None) -> None:
     """Emit the canonical FAIL banner + bulleted failure list.
 
@@ -444,6 +559,8 @@ def missing_keys(parsed: dict[str, Any], required: tuple[str, ...]) -> list[str]
 
 
 __all__ = [
+    "PinnedVersionError",
+    "pinned_version",
     "REPO_ROOT",
     "actionable",
     "emit_failures",

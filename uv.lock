@@ -2423,6 +2423,7 @@ version = "0.16.1"
 source = { editable = "." }
 dependencies = [
     { name = "coverage" },
+    { name = "packaging" },
     { name = "pyyaml" },
 ]
 
@@ -2440,6 +2441,7 @@ requires-dist = [
     { name = "checkov", marker = "extra == 'dev'", specifier = "==3.2.531" },
     { name = "coverage", specifier = ">=7.10" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
+    { name = "packaging", specifier = ">=23.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },

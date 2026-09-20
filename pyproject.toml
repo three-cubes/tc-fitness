@@ -18,11 +18,25 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
+# Near-stdlib at runtime. The `tc-fitness run` gate orchestrator uses the stdlib
+# `tomllib` (3.11+) to read the consumer's `[tool.tc_fitness]` config.
+#
 # Check-contract manifests and exact-source coverage admission are shipped
 # public surfaces, so their parsers must exist in every default installation.
 # The producer's generated configuration sets `[run] patch = subprocess`, which
 # Coverage.py introduced in 7.10; an earlier release measures no child process.
-dependencies = ["coverage>=7.10", "PyYAML>=6.0"]
+#
+# `packaging` is the reference implementation of the specifications it reads:
+# PEP 508 requirements, PEP 440 versions and PEP 503 names. Hand-rolled regexes
+# over those grammars were wrong in both directions -- they missed
+# `foo (==1.2.3)` and `foo==v1.2.3` while accepting the prefix match
+# `foo==1.2.*` as exact -- and each correction revealed the next case. It ships
+# with every pip and uv installation.
+#
+# It is imported lazily, inside the two functions that parse requirements, so
+# importing this package remains a stdlib-only operation: a bare checkout still
+# reports its version and degrades legibly.
+dependencies = ["coverage>=7.10", "packaging>=23.2", "PyYAML>=6.0"]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and

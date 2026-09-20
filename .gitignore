@@ -15,6 +15,12 @@ coverage.xml
 coverage.json
 htmlcov/
 
+# Assurance evidence. A local `tc-fitness mutation check` or coverage
+# transaction writes a full snapshot of the repository under test here —
+# hundreds of files, and the artefact CI uploads rather than anything a
+# commit should carry.
+.mutation/
+
 # Editor / OS
 .DS_Store
 .idea/

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from tc_fitness import lib
 from tc_fitness.lib import (
     gate,
     gate_keys,
@@ -413,3 +414,113 @@ def test_load_yaml_malformed_returns_error(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # missing_keys() — tc-agent-zone required-key contract
 # --------------------------------------------------------------------------- #
+
+
+# -- pinned_version: the sanctioned alternative to restating a pin -----------
+
+
+def test_pinned_version_returns_the_declared_exact_pin(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["mutmut==3.6.0", "ruff>=0.15,<0.16"])
+    assert lib.pinned_version("demo", "mutmut") == "3.6.0"
+
+
+def test_pinned_version_normalises_the_package_name(monkeypatch) -> None:
+    """PyPI treats `_` and `-` alike, so a caller spelling either must resolve."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["My_Pkg==1.2.3"])
+    assert lib.pinned_version("demo", "my-pkg") == "1.2.3"
+
+
+def test_pinned_version_ignores_a_requirement_for_another_package(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["other==9.9.9", "mutmut==3.6.0"])
+    assert lib.pinned_version("demo", "mutmut") == "3.6.0"
+
+
+def test_pinned_version_reads_an_extra_scoped_requirement(monkeypatch) -> None:
+    """A dev-extra pin is still the manifest's declaration."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ['mutmut==3.6.0; extra == "dev"'])
+    assert lib.pinned_version("demo", "mutmut") == "3.6.0"
+
+
+def test_pinned_version_rejects_a_range_and_says_which_repair(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["mutmut>=3.6"])
+    with pytest.raises(lib.PinnedVersionError) as excinfo:
+        lib.pinned_version("demo", "mutmut")
+    message = str(excinfo.value)
+    assert "not at an exact version" in message
+    assert "fix:" in message and "next:" in message and "run:" in message
+
+
+def test_pinned_version_rejects_an_undeclared_package_and_says_which_repair(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["other==1.2.3"])
+    with pytest.raises(lib.PinnedVersionError) as excinfo:
+        lib.pinned_version("demo", "mutmut")
+    message = str(excinfo.value)
+    assert "does not require" in message
+    assert "fix:" in message and "next:" in message and "run:" in message
+
+
+def test_pinned_version_rejects_an_uninstalled_distribution_and_says_which_repair(monkeypatch) -> None:
+    def _absent(_d: str) -> list[str]:
+        raise lib.PackageNotFoundError("demo")
+
+    monkeypatch.setattr(lib, "metadata_requires", _absent)
+    with pytest.raises(lib.PinnedVersionError) as excinfo:
+        lib.pinned_version("demo", "mutmut")
+    message = str(excinfo.value)
+    assert "is not installed" in message
+    assert "fix:" in message and "next:" in message and "run:" in message
+
+
+def test_a_wildcard_equality_is_not_an_exact_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`foo==1.2.*` admits any 1.2 release, so it cannot be compared to an installed version."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["foo==1.2.*"])
+
+    with pytest.raises(lib.PinnedVersionError, match="not at an exact version"):
+        lib.pinned_version("dist", "foo")
+
+
+def test_package_names_compare_across_every_permitted_separator() -> None:
+    """PEP 503 treats runs of -, _ and . as equivalent in a package name."""
+    assert lib.canonical_package_name("zope.interface") == lib.canonical_package_name("zope-interface")
+    assert lib.canonical_package_name("Zope_Interface") == "zope-interface"
+
+
+def test_conflicting_conditional_pins_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Choosing by metadata order would enforce the wrong version on some interpreters."""
+    monkeypatch.setattr(
+        lib,
+        "metadata_requires",
+        lambda _d: ['foo==1.2.3; python_version < "3.13"', 'foo==2.0.0; python_version >= "3.13"'],
+    )
+
+    with pytest.raises(lib.PinnedVersionError, match="more than one way"):
+        lib.pinned_version("dist", "foo")
+
+
+def test_a_mixed_exact_and_range_declaration_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exact pin beside a range means the version depends on who is asking."""
+    monkeypatch.setattr(
+        lib,
+        "metadata_requires",
+        lambda _d: ['foo==1.2.3; python_version < "3.12"', 'foo>=2; python_version >= "3.12"'],
+    )
+
+    with pytest.raises(lib.PinnedVersionError, match="more than one way"):
+        lib.pinned_version("dist", "foo")
+
+
+def test_a_parenthesised_pin_is_read_as_exact(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`foo (==1.2.3)` is valid PEP 508 and pins exactly as `foo==1.2.3` does."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["foo (==1.2.3)"])
+
+    assert lib.pinned_version("dist", "foo") == "1.2.3"
+
+
+def test_a_direct_reference_url_is_not_mistaken_for_a_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An `==` inside a URL query string is not an equality specifier."""
+    monkeypatch.setattr(
+        lib, "metadata_requires", lambda _d: ["foo @ https://example.invalid/foo.whl?build==1.2.3"]
+    )
+
+    with pytest.raises(lib.PinnedVersionError, match="not at an exact version"):
+        lib.pinned_version("dist", "foo")
