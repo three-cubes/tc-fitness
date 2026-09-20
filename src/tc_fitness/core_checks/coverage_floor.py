@@ -252,6 +252,14 @@ class CoverageFloor(FitnessRule):
 
     @cached_property
     def _coverage(self) -> dict[str, float]:
+        if self.branch_floor_pct is not None:
+            # Strict admission reads the exact integer counts. The report's
+            # own line-rate is a four-significant-digit summary, so a file
+            # measured at 94.996% is written as 0.95 and would clear a 95%
+            # floor it does not meet. ``_coverage_evidence`` states the same
+            # rule where it tolerates that rounding: summaries validate,
+            # floors use detail.
+            return {path: counts.line_pct for path, counts in self._details.items()}
         return parse_coverage_report(self._report_path(), repo_root=self._repo_root)
 
     @cached_property
