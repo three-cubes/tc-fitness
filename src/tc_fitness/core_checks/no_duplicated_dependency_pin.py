@@ -16,15 +16,21 @@ The rule is narrow on purpose: it flags a literal only when it equals the
 version of an exact pin the project itself declares. A version string that
 matches nothing the project pins is not this rule's business.
 
-Derive the value instead of restating it::
+Read the pin back instead of restating it. Inside the distribution::
 
-    from importlib.metadata import requires
+    from tc_fitness.lib import pinned_version
 
-    def _pinned(distribution: str, package: str) -> str:
-        for requirement in requires(distribution) or []:
-            ...  # parse the `package==<version>` the manifest already declares
+    TOOL_VERSION = pinned_version("three-cubes-fitness", "mutmut")
 
-That keeps the enforcement and leaves one place to edit.
+Outside it — a qualification script running against an environment synced
+``--no-install-project`` cannot import the distribution — read the manifest
+under test::
+
+    import tomllib
+    manifest = tomllib.loads((repo_root / "pyproject.toml").read_text())
+
+Either way the enforcement is unchanged and the manifest stays the only place a
+bump is edited.
 """
 
 from __future__ import annotations
@@ -56,15 +62,20 @@ _STRING_LITERAL_RE = re.compile(r"[\"']([0-9]+(?:\.[0-9]+)+)[\"']")
 
 REMEDIATION = _remediation(
     fix=(
-        "delete the literal and derive the version from the manifest the project "
-        "already declares it in — importlib.metadata.requires(<distribution>) "
-        "returns the `package==<version>` requirement, so the pin stays the one "
-        "place a bump is edited. Where the value is genuinely unrelated to the "
-        "pin it happens to match, add the file to exempt_files."
+        "replace the literal with the pin read back from the manifest. Inside the "
+        "distribution, call tc_fitness.lib.pinned_version(<distribution>, <package>) "
+        "— it returns the declared `package==<version>` and raises a named error "
+        "when the package is absent or not exactly pinned, so enforcement is kept "
+        "and the manifest stays the only place a bump is edited. Outside it (a "
+        "qualification script against an environment synced --no-install-project "
+        "cannot import the distribution) read the manifest under test instead: "
+        "tomllib.load(<repo>/pyproject.toml) and take the `==` version. Where the "
+        "literal is genuinely unrelated to the pin it happens to match, add the "
+        "file to exempt_files."
     ),
     nxt="re-run this check to confirm it goes green.",
     run="python -m tc_fitness.core_checks.no_duplicated_dependency_pin",
-    passing='TOOL_VERSION = _pinned("my-dist", "mutmut")   (one source of truth)',
+    passing='TOOL_VERSION = pinned_version("three-cubes-fitness", "mutmut")',
     forbidden='TOOL_VERSION = "3.6.0"   (manifest already declares mutmut==3.6.0)',
 )
 

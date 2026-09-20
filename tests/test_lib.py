@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from tc_fitness import lib
 from tc_fitness.lib import (
     actionable,
     emit_failures,
@@ -482,3 +483,58 @@ def test_missing_keys_empty_when_all_present() -> None:
 
 def test_missing_keys_preserves_required_order() -> None:
     assert missing_keys({}, ("z", "a", "m")) == ["z", "a", "m"]
+
+
+# -- pinned_version: the sanctioned alternative to restating a pin -----------
+
+
+def test_pinned_version_returns_the_declared_exact_pin(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["mutmut==3.6.0", "ruff>=0.15,<0.16"])
+    assert lib.pinned_version("demo", "mutmut") == "3.6.0"
+
+
+def test_pinned_version_normalises_the_package_name(monkeypatch) -> None:
+    """PyPI treats `_` and `-` alike, so a caller spelling either must resolve."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["My_Pkg==1.2.3"])
+    assert lib.pinned_version("demo", "my-pkg") == "1.2.3"
+
+
+def test_pinned_version_ignores_a_requirement_for_another_package(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["other==9.9.9", "mutmut==3.6.0"])
+    assert lib.pinned_version("demo", "mutmut") == "3.6.0"
+
+
+def test_pinned_version_reads_an_extra_scoped_requirement(monkeypatch) -> None:
+    """A dev-extra pin is still the manifest's declaration."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ['mutmut==3.6.0; extra == "dev"'])
+    assert lib.pinned_version("demo", "mutmut") == "3.6.0"
+
+
+def test_pinned_version_rejects_a_range_and_says_which_repair(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["mutmut>=3.6"])
+    with pytest.raises(lib.PinnedVersionError) as excinfo:
+        lib.pinned_version("demo", "mutmut")
+    message = str(excinfo.value)
+    assert "not at an exact version" in message
+    assert "fix:" in message and "next:" in message and "run:" in message
+
+
+def test_pinned_version_rejects_an_undeclared_package_and_says_which_repair(monkeypatch) -> None:
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["other==1.2.3"])
+    with pytest.raises(lib.PinnedVersionError) as excinfo:
+        lib.pinned_version("demo", "mutmut")
+    message = str(excinfo.value)
+    assert "does not require" in message
+    assert "fix:" in message and "next:" in message and "run:" in message
+
+
+def test_pinned_version_rejects_an_uninstalled_distribution_and_says_which_repair(monkeypatch) -> None:
+    def _absent(_d: str) -> list[str]:
+        raise lib.PackageNotFoundError("demo")
+
+    monkeypatch.setattr(lib, "metadata_requires", _absent)
+    with pytest.raises(lib.PinnedVersionError) as excinfo:
+        lib.pinned_version("demo", "mutmut")
+    message = str(excinfo.value)
+    assert "is not installed" in message
+    assert "fix:" in message and "next:" in message and "run:" in message
