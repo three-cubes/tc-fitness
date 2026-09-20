@@ -69,9 +69,10 @@ REMEDIATION = _remediation(
         "and the manifest stays the only place a bump is edited. Outside it (a "
         "qualification script against an environment synced --no-install-project "
         "cannot import the distribution) read the manifest under test instead: "
-        "tomllib.load(<repo>/pyproject.toml) and take the `==` version. Where the "
-        "literal is genuinely unrelated to the pin it happens to match, add the "
-        "file to exempt_files."
+        "tomllib.load(<repo>/pyproject.toml) and take the `==` version. A literal "
+        "that merely coincides with a pin is raised past by min_version_parts, "
+        "which sets how specific a version must be before it counts; a finding is "
+        "never suppressed per file."
     ),
     nxt="re-run this check to confirm it goes green.",
     run="python -m tc_fitness.core_checks.no_duplicated_dependency_pin",

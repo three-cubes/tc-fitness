@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tc_fitness.core_checks.no_duplicated_dependency_pin import (
+    REMEDIATION,
     NoDuplicatedDependencyPin,
     build,
     declared_exact_pins,
@@ -152,12 +153,17 @@ def test_the_manifest_itself_is_never_its_own_offender(tmp_path: Path) -> None:
     assert not rule.file_has_violation(root / "pyproject.toml")
 
 
-def test_an_exempt_file_is_skipped(tmp_path: Path) -> None:
-    """A literal genuinely unrelated to the pin it matches has an escape."""
-    root = _repo(tmp_path)
-    (root / "src" / "coincidence.py").write_text('RATIO = "3.6.0"\n', encoding="utf-8")
-    rule = _rule(root, exempt_files=["src/coincidence.py"])
-    assert rule.collect_violations() == set()
+def test_the_remediation_never_directs_an_agent_to_suppress() -> None:
+    """The tuning knob is specificity, not an exemption list.
+
+    A gate whose documented remedy is "suppress this file" teaches the habit
+    the engine is removing, and would stop working the moment per-file
+    exemptions go. min_version_parts raises the bar on what counts as a
+    version instead, which is a statement about the rule rather than a hole
+    punched in it.
+    """
+    assert "min_version_parts" in REMEDIATION
+    assert "exempt" not in REMEDIATION.lower()
 
 
 def test_min_version_parts_is_configurable(tmp_path: Path) -> None:
