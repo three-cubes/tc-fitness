@@ -31,6 +31,18 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
   directions, so a classifier without a leg and a leg without a classifier both
   fail.
 
+- **Grandfathering and bespoke suppression controls.** The engine now evaluates
+  the current source tree directly. Baseline creation, accepted-deficit state,
+  per-check exemption lists and compatibility adoption modes have been removed;
+  configuration that supplies those retired controls is rejected at rule
+  construction with an actionable error. Consumers resolve a finding in source
+  or change the declared scope at its canonical configuration boundary.
+
+- **The repository's non-terminating mutation campaign.** The campaign consumed
+  the CI budget without producing a mutant result, so it no longer delays every
+  change. The public `core:mutation_survival_ratchet` check remains available for
+  consumers that provide completed mutation evidence.
+
 ### Added
 
 - **`lib.pinned_version(distribution, package)`** — reads back the exact version
@@ -97,6 +109,13 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ### Changed
 
+- **Coverage admission is bound to exact source.** `assure-coverage` measures
+  the immutable base and candidate commits in fresh locked environments,
+  evaluates line and branch coverage independently, and retains receipts that
+  bind the source, environment, reports and verdict. Base and candidate
+  measurements run concurrently, while critical changed files must clear the
+  reviewed 95% line and branch floors without regression.
+
 - **A failed measurement reports itself where the operator is looking.** The
   transaction is now the only job that runs the suite, so it owns the
   diagnosis. On failure it names the side and both log paths in the payload —
@@ -113,13 +132,11 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
   gate: any finding, parser error, unavailable executable, malformed report or
   scanner failure blocks. It no longer reads or writes a findings baseline; the
   dev environment pins Checkov 3.2.531 and the integration contract runs that
-  executable against compliant and violating Bicep fixtures. Shared baseline
-  suppression remains disabled during assurance of checks that use baselines;
-  ordinary consumer baseline semantics are unchanged.
-  A reviewed per-CORE option inventory now rejects unknown aliases, adoption
-  modes and exclusion overrides in assurance while retaining normal consumer
-  configuration. Mutation reports and OSV contracts require strict missing-input
-  behaviour; expected identities and detector thresholds remain configurable.
+  executable against compliant and violating Bicep fixtures. A reviewed
+  per-CORE option inventory rejects unknown aliases and retired adoption or
+  exclusion controls. Mutation reports and OSV contracts require strict
+  missing-input behaviour; expected identities and detector thresholds remain
+  configurable.
 
 - **Commit identity guidance now separates metadata from authentication** —
   `canonical_commit_identity` validates Git author and committer metadata; it
