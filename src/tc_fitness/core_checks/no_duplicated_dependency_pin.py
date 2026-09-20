@@ -57,25 +57,42 @@ DEFAULT_MIN_VERSION_PARTS = 3
 #: pattern live on in exactly the scripts that enforce it hardest.
 DEFAULT_EXTENSIONS = (".py", ".sh", ".bash")
 
-_EXACT_PIN_RE = re.compile(r"^\s*([A-Za-z0-9._-]+)\s*==\s*([0-9][^;\s,\]]*)")
-_STRING_LITERAL_RE = re.compile(r"[\"']([0-9]+(?:\.[0-9]+)+)[\"']")
+#: A declared pin. The optional bracketed group is a PEP 508 extras list —
+#: `uvicorn[standard]==0.30.0` pins the same distribution version that
+#: `uvicorn==0.30.0` does, so skipping it would let a matching literal pass.
+_EXACT_PIN_RE = re.compile(r"^\s*([A-Za-z0-9._-]+)\s*(?:\[[^\]]*\])?\s*==\s*([0-9][^;\s,\]]*)")
+#: Everything after an unquoted `#`. A version named in prose documents it;
+#: one in code binds behaviour to it, and a trailing comment is the former
+#: even though the line does not begin with a comment.
+_TRAILING_COMMENT_RE = re.compile(r"""(?:[^"'#]|"[^"]*"|'[^']*')*""")
 
 REMEDIATION = _remediation(
     fix=(
-        "replace the literal with the pin read back from the manifest. Inside the "
-        "distribution, call tc_fitness.lib.pinned_version(<distribution>, <package>) "
-        "— it returns the declared `package==<version>` and raises a named error "
-        "when the package is absent or not exactly pinned, so enforcement is kept "
-        "and the manifest stays the only place a bump is edited. Outside it (a "
-        "qualification script against an environment synced --no-install-project "
-        "cannot import the distribution) read the manifest under test instead: "
-        "tomllib.load(<repo>/pyproject.toml) and take the `==` version. A literal "
-        "that merely coincides with a pin is raised past by min_version_parts, "
-        "which sets how specific a version must be before it counts; a finding is "
-        "never suppressed per file."
+        "replace the literal with the pin read back from the manifest, so a bump "
+        "is edited in one place and enforcement is kept. Which reader applies "
+        "depends on where the pin is declared, not on taste. A pin in [project] "
+        "dependencies or optional-dependencies becomes the installed "
+        "distribution's Requires-Dist metadata, so call "
+        "tc_fitness.lib.pinned_version(<distribution>, <package>): it returns the "
+        "declared version and raises a named error when the package is absent or "
+        "not pinned exactly. A pin in [dependency-groups], [build-system] "
+        "requires, or [tool.uv] override-dependencies/constraint-dependencies is "
+        "NOT published as that metadata, so pinned_version cannot serve it and "
+        "will report that the distribution does not require the package; read the "
+        "manifest instead — tomllib.load(<repo>/pyproject.toml) and take the `==` "
+        "version from the table that declares it. The same manifest read applies "
+        "anywhere the distribution cannot be imported, such as a qualification "
+        "script running against an environment synced --no-install-project. A "
+        "literal that merely coincides with a pin is raised past by "
+        "min_version_parts, which sets how specific a version must be before it "
+        "counts; a finding is never suppressed per file."
     ),
     nxt="re-run this check to confirm it goes green.",
-    run="python -m tc_fitness.core_checks.no_duplicated_dependency_pin",
+    # The module entry point builds an unconfigured rule, whose empty scan
+    # roots enumerate nothing and report clean while the offender stands.
+    # Re-running through the catalogue is the only command that repeats the
+    # check the consumer actually configured.
+    run="uv run tc-fitness run",
     passing='TOOL_VERSION = pinned_version("three-cubes-fitness", "mutmut")',
     forbidden='TOOL_VERSION = "3.6.0"   (manifest already declares mutmut==3.6.0)',
 )
@@ -129,19 +146,49 @@ def declared_exact_pins(
     return {version: sorted(set(names)) for version, names in pins.items()}
 
 
+def _continues_a_version(character: str) -> bool:
+    """True when a neighbouring character makes the match part of a longer version."""
+    return character != "" and character in "0123456789."
+
+
+def _code_before_comment(line: str) -> str:
+    """Return the executable part of a line, dropping any trailing comment."""
+    match = _TRAILING_COMMENT_RE.match(line)
+    return match.group(0) if match else line
+
+
 def restated_pins(text: str, pins: Mapping[str, list[str]]) -> list[tuple[int, str]]:
     """Return ``(line number, version)`` for each literal restating a pin.
 
-    Whole-line comments are skipped: prose naming a version documents it rather
-    than binding behaviour to it.
+    Matching is against the declared versions themselves rather than against a
+    version-shaped pattern. A pattern has to guess what a version looks like,
+    and PEP 440 admits more than dotted digits — `1.2.3rc1`, `1.2.3.post1` and
+    local versions would all be missed. It also has to guess how the literal is
+    written, and a shell binding is `TOOL_VERSION=3.6.0` with no quotes at all.
+    Comparing against the manifest's own strings needs neither guess.
+
+    Comments are skipped, wherever on the line they start: prose naming a
+    version documents it rather than binding behaviour to it.
     """
+    candidates = sorted(pins, key=len, reverse=True)
     found: list[tuple[int, str]] = []
     for number, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith("#"):
+        code = _code_before_comment(line)
+        if not code.strip():
             continue
-        for literal in _STRING_LITERAL_RE.findall(line):
-            if literal in pins:
-                found.append((number, literal))
+        for version in candidates:
+            for match in re.finditer(re.escape(version), code):
+                # A version is restated only as a whole token. Without this,
+                # "1.2.3" also matches inside "1.2.30" and inside a path. The
+                # start and end of the line are boundaries, so an absent
+                # neighbour must not be tested for membership — "" is a
+                # substring of every string.
+                before = code[match.start() - 1 : match.start()]
+                after = code[match.end() : match.end() + 1]
+                if _continues_a_version(before) or _continues_a_version(after):
+                    continue
+                found.append((number, version))
+                break
     return found
 
 

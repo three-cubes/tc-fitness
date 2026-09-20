@@ -538,3 +538,29 @@ def test_pinned_version_rejects_an_uninstalled_distribution_and_says_which_repai
     message = str(excinfo.value)
     assert "is not installed" in message
     assert "fix:" in message and "next:" in message and "run:" in message
+
+
+def test_a_wildcard_equality_is_not_an_exact_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`foo==1.2.*` admits any 1.2 release, so it cannot be compared to an installed version."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["foo==1.2.*"])
+
+    with pytest.raises(lib.PinnedVersionError, match="not at an exact version"):
+        lib.pinned_version("dist", "foo")
+
+
+def test_package_names_compare_across_every_permitted_separator() -> None:
+    """PEP 503 treats runs of -, _ and . as equivalent in a package name."""
+    assert lib.canonical_package_name("zope.interface") == lib.canonical_package_name("zope-interface")
+    assert lib.canonical_package_name("Zope_Interface") == "zope-interface"
+
+
+def test_conflicting_conditional_pins_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Choosing by metadata order would enforce the wrong version on some interpreters."""
+    monkeypatch.setattr(
+        lib,
+        "metadata_requires",
+        lambda _d: ['foo==1.2.3; python_version < "3.13"', 'foo==2.0.0; python_version >= "3.13"'],
+    )
+
+    with pytest.raises(lib.PinnedVersionError, match="more than one version"):
+        lib.pinned_version("dist", "foo")

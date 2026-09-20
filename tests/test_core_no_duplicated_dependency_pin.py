@@ -172,3 +172,35 @@ def test_min_version_parts_is_configurable(tmp_path: Path) -> None:
     (root / "src" / "a.py").write_text('X = "1.0"\n', encoding="utf-8")
     assert _rule(root).collect_violations() == set()
     assert _rule(root, min_version_parts=2).collect_violations() == {Path("src/a.py")}
+
+
+def test_a_pin_carrying_extras_is_still_a_declared_pin(tmp_path: Path) -> None:
+    """Extras select optional dependencies; they do not change the pinned version."""
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text(
+        '[project]\nname = "x"\ndependencies = ["uvicorn[standard]==0.30.0"]\n', encoding="utf-8"
+    )
+
+    assert declared_exact_pins(manifest) == {"0.30.0": ["uvicorn"]}
+
+
+def test_a_prerelease_or_post_release_literal_is_detected() -> None:
+    """PEP 440 admits more than dotted digits, and a restated qualifier binds just as hard."""
+    for version in ("1.2.3rc1", "1.2.3.post1", "1.2.3+local.1"):
+        assert restated_pins(f'TOOL = "{version}"\n', {version: ["tool"]}) == [(1, version)]
+
+
+def test_an_unquoted_shell_assignment_is_detected() -> None:
+    """A shell binding carries no quotes, and shell is in scope by default."""
+    assert restated_pins("TOOL_VERSION=3.6.0\n", {"3.6.0": ["mutmut"]}) == [(1, "3.6.0")]
+    assert restated_pins('[[ "$actual" == 3.6.0 ]]\n', {"3.6.0": ["mutmut"]}) == [(1, "3.6.0")]
+
+
+def test_a_version_named_in_a_trailing_comment_is_documentation() -> None:
+    """The rule excludes prose; where the prose starts on the line does not change that."""
+    assert restated_pins('timeout = 10  # tool currently emits "3.6.0"\n', {"3.6.0": ["m"]}) == []
+
+
+def test_a_longer_version_is_not_a_restatement_of_a_shorter_one() -> None:
+    """Matching declared strings must still respect token boundaries."""
+    assert restated_pins('TOOL = "1.2.30"\n', {"1.2.3": ["tool"]}) == []
