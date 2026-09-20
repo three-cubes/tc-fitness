@@ -674,6 +674,53 @@ def test_in_process_transaction_wraps_controller_measurement_failure(tmp_path: P
     assert "uv.lock" in (evidence / str(raised.value.details["stderr_log"])).read_text()
 
 
+def test_a_failing_suite_is_readable_without_opening_the_evidence_directory(tmp_path: Path) -> None:
+    """The transaction is the only job that runs the suite, so it owns the diagnosis.
+
+    Naming a phase and a file path is not a diagnosis when the file is a
+    download away. The failing command's own output belongs on stderr, where
+    the operator already is, while stdout stays machine-readable.
+    """
+    root = tmp_path / "repo"
+    repository(root)
+    (root / "tests/test_failure.py").write_text(
+        "import pytest\npytestmark=pytest.mark.integration\n"
+        "def test_the_measured_suite_is_broken():\n"
+        "    raise AssertionError('deliberate measured failure')\n"
+    )
+    candidate = commit(root)
+    evidence = tmp_path / "evidence"
+
+    result = subprocess.run(
+        [
+            str(Path(sys.executable).with_name("tc-fitness")),
+            "assure-coverage",
+            "--repo-root",
+            str(root),
+            "--base-commit",
+            candidate,
+            "--candidate-commit",
+            candidate,
+            "--evidence-dir",
+            str(evidence),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+
+    assert result.returncode == 2, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert payload["side"] in ("base", "candidate"), payload
+    assert str(payload["stdout_log"]).endswith("run.stdout.log"), payload
+    assert (evidence / str(payload["stdout_log"])).is_file()
+    assert f"--- {payload['stdout_log']} ---" in result.stderr, result.stderr
+    assert "deliberate measured failure" in result.stderr, result.stderr
+    assert "1 failed" in result.stderr, result.stderr
+
+
 def test_transaction_rejects_lock_changed_after_provisioning_starts(tmp_path: Path) -> None:
     from tc_fitness.coverage_transaction import TransactionError, assure_coverage
 

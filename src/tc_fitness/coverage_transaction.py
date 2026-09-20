@@ -8,8 +8,10 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -108,13 +110,74 @@ class TransactionError(ValueError):
         self.details = dict(side=side, phase=phase, stdout_log=stdout_log, stderr_log=stderr_log)
 
 
-def _error_payload(exc: Exception) -> dict[str, Any]:
+#: How much of a failing command's output to repeat in the caller's own log.
+#: A pytest failure summary and its traceback fit; a whole run does not, and
+#: the evidence directory keeps that in full either way.
+LOG_TAIL_LINES = 100
+
+
+def _evidence_relative(path: Path, evidence_dir: Path | None) -> str:
+    """Name a log the way the evidence directory holds it, absolutely if it cannot."""
+    if evidence_dir is not None:
+        try:
+            return path.resolve().relative_to(evidence_dir.resolve()).as_posix()
+        except (OSError, ValueError):
+            pass
+    return str(path)
+
+
+def _error_details(exc: Exception, evidence_dir: Path | None) -> dict[str, Any]:
+    if isinstance(exc, TransactionError):
+        return dict(exc.details)
+    if isinstance(exc, CoverageExecutionError):
+        # The producer knows which command ended the run and where its output
+        # went. Carrying that into the payload is the difference between
+        # naming a phase and pointing at the failure.
+        stdout_log = _evidence_relative(exc.stdout_log, evidence_dir)
+        side, _, _ = stdout_log.partition("/")
+        return {
+            "phase": exc.phase,
+            "side": side if side in ("base", "candidate") else None,
+            "stdout_log": stdout_log,
+            "stderr_log": _evidence_relative(exc.stderr_log, evidence_dir),
+        }
+    return {"phase": "transaction", "side": None}
+
+
+def _error_payload(exc: Exception, *, evidence_dir: Path | None = None) -> dict[str, Any]:
     return {
         "schema": "tc.fitness/coverage-transaction/v1",
         "status": "error",
         "error": str(exc),
-        **(exc.details if isinstance(exc, TransactionError) else {"phase": "transaction", "side": None}),
+        **_error_details(exc, evidence_dir),
     }
+
+
+def report_failure_logs(payload: Mapping[str, Any], evidence_dir: Path) -> None:
+    """Repeat the failing command's own output on stderr.
+
+    The evidence directory is the durable record, but it is a download away.
+    A failure has to be readable where the operator is already looking --
+    the CI job log, or the terminal running ``make check`` -- or diagnosing a
+    failed test costs a round trip before it costs any thought. Written to
+    stderr so the machine-readable payload on stdout stays parseable.
+    """
+    for key in ("stdout_log", "stderr_log"):
+        name = payload.get(key)
+        if not isinstance(name, str):
+            continue
+        try:
+            lines = (evidence_dir / name).read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        if not lines:
+            continue
+        shown = lines[-LOG_TAIL_LINES:]
+        elided = len(lines) - len(shown)
+        heading = f"--- {name}" + (f" (last {len(shown)} of {len(lines)} lines)" if elided else "")
+        print(heading + " ---", file=sys.stderr)
+        for line in shown:
+            print(line, file=sys.stderr)
 
 
 def _fresh_measurement(
@@ -286,7 +349,9 @@ def assure_coverage(root: Path, *, base: str, candidate: str, evidence_dir: Path
     try:
         transaction = _execute_coverage(root, base=base, candidate=candidate, evidence_dir=evidence_dir)
     except Exception as exc:
-        (evidence_dir / "transaction.json").write_text(json.dumps(_error_payload(exc), sort_keys=True) + "\n")
+        (evidence_dir / "transaction.json").write_text(
+            json.dumps(_error_payload(exc, evidence_dir=evidence_dir), sort_keys=True) + "\n"
+        )
         raise
     (evidence_dir / "transaction.json").write_text(
         json.dumps(transaction.as_payload(), sort_keys=True) + "\n"
@@ -383,8 +448,9 @@ def main(argv: list[str] | None = None) -> int:
                 stream.write(json.dumps(payload, sort_keys=True) + "\n")
             return code
     except Exception as exc:
-        payload = _error_payload(exc)
+        payload = _error_payload(exc, evidence_dir=args.evidence_dir)
         code = 2
+        report_failure_logs(payload, args.evidence_dir)
         if output is not None and not output.exists():
             try:
                 with output.open("x") as stream:

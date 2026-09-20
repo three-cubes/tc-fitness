@@ -543,12 +543,11 @@ def _safe_artifact_path(base: Path, value: object) -> Path | None:
     try:
         path = Path(os.path.realpath(candidate, strict=True))
     except OSError as exc:
-        # A symlink loop is an unresolvable path, not an absent one, and the
-        # two must be told apart on every interpreter. Python 3.13 stopped
-        # raising for loops in non-strict resolution, so relying on that would
-        # read a loop as unsafe on 3.12 and as a merely missing artifact on
-        # 3.13. Strict resolution raises ELOOP on both; an absent artifact
-        # raises ENOENT and falls through to the existence check that names it.
+        # A symlink loop is an unresolvable path, not an absent one. Non-strict
+        # resolution reports the loop as an ordinary path, so a loop would read
+        # as a merely missing artifact rather than the escape it is. Strict
+        # resolution raises ELOOP; an absent artifact raises ENOENT and falls
+        # through to the existence check that names it.
         if exc.errno == errno.ELOOP:
             return None
         try:

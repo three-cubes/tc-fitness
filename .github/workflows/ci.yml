@@ -17,12 +17,8 @@ concurrency:
 
 jobs:
   check-static:
-    name: Static self gate (Python ${{ matrix.python-version }})
+    name: Static self gate
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -40,44 +36,13 @@ jobs:
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
           uv-version: ${{ steps.uv-version.outputs.version }}
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
           sync-args: "--all-extras"
 
       - name: Static self gate
         run: |
           make prepare
           make check-static
-
-  # The coverage transaction below runs the suite, but on one interpreter: its
-  # subject is coverage evidence, which does not need repeating per version.
-  # Version compatibility does, and the package advertises 3.13. Without this
-  # leg the suite never executes on 3.13 at all, since the static gate stopped
-  # running pytest — only the small installed-artifact fixtures would.
-  tests:
-    name: Test suite (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.13"]
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Resolve reviewed uv version
-        id: uv-version
-        uses: ./.github/actions/resolve-uv-version
-
-      - name: Locked uv install (org composite)
-        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
-        with:
-          uv-version: ${{ steps.uv-version.outputs.version }}
-          python-version: ${{ matrix.python-version }}
-          sync-args: "--all-extras"
-
-      - name: Run the suite
-        run: uv run --no-sync --no-build pytest -q
 
   coverage-assurance:
     name: Fresh exact-base coverage assurance
@@ -96,7 +61,7 @@ jobs:
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
           uv-version: ${{ steps.uv-version.outputs.version }}
-          python-version: "3.12"
+          python-version: "3.13"
           sync-args: "--all-extras"
 
       - name: Measure and admit the exact candidate
@@ -128,13 +93,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            python-version: "3.12"
-          - os: ubuntu-latest
-            python-version: "3.13"
-          - os: macos-latest
-            python-version: "3.12"
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -157,7 +117,7 @@ jobs:
   quality-gate:
     name: Quality gate
     if: ${{ always() }}
-    needs: [check-static, tests, coverage-assurance, distribution-qualification]
+    needs: [check-static, coverage-assurance, distribution-qualification]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
