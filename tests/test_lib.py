@@ -562,5 +562,34 @@ def test_conflicting_conditional_pins_are_refused(monkeypatch: pytest.MonkeyPatc
         lambda _d: ['foo==1.2.3; python_version < "3.13"', 'foo==2.0.0; python_version >= "3.13"'],
     )
 
-    with pytest.raises(lib.PinnedVersionError, match="more than one version"):
+    with pytest.raises(lib.PinnedVersionError, match="more than one way"):
+        lib.pinned_version("dist", "foo")
+
+
+def test_a_mixed_exact_and_range_declaration_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exact pin beside a range means the version depends on who is asking."""
+    monkeypatch.setattr(
+        lib,
+        "metadata_requires",
+        lambda _d: ['foo==1.2.3; python_version < "3.12"', 'foo>=2; python_version >= "3.12"'],
+    )
+
+    with pytest.raises(lib.PinnedVersionError, match="more than one way"):
+        lib.pinned_version("dist", "foo")
+
+
+def test_a_parenthesised_pin_is_read_as_exact(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`foo (==1.2.3)` is valid PEP 508 and pins exactly as `foo==1.2.3` does."""
+    monkeypatch.setattr(lib, "metadata_requires", lambda _d: ["foo (==1.2.3)"])
+
+    assert lib.pinned_version("dist", "foo") == "1.2.3"
+
+
+def test_a_direct_reference_url_is_not_mistaken_for_a_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An `==` inside a URL query string is not an equality specifier."""
+    monkeypatch.setattr(
+        lib, "metadata_requires", lambda _d: ["foo @ https://example.invalid/foo.whl?build==1.2.3"]
+    )
+
+    with pytest.raises(lib.PinnedVersionError, match="not at an exact version"):
         lib.pinned_version("dist", "foo")

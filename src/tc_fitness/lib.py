@@ -30,7 +30,6 @@ on the default.
 
 from __future__ import annotations
 
-import re
 import sys
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
@@ -263,25 +262,21 @@ def gate_keys(
     return 0
 
 
-#: Requirement-name prefix of a PEP 508 requirement string.
-_REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9._-]+)")
-#: The exact-version part of a `package==<version>` requirement. A trailing
-#: `.*` is prefix matching, not an exact pin: `foo==1.2.*` admits any 1.2
-#: release, so returning "1.2.*" to a caller that compares it against an
-#: installed version would fail for every version it is meant to admit.
-_EXACT_PIN_VERSION_RE = re.compile(r"==\s*([0-9][^;\s,\]]*)")
-#: Environment marker separating a requirement from its applicability.
-_REQUIREMENT_MARKER_RE = re.compile(r";\s*(.+)$")
-
-
 def canonical_package_name(name: str) -> str:
     """Normalise a package name the way PEP 503 does.
 
-    Runs of `-`, `_` and `.` are equivalent in a package name, so `zope.interface`
-    and `zope-interface` name the same distribution. Folding only underscores
-    would report that a distribution does not require a package it plainly does.
+    Delegated to `packaging`, the reference implementation: runs of `-`, `_`
+    and `.` are equivalent, so `zope.interface` and `zope-interface` name the
+    same distribution.
+
+    Imported here rather than at module scope so importing this package stays a
+    stdlib-only operation. A bare checkout can still report its version and
+    degrade legibly; only the callers that actually parse requirements need the
+    dependency present.
     """
-    return re.sub(r"[-_.]+", "-", name).lower()
+    from packaging.utils import canonicalize_name
+
+    return str(canonicalize_name(name))
 
 
 def repo_relative(path: Path, *, repo_root: Path | None = None) -> Path:
@@ -415,6 +410,8 @@ def pinned_version(distribution: str, package: str) -> str:
             it is rather than returning a silent default that would let the
             caller enforce against a version nothing declares.
     """
+    from packaging.requirements import InvalidRequirement, Requirement
+
     try:
         requirements = metadata_requires(distribution) or []
     except PackageNotFoundError as exc:
@@ -427,29 +424,43 @@ def pinned_version(distribution: str, package: str) -> str:
 
     normalised = canonical_package_name(package)
     seen: list[str] = []
-    exact: list[tuple[str, str]] = []
+    exact: set[str] = set()
+    inexact = False
     for requirement in requirements:
-        match = _REQUIREMENT_NAME_RE.match(requirement)
-        if not match or canonical_package_name(match.group(1)) != normalised:
+        try:
+            parsed = Requirement(requirement)
+        except InvalidRequirement:
+            continue
+        if canonical_package_name(parsed.name) != normalised:
             continue
         seen.append(requirement)
-        pin = _EXACT_PIN_VERSION_RE.search(requirement)
-        if pin and not pin.group(1).endswith(".*"):
-            exact.append((pin.group(1), requirement))
+        pins = [
+            specifier.version
+            for specifier in parsed.specifier
+            if specifier.operator == "==" and not specifier.version.endswith(".*")
+        ]
+        if len(pins) == 1:
+            exact.add(pins[0])
+        else:
+            inexact = True
 
-    distinct = {version for version, _ in exact}
-    if len(distinct) > 1:
+    # More than one answer is no answer. Two exact pins under different markers,
+    # or an exact pin alongside a range, both mean the applicable version depends
+    # on the environment asking -- and a helper that exists to be the single
+    # authority on what the manifest pins cannot return different versions to
+    # different callers. Evaluating the markers here would do exactly that.
+    if len(exact) > 1 or (exact and inexact):
+        declared = ", ".join(sorted(exact)) if len(exact) > 1 else seen[0]
         raise PinnedVersionError(
-            f"{distribution!r} pins {package!r} at more than one version "
-            f"({', '.join(sorted(distinct))}), each under its own environment marker, "
-            f"so no single version is the pin; "
+            f"{distribution!r} declares {package!r} more than one way ({declared}), "
+            f"each applying under its own environment marker, so no single version is the pin; "
             f"fix: read the version from the manifest condition that applies, or "
-            f"collapse the conditional pins to one; "
+            f"collapse the conditional declarations to one exact pin; "
             f"next: re-run the caller; "
             f'run: python -c "import importlib.metadata as m; print(m.requires({distribution!r}))"'
         )
     if exact:
-        return exact[0][0]
+        return exact.pop()
 
     if seen:
         raise PinnedVersionError(

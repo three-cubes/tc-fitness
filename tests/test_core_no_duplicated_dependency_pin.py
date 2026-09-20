@@ -204,3 +204,75 @@ def test_a_version_named_in_a_trailing_comment_is_documentation() -> None:
 def test_a_longer_version_is_not_a_restatement_of_a_shorter_one() -> None:
     """Matching declared strings must still respect token boundaries."""
     assert restated_pins('TOOL = "1.2.30"\n', {"1.2.3": ["tool"]}) == []
+
+
+def test_a_parenthesised_pin_is_declared(tmp_path: Path) -> None:
+    """`foo (==1.2.3)` is valid PEP 508 and pins the same version."""
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text('[project]\nname = "x"\ndependencies = ["foo (==1.2.3)"]\n', encoding="utf-8")
+
+    assert declared_exact_pins(manifest) == {"1.2.3": ["foo"]}
+
+
+def test_a_v_prefixed_pin_matches_either_spelling(tmp_path: Path) -> None:
+    """PEP 440 normalises `v1.2.3` to `1.2.3`; a literal may use either."""
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text('[project]\nname = "x"\ndependencies = ["foo==v1.2.3"]\n', encoding="utf-8")
+
+    assert declared_exact_pins(manifest) == {"1.2.3": ["foo"], "v1.2.3": ["foo"]}
+
+
+def test_a_wildcard_pin_is_not_a_pin(tmp_path: Path) -> None:
+    """`foo==1.2.*` admits every 1.2 release, so no literal restates it."""
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text('[project]\nname = "x"\ndependencies = ["foo==1.2.*"]\n', encoding="utf-8")
+
+    assert declared_exact_pins(manifest) == {}
+
+
+def test_a_direct_reference_url_declares_no_pin(tmp_path: Path) -> None:
+    """An `==` inside a URL query string is not an equality specifier."""
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text(
+        '[project]\nname = "x"\ndependencies = ["foo @ https://e.invalid/f.whl?build==1.2.3"]\n',
+        encoding="utf-8",
+    )
+
+    assert declared_exact_pins(manifest) == {}
+
+
+def test_uvs_legacy_dev_dependency_table_declares_pins(tmp_path: Path) -> None:
+    """uv still accepts dev-dependencies, so a pin there binds like any other."""
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text(
+        '[project]\nname = "x"\n[tool.uv]\ndev-dependencies = ["pytest==8.4.1"]\n', encoding="utf-8"
+    )
+
+    assert declared_exact_pins(manifest) == {"8.4.1": ["pytest"]}
+
+
+def test_a_release_qualifier_is_not_a_restatement_of_the_release(tmp_path: Path) -> None:
+    """`1.2.3rc1` is a different version, not the declared `1.2.3` restated."""
+    for longer in ("1.2.3rc1", "1.2.3.post1", "1.2.3dev1", "x1.2.3y"):
+        assert restated_pins(f'TOOL = "{longer}"\n', {"1.2.3": ["tool"]}) == []
+
+
+def test_a_shell_parameter_expansion_is_not_a_comment() -> None:
+    """`${value#prefix}` is expansion; truncating there would hide the pin after it."""
+    line = "trimmed=${value#prefix}; EXPECTED=3.6.0\n"
+
+    assert restated_pins(line, {"3.6.0": ["mutmut"]}) == [(1, "3.6.0")]
+
+
+def test_an_extensionless_shell_entrypoint_is_scanned(tmp_path: Path) -> None:
+    """A shell script without a suffix is where a restated pin hides best."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["mutmut==3.6.0"]\n', encoding="utf-8"
+    )
+    script = tmp_path / "scripts" / "check-version"
+    script.parent.mkdir()
+    script.write_text("#!/usr/bin/env bash\nEXPECTED=3.6.0\n", encoding="utf-8")
+    rule = build({"roots": ["scripts"]}, repo_root=tmp_path)
+
+    assert script in rule.enumerate_files()
+    assert rule.file_has_violation(script)

@@ -57,14 +57,63 @@ DEFAULT_MIN_VERSION_PARTS = 3
 #: pattern live on in exactly the scripts that enforce it hardest.
 DEFAULT_EXTENSIONS = (".py", ".sh", ".bash")
 
-#: A declared pin. The optional bracketed group is a PEP 508 extras list —
-#: `uvicorn[standard]==0.30.0` pins the same distribution version that
-#: `uvicorn==0.30.0` does, so skipping it would let a matching literal pass.
-_EXACT_PIN_RE = re.compile(r"^\s*([A-Za-z0-9._-]+)\s*(?:\[[^\]]*\])?\s*==\s*([0-9][^;\s,\]]*)")
-#: Everything after an unquoted `#`. A version named in prose documents it;
-#: one in code binds behaviour to it, and a trailing comment is the former
-#: even though the line does not begin with a comment.
-_TRAILING_COMMENT_RE = re.compile(r"""(?:[^"'#]|"[^"]*"|'[^']*')*""")
+#: Everything after an unquoted `#` that starts a comment. A `#` only opens a
+#: comment at the start of a word: `${value#prefix}` and `x#y` are shell
+#: parameter expansion and an ordinary word, not documentation.
+_TRAILING_COMMENT_RE = re.compile(r"""(?:[^"'#]|"[^"]*"|'[^']*'|(?<=[^\s])#)*""")
+#: A shell interpreter named on a shebang line, for files carrying no suffix.
+_SHELL_SHEBANG_RE = re.compile(r"^#!.*\b(?:ba|da|k|z)?sh\b")
+
+
+def declared_pin(requirement: str) -> tuple[str, str] | None:
+    """Return ``(canonical name, pinned version)`` for an exact pin, else None.
+
+    Parsed rather than pattern-matched. The grammars involved are PEP 508 for
+    the requirement, PEP 440 for the version and PEP 503 for the name, and a
+    regex over them is wrong in both directions: it misses the parenthesised
+    ``foo (==1.2.3)`` and the ``v``-prefixed ``foo==v1.2.3``, while reading the
+    prefix match ``foo==1.2.*`` as exact and finding a pin in a direct
+    reference such as ``foo @ https://host/foo.whl?build==1.2.3``.
+
+    Only ``==`` without a wildcard is a pin. ``===`` is arbitrary-equality on an
+    unparseable version and is left alone, and a requirement carrying an
+    environment marker is still a pin -- which one applies is the caller's
+    problem, not this parser's.
+    """
+    from packaging.requirements import InvalidRequirement, Requirement
+    from packaging.utils import canonicalize_name
+
+    try:
+        parsed = Requirement(requirement)
+    except InvalidRequirement:
+        return None
+    exact = [
+        specifier.version
+        for specifier in parsed.specifier
+        if specifier.operator == "==" and not specifier.version.endswith(".*")
+    ]
+    if len(exact) != 1:
+        return None
+    return canonicalize_name(parsed.name), exact[0]
+
+
+def version_spellings(version: str) -> set[str]:
+    """Return every spelling a source literal could use for one declared version.
+
+    PEP 440 admits spellings that normalise to the same release -- ``v1.2.3``
+    and ``1.2.3`` among them -- so a literal restating the pin need not match
+    the manifest's own characters. Both forms are matched; an unparseable
+    version is matched literally rather than dropped.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    spellings = {version}
+    try:
+        spellings.add(str(Version(version)))
+    except InvalidVersion:
+        pass
+    return spellings
+
 
 REMEDIATION = _remediation(
     fix=(
@@ -131,24 +180,36 @@ def declared_exact_pins(
         r for r in (data.get("build-system", {}) or {}).get("requires", []) or [] if isinstance(r, str)
     )
     uv = (data.get("tool", {}) or {}).get("uv", {}) or {}
-    for key in ("override-dependencies", "constraint-dependencies"):
+    # `dev-dependencies` is uv's older spelling of a development group. uv still
+    # accepts and resolves it, so a pin declared there binds exactly as hard as
+    # one in `[dependency-groups]`.
+    for key in ("override-dependencies", "constraint-dependencies", "dev-dependencies"):
         requirements.extend(r for r in (uv.get(key, []) or []) if isinstance(r, str))
 
     pins: dict[str, list[str]] = {}
     for requirement in requirements:
-        match = _EXACT_PIN_RE.match(requirement)
-        if not match:
+        parsed = declared_pin(requirement)
+        if parsed is None:
             continue
-        package, version = match.group(1), match.group(2)
+        package, version = parsed
         if version.count(".") + 1 < min_parts:
             continue
-        pins.setdefault(version, []).append(package)
+        for spelling in version_spellings(version):
+            pins.setdefault(spelling, []).append(package)
     return {version: sorted(set(names)) for version, names in pins.items()}
 
 
 def _continues_a_version(character: str) -> bool:
-    """True when a neighbouring character makes the match part of a longer version."""
-    return character != "" and character in "0123456789."
+    """True when a neighbouring character makes the match part of a longer version.
+
+    PEP 440 versions carry more than digits and dots: ``1.2.3rc1``,
+    ``1.2.3.post1``, ``1.2.3+local.1`` and the epoch form ``1!2.3`` all extend a
+    shorter version that would otherwise appear to be restated inside them. Any
+    character a version can contain therefore continues one; the start and end
+    of a line are boundaries, so an absent neighbour must not be tested for
+    membership -- "" is a substring of every string.
+    """
+    return character != "" and (character.isalnum() or character in ".+!_-")
 
 
 def _code_before_comment(line: str) -> str:
@@ -215,6 +276,49 @@ class NoDuplicatedDependencyPin(FitnessRule):
         rule.manifest = str(config.get("manifest", DEFAULT_MANIFEST))
         rule.min_version_parts = int(config.get("min_version_parts", DEFAULT_MIN_VERSION_PARTS))
         return rule
+
+    def is_in_scope(self, rel: str) -> bool:
+        """Admit suffixed sources, and extensionless files a shell will run.
+
+        A shell entrypoint is commonly written without a suffix -- `scripts/`
+        and `bin/` are full of them -- and the inherited predicate filters on
+        suffix before anything reads the file. Scoping the rule to shell while
+        skipping every extensionless shell script would leave the pattern alive
+        in the scripts that enforce versions hardest.
+        """
+        if super().is_in_scope(rel):
+            return True
+        if Path(rel).suffix:
+            return False
+        if self._roots and not any(rel.startswith(prefix) for prefix in self._roots):
+            return False
+        return self._runs_under_a_shell(self._repo_root / rel)
+
+    @staticmethod
+    def _runs_under_a_shell(path: Path) -> bool:
+        """True when the file's shebang names a shell interpreter."""
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                first = handle.readline()
+        except OSError:
+            return False
+        return bool(_SHELL_SHEBANG_RE.match(first))
+
+    def enumerate_files(self) -> list[Path]:
+        """Enumerate suffixed sources plus the extensionless shell entrypoints."""
+        found = {path.resolve(): path for path in super().enumerate_files()}
+        for root in self._roots or ("",):
+            base = self._repo_root / root
+            if not base.is_dir():
+                continue
+            for path in base.rglob("*"):
+                if path.suffix or not path.is_file() or path.is_symlink():
+                    continue
+                if any(part.startswith(".") for part in path.relative_to(self._repo_root).parts):
+                    continue
+                if path.resolve() not in found and self._runs_under_a_shell(path):
+                    found[path.resolve()] = path
+        return sorted(found.values())
 
     def _pins(self) -> dict[str, list[str]]:
         return declared_exact_pins(
