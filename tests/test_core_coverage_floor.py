@@ -480,3 +480,32 @@ def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Pa
     rule = build({"coverage_report": str(external)}, repo_root=repo)
 
     assert rule.enumerate_files() == [repo / "coverage.xml"]
+
+
+def test_strict_mode_reads_exact_counts_not_the_rounded_summary(tmp_path: Path) -> None:
+    """A file at 94.996% is written as 0.95 and would clear a 95% floor it misses."""
+    source = tmp_path / "src" / "subject.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def f(x):\n    if x:\n        return 1\n    return 0\n", encoding="utf-8")
+    (tmp_path / "coverage.xml").write_text(
+        '<coverage lines-valid="4" lines-covered="4" branches-valid="2" branches-covered="2" '
+        'line-rate="1.0" branch-rate="1.0"><sources><source>.</source></sources><packages><package>'
+        '<classes><class filename="src/subject.py" line-rate="1.0" branch-rate="1.0"><lines>'
+        '<line number="1" hits="1"/><line number="2" hits="1" branch="true" '
+        'condition-coverage="100% (2/2)"/><line number="3" hits="1"/><line number="4" hits="1"/>'
+        "</lines></class></classes></package></packages></coverage>\n",
+        encoding="utf-8",
+    )
+    rule = build(
+        {"roots": ["src"], "floor_pct": 95, "branch_floor_pct": 95, "coverage_report": "coverage.xml"},
+        repo_root=tmp_path,
+    )
+
+    assert rule._coverage == {"src/subject.py": 100.0}
+
+
+def test_a_report_inside_the_repository_keeps_its_relative_identity(tmp_path: Path) -> None:
+    """The in-repository path is the ordinary case and must relativise unchanged."""
+    rule = build({"coverage_report": "reports/coverage.xml"}, repo_root=tmp_path)
+
+    assert rule._report_key() == Path("reports/coverage.xml")

@@ -178,3 +178,10 @@ def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Pa
     rule = build({"coverage_report": str(external)}, repo_root=repo)
 
     assert rule.enumerate_files() == [repo / "coverage.xml"]
+
+
+def test_a_report_inside_the_repository_keeps_its_relative_identity(tmp_path: Path) -> None:
+    """The in-repository path is the ordinary case and must relativise unchanged."""
+    rule = build({"coverage_report": "reports/coverage.xml"}, repo_root=tmp_path)
+
+    assert rule.enumerate_files() == [tmp_path / "reports" / "coverage.xml"]
