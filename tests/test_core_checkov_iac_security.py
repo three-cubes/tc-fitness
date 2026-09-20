@@ -155,7 +155,8 @@ def test_incomplete_scanner_report_is_rejected() -> None:
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ("[]", "must be an object"),
+        ("[]", "report list is empty"),
+        ("[1]", "must be an object"),
         ('{"results": [], "summary": {}}', "missing results or summary"),
         (
             '{"results": {"failed_checks": [null]}, "summary": {"parsing_errors": 0}}',
@@ -177,6 +178,33 @@ def test_incomplete_scanner_report_is_rejected() -> None:
 )
 def test_malformed_checkov_report_shapes_are_rejected(payload: str, message: str) -> None:
     with pytest.raises(CheckovScanError, match=message):
+        _parse_report(payload)
+
+
+def test_multi_framework_report_list_is_aggregated() -> None:
+    payload = json.dumps(
+        [
+            {
+                "results": {"failed_checks": [{"check_id": "CKV_1"}]},
+                "summary": {"parsing_errors": 1},
+            },
+            {
+                "results": {"failed_checks": [{"check_id": "CKV_2"}]},
+                "summary": {"parsing_errors": 2},
+            },
+        ]
+    )
+
+    report = _parse_report(payload)
+
+    assert [item["check_id"] for item in report["results"]["failed_checks"]] == ["CKV_1", "CKV_2"]
+    assert report["summary"]["parsing_errors"] == 3
+
+
+def test_one_malformed_report_in_a_list_is_rejected() -> None:
+    payload = json.dumps([{"results": {"failed_checks": []}, "summary": {"parsing_errors": 0}}, {}])
+
+    with pytest.raises(CheckovScanError, match="missing results or summary"):
         _parse_report(payload)
 
 

@@ -20,7 +20,9 @@ classifiers = [
 
 # Check-contract manifests and exact-source coverage admission are shipped
 # public surfaces, so their parsers must exist in every default installation.
-dependencies = ["coverage>=7.5", "PyYAML>=6.0"]
+# The producer's generated configuration sets `[run] patch = subprocess`, which
+# Coverage.py introduced in 7.10; an earlier release measures no child process.
+dependencies = ["coverage>=7.10", "PyYAML>=6.0"]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and

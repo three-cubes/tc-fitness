@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.coverage_includes_branches import (
+    _resolve_element_tree,
     build,
     main,
     report_lacks_branches,
@@ -178,6 +179,15 @@ def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Pa
     rule = build({"coverage_report": str(external)}, repo_root=repo)
 
     assert rule.enumerate_files() == [repo / "coverage.xml"]
+
+
+def test_the_parser_falls_back_to_the_standard_library_without_defusedxml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumer installing the package alone still parses reports."""
+    monkeypatch.setitem(sys.modules, "defusedxml", None)
+
+    assert _resolve_element_tree() is ElementTree
 
 
 def test_a_report_inside_the_repository_keeps_its_relative_identity(tmp_path: Path) -> None:

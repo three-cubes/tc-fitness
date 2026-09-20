@@ -21,7 +21,9 @@ RESOLVER_USE = "./.github/actions/resolve-uv-version"
 DIRECT_SETUP_UV = "astral-sh/setup-uv@"
 SHARED_SETUP_UV = "three-cubes/tc-pipelines/actions/setup-uv-cached@"
 EXACT_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-QUALITY_GATE_WORKERS = frozenset({"check-static", "coverage-assurance", "distribution-qualification"})
+QUALITY_GATE_WORKERS = frozenset(
+    {"check-static", "tests", "coverage-assurance", "distribution-qualification"}
+)
 FAN_IN_NEEDS_JSON = "${{ toJSON(needs) }}"
 FAN_IN_RUN = "python3 scripts/qualification/quality_gate_fanin.py"
 

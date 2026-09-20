@@ -45,28 +45,13 @@ def _summary(summary: dict[str, Any], counts: CoverageCounts) -> None:
         raise ValueError("coverage JSON summary counts disagree with source detail")
 
 
-def cross_check_branches(
-    root: Path,
-    report: Path,
-    files: dict[str, Path],
-    hits: dict[str, dict[int, int]],
-    counts: dict[str, CoverageCounts],
-) -> None:
-    """Neither XML nor JSON can omit branch opportunities present in source."""
+def declared_branches(root: Path, report: Path) -> dict[str, dict[int, tuple[int, int]]]:
+    """Per-file ``line -> (taken, total)`` branch detail an XML report declares."""
     from tc_fitness.core_checks.coverage_floor import _resolve_element_tree
 
-    payload = json.loads(report.with_suffix(".json").read_text())
-    if payload["meta"].get("branch_coverage") is not True:
-        raise ValueError("coverage JSON must contain branch measurement")
-    documents = {
-        resolve_coverage_filename(name, [], repo_root=root): detail
-        for name, detail in payload["files"].items()
-    }
-    if set(documents) != set(files) or len(documents) != len(payload["files"]):
-        raise ValueError("coverage JSON does not measure the exact source set")
     xml = _resolve_element_tree().parse(report).getroot()
     sources = [node.text for node in xml.iter("source") if node.text]
-    xml_branches = {}
+    declared: dict[str, dict[int, tuple[int, int]]] = {}
     for element in xml.iter("class"):
         relative = resolve_coverage_filename(element.get("filename"), sources, repo_root=root)
         branches = {}
@@ -76,7 +61,53 @@ def cross_check_branches(
                 if match is None:
                     raise ValueError("coverage XML branch counts are malformed")
                 branches[int(line.get("number"))] = (int(match[1]), int(match[2]))
-        xml_branches[relative] = branches
+        declared[relative] = branches
+    return declared
+
+
+def source_branch_totals(path: Path) -> dict[int, int]:
+    """Branch opportunities Coverage.py derives from the source file itself."""
+    parser_type = importlib.import_module("coverage.parser").PythonParser
+    parser = parser_type(filename=str(path), exclude=None)
+    parser.parse_source()
+    return {start: total for start, total in parser.exit_counts().items() if total > 1}
+
+
+def complete_branch_inventory(root: Path, report: Path, files: dict[str, Path]) -> None:
+    """Refuse an XML report whose branch inventory is not the source's own.
+
+    A report can drop a branching line's attributes, restate the summary to
+    match, and read as fully covered. The source decides how many branch
+    opportunities exist, so a floor is only meaningful once the report's
+    inventory is shown to be exactly that set.
+    """
+    declared = declared_branches(root, report)
+    if set(declared) != set(files):
+        raise ValueError("coverage report does not measure the complete source set")
+    for name, path in files.items():
+        totals = {line: total for line, (_, total) in declared[name].items()}
+        if totals != source_branch_totals(path):
+            raise ValueError("coverage XML branch inventory disagrees with source opportunities: " + name)
+
+
+def cross_check_branches(
+    root: Path,
+    report: Path,
+    files: dict[str, Path],
+    hits: dict[str, dict[int, int]],
+    counts: dict[str, CoverageCounts],
+) -> None:
+    """Neither XML nor JSON can omit branch opportunities present in source."""
+    payload = json.loads(report.with_suffix(".json").read_text())
+    if payload["meta"].get("branch_coverage") is not True:
+        raise ValueError("coverage JSON must contain branch measurement")
+    documents = {
+        resolve_coverage_filename(name, [], repo_root=root): detail
+        for name, detail in payload["files"].items()
+    }
+    if set(documents) != set(files) or len(documents) != len(payload["files"]):
+        raise ValueError("coverage JSON does not measure the exact source set")
+    xml_branches = declared_branches(root, report)
     parser_type = importlib.import_module("coverage.parser").PythonParser
     for name, path in files.items():
         detail = documents[name]

@@ -279,13 +279,37 @@ class CoverageFloor(FitnessRule):
     def _details(self) -> dict[str, CoverageCounts]:
         return parse_coverage_details(self._report_path(), repo_root=self._repo_root)
 
+    def _inventory_failure(self, sources: dict[str, Path]) -> str | None:
+        """Refuse floors computed from a report that is not the source's own.
+
+        A truncated report can drop an uncovered statement or a branching
+        line's attributes, restate its own summary to agree, and read as fully
+        covered. The source decides what is executable and where it branches,
+        so the report's inventory is validated against it before any floor is
+        evaluated. Only files the report measures are checked here — one it
+        omits entirely is already a per-file failure below.
+        """
+        from tc_fitness.coverage_admission import complete_line_hits
+        from tc_fitness.coverage_measurement import complete_branch_inventory
+
+        measured = {name: path for name, path in sources.items() if name in self._details}
+        if not measured:
+            return None
+        report = self._report_path()
+        try:
+            complete_line_hits(self._repo_root, report, measured)
+            complete_branch_inventory(self._repo_root, report, measured)
+        except (ValueError, KeyError, OSError) as exc:
+            return f"coverage report inventory does not match the measured source: {exc}"
+        return None
+
     @cached_property
     def _strict_failures(self) -> dict[str, str]:
         details = self._details
         # Include untracked/new source too; Git tracking cannot make the
         # current package disappear from complete-source measurement.
         sources = {
-            path
+            self._repo_relative(path).as_posix(): path
             for source in self._roots
             for path in (self._repo_root / source).rglob("*.py")
             if path.is_file()
@@ -293,7 +317,10 @@ class CoverageFloor(FitnessRule):
         if not sources:
             raise ValueError("strict coverage source roots contain no Python files")
         failures: dict[str, str] = {}
-        for path in sorted(sources):
+        inventory = self._inventory_failure(sources)
+        if inventory is not None:
+            failures[self._report_key().as_posix()] = inventory
+        for path in sorted(sources.values()):
             relative = self._repo_relative(path).as_posix()
             counts = details.get(relative)
             if counts is None:

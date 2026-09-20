@@ -42,12 +42,8 @@ def checkov_binary() -> str | None:
     return shutil.which("checkov")
 
 
-def _parse_report(payload: str) -> dict[str, Any]:
-    """Decode Checkov JSON and validate the fields needed for a clean-scan decision."""
-    try:
-        report = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise CheckovScanError(f"Checkov returned invalid JSON: {exc.msg}") from exc
+def _validated_report(report: Any) -> tuple[list[dict[str, Any]], int]:
+    """Return one report's failed checks and parse-error count, or refuse it."""
     if not isinstance(report, dict):
         raise CheckovScanError("Checkov JSON report must be an object")
     results = report.get("results")
@@ -60,7 +56,31 @@ def _parse_report(payload: str) -> dict[str, Any]:
     parsing_errors = summary.get(_PARSING_ERRORS_KEY)
     if not isinstance(parsing_errors, int) or isinstance(parsing_errors, bool) or parsing_errors < 0:
         raise CheckovScanError("Checkov JSON report has an invalid parsing_errors count")
-    return report
+    return failed, parsing_errors
+
+
+def _parse_report(payload: str) -> dict[str, Any]:
+    """Decode Checkov JSON into one validated report of the whole scan.
+
+    Checkov emits a single report object, or — when the scan spans more than one
+    framework — a list of them. A list is aggregated into the same shape, so a
+    finding raised under any framework still blocks. An empty list carries no
+    report at all, so it cannot evidence a clean tree and is refused.
+    """
+    try:
+        payloads = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise CheckovScanError(f"Checkov returned invalid JSON: {exc.msg}") from exc
+    if isinstance(payloads, list) and not payloads:
+        raise CheckovScanError("Checkov JSON report list is empty")
+    reports = payloads if isinstance(payloads, list) else [payloads]
+    failed: list[dict[str, Any]] = []
+    parsing_errors = 0
+    for report in reports:
+        report_failed, report_parsing_errors = _validated_report(report)
+        failed.extend(report_failed)
+        parsing_errors += report_parsing_errors
+    return {"results": {"failed_checks": failed}, "summary": {_PARSING_ERRORS_KEY: parsing_errors}}
 
 
 def run_checkov(

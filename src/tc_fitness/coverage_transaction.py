@@ -48,7 +48,7 @@ class Toolchain:
     python: str
     python_executable: str
     coverage: str
-    pytest: str
+    distributions: tuple[tuple[str, str], ...]
     uv: str
     lock_digest: str
 
@@ -93,7 +93,7 @@ def _measurement(payload: dict[str, Any], uv_version: str, lock_digest: str) -> 
             python=execution["python_version"],
             python_executable=execution["python_executable"],
             coverage=execution["coverage_version"],
-            pytest=execution["pytest_version"],
+            distributions=tuple((name, version) for name, version in execution["distributions"]),
             uv=uv_version,
             lock_digest=lock_digest,
         ),

@@ -30,15 +30,35 @@ def seed(root: Path, path: str, text: str) -> Path:
 def report(
     root: Path, *, lines: int = 100, covered: int = 100, branches: int = 100, branch_covered: int = 100
 ) -> str:
-    """Materialised Cobertura inputs with hand-chosen, exact integer counts."""
-    seed(root, "src/subject.py", "value = 1\n" * lines)
+    """Materialised Cobertura inputs with hand-chosen, exact integer counts.
+
+    The source is generated to hold exactly the statements and branch
+    opportunities the report declares — ``branches // 2`` two-exit conditionals
+    followed by plain assignments. Coverage.py decides which lines those are,
+    so a case cannot assert against a report shape no real run could produce.
+    """
+    import coverage
+
+    from tc_fitness.coverage_measurement import source_branch_totals
+
+    conditionals = branches // 2
+    source = "if value:\n    value = 1\n" * conditionals + "value = 1\n" * (lines - 2 * conditionals)
+    path = seed(root, "src/subject.py", source)
+    analyzer = coverage.Coverage(config_file=False, data_file=None)
+    analyzer.set_option("report:exclude_lines", [])
+    analyzer.set_option("report:partial_branches", [])
+    statements = sorted(analyzer.analysis2(str(path))[1])
+    exits = source_branch_totals(path)
+    assert len(statements) == lines, (len(statements), lines)
+    assert sum(exits.values()) == branches, (sum(exits.values()), branches)
+    taken = {line: min(2, max(0, branch_covered - index * 2)) for index, line in enumerate(sorted(exits))}
     detail = []
-    for number in range(1, lines + 1):
+    for index, number in enumerate(statements, start=1):
         branch = ""
-        if number <= branches // 2:
-            hits = min(2, max(0, branch_covered - (number - 1) * 2))
+        if number in exits:
+            hits = taken[number]
             branch = f' branch="true" condition-coverage="{hits * 50}% ({hits}/2)"'
-        detail.append(f'<line number="{number}" hits="{int(number <= covered)}"{branch}/>')
+        detail.append(f'<line number="{number}" hits="{int(index <= covered)}"{branch}/>')
     return (
         f'<coverage lines-valid="{lines}" lines-covered="{covered}" '
         f'branches-valid="{branches}" branches-covered="{branch_covered}" '
@@ -121,7 +141,10 @@ def test_exact_checkout_rejects_a_noncommit_base(tmp_path: Path) -> None:
 
 
 def test_complete_line_hits_rejects_missing_source_document(tmp_path: Path) -> None:
-    xml = seed(tmp_path, "coverage.xml", report(tmp_path, lines=1, covered=1, branches=2, branch_covered=2))
+    # One conditional is two statements, so this is the smallest report that
+    # can carry a branch at all; the case only needs the measured file set to
+    # differ from the source set.
+    xml = seed(tmp_path, "coverage.xml", report(tmp_path, lines=2, covered=2, branches=2, branch_covered=2))
     extra = seed(tmp_path, "src/extra.py", "value = 2\n")
     files = {"src/subject.py": tmp_path / "src/subject.py", "src/extra.py": extra}
     with pytest.raises(ValueError, match="complete source set"):
