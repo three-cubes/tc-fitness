@@ -45,6 +45,7 @@ from types import ModuleType
 from typing import Any
 
 from tc_fitness.baseline import establish_baseline as _establish_baseline
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -418,13 +419,15 @@ class NewCodeCoverage(FitnessRule):
         merge condition. Returns ``0`` when the changed lines clear the floor (or
         there is no measurable new code), ``1`` otherwise.
         """
-        violations = sorted(str(p) for p in self.collect_violations())
+        violations = sorted(self.collect_violations(), key=lambda path: str(path))
         if not violations:
             print(f"ok [arch:{self._name}] — new code clears the {self.floor_pct:g}% coverage floor.")
             return 0
         print(f"FAIL [arch:{self._name}] — new code below the {self.floor_pct:g}% coverage floor:")
-        for rel in violations:
-            print(f"  {rel}")
+        finding = f"new code below the {self.floor_pct:g}% coverage floor"
+        for path in violations:
+            report_finding(self._name, self._repo_relative(path).as_posix(), finding)
+            print(f"  {path}")
         print()
         print(self.remediation)
         return 1

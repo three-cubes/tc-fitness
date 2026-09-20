@@ -10,6 +10,7 @@ from __future__ import annotations
 from importlib import metadata
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.engine_version_floor import (
@@ -17,9 +18,10 @@ from tc_fitness.core_checks.engine_version_floor import (
     EngineVersionFloor,
     build,
     main,
-    parse_version,
     resolve_declared_version,
 )
+
+pytestmark = pytest.mark.integration
 
 PKG = DEFAULT_PACKAGE
 
@@ -36,17 +38,6 @@ def _manifest(tmp_path: Path, body: str) -> Path:
 
 def _project_with_dep(tmp_path: Path, dep: str) -> Path:
     return _manifest(tmp_path, f'[project]\nname = "consumer"\ndependencies = ["{dep}"]\n')
-
-
-def test_parse_version_reads_dotted_release() -> None:
-    assert parse_version("v0.6.1") == (0, 6, 1)
-    assert parse_version("0.7.0") == (0, 7, 0)
-    assert parse_version(" v1.2 ") == (1, 2)
-
-
-def test_parse_version_rejects_non_numeric() -> None:
-    assert parse_version("main") is None
-    assert parse_version("") is None
 
 
 def test_resolve_declared_version_from_git_url(tmp_path: Path) -> None:

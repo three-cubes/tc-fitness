@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.bicep_arm_lint import (
     BicepArmLint,
     bicep_findings,
     build,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 # A resource with `tags` declared BEFORE `sku` — out of the canonical order
 # (S6975) — plus an empty-literal `properties: {}` (S6954).

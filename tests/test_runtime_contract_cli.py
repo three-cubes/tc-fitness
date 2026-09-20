@@ -13,6 +13,8 @@ import pytest
 
 from tc_fitness.core_checks._runtime_contracts import CONTRACT_SCHEMA, EVIDENCE_SCHEMA, canonical_json_bytes
 
+pytestmark = pytest.mark.integration
+
 
 def _registry() -> dict[str, object]:
     return {

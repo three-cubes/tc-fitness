@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_internal_monkeypatch
+config: {"roots":["src"],"internal_packages":["fixture_app"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-internal-monkeypatch
+          path: src/example.py
+          message_contains: "constructor seam"
+dependencies: []

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 _MODULES = (
     "tc_fitness.core_checks.no_real_names",
     "tc_fitness.core_checks.no_logging_secrets",

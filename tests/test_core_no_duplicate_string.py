@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_duplicate_string import (
     NoDuplicateString,
     build,
     main,
     module_has_duplicate,
 )
+
+pytestmark = pytest.mark.integration
 
 _DUP = """
 def a() -> None:

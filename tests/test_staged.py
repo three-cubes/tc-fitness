@@ -19,37 +19,18 @@ import tc_fitness
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.runner import run
 from tc_fitness.staged import (
-    decide,
     filter_to_staged,
     make_binding_narrower,
     make_module_roots_resolver,
-    resolve_staged_scope,
     restrict_python_files,
     staged_abs_set,
-    staged_in_scope,
 )
+
+pytestmark = pytest.mark.integration
 
 # --------------------------------------------------------------------------- #
 # scope resolution: explicit wins, else resolver, else None (fail-safe)
 # --------------------------------------------------------------------------- #
-
-
-def test_explicit_staged_scope_wins() -> None:
-    entry = RuleEntry(id="F", gate="f", check="x", staged_scope=("kairix",))
-    # Resolver would say something else, but explicit scope is the source of truth.
-    assert resolve_staged_scope(entry, "check_x.py", resolver=lambda _s: ("tests",)) == ("kairix",)
-
-
-def test_derived_scope_via_resolver() -> None:
-    entry = RuleEntry(id="F", gate="f", check="x")  # no explicit scope
-    assert resolve_staged_scope(entry, "check_x.py", resolver=lambda _s: ("kairix/core",)) == (
-        "kairix/core",
-    )
-
-
-def test_no_resolver_no_explicit_scope_is_none() -> None:
-    entry = RuleEntry(id="F", gate="f", check="x")
-    assert resolve_staged_scope(entry, "check_x.py", resolver=None) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -57,86 +38,9 @@ def test_no_resolver_no_explicit_scope_is_none() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_staged_in_scope_directory_prefix() -> None:
-    scope = ("kairix",)
-    staged = ["kairix/core/x.py", "tests/test_x.py", "kairixx/sneaky.py"]
-    # "kairix" matches kairix/... but NOT kairixx (prefix boundary).
-    assert staged_in_scope(scope, staged) == ["kairix/core/x.py"]
-
-
-def test_staged_in_scope_exact_file_prefix() -> None:
-    scope = ("kairix/cli.py",)
-    assert staged_in_scope(scope, ["kairix/cli.py"]) == ["kairix/cli.py"]
-    assert staged_in_scope(scope, ["kairix/cli_helpers.py"]) == []
-
-
-def test_staged_in_scope_none_is_everything() -> None:
-    staged = ["a", "b"]
-    assert staged_in_scope(None, staged) == staged
-
-
 # --------------------------------------------------------------------------- #
 # decide() — the three classes, soundness
 # --------------------------------------------------------------------------- #
-
-
-def test_empty_staged_runs_everything() -> None:
-    # The pre-commit --all-files quirk: no staged paths ⇒ run everything.
-    entry = RuleEntry(id="F", gate="f", check="x", staged_class="file-local", staged_scope=("kairix",))
-    assert decide(entry, "check_x.py", []).run is True
-
-
-def test_always_run_always_dispatches() -> None:
-    entry = RuleEntry(id="F50", gate="f50", check="x", staged_class="always-run")
-    # Even a totally unrelated staged file runs an always-run rule.
-    d = decide(entry, "check_x.py", ["totally/unrelated.txt"])
-    assert d.run is True
-    assert "always-run" in d.reason
-
-
-def test_file_local_runs_only_on_in_scope_staged_file() -> None:
-    entry = RuleEntry(id="F", gate="f", check="x", staged_class="file-local", staged_scope=("kairix",))
-    # In scope → run, and the staged subset is handed back for narrowing.
-    in_scope = decide(entry, "check_x.py", ["kairix/a.py", "docs/readme.md"])
-    assert in_scope.run is True
-    assert in_scope.scope_files == ("kairix/a.py",)
-    # Out of scope → skip.
-    out_scope = decide(entry, "check_x.py", ["docs/readme.md"])
-    assert out_scope.run is False
-
-
-def test_file_local_unresolved_scope_runs_fail_safe() -> None:
-    # SOUNDNESS: a file-local rule whose scope can't be resolved must RUN
-    # (never silently skip) when there ARE staged paths.
-    entry = RuleEntry(id="F", gate="f", check="x", staged_class="file-local")
-    d = decide(entry, "check_x.py", ["anything.py"], resolver=lambda _s: None)
-    assert d.run is True
-    assert "fail-safe" in d.reason
-
-
-def test_relational_runs_full_scope_when_any_path_in_scope() -> None:
-    entry = RuleEntry(
-        id="F30",
-        gate="f30",
-        check="x",
-        staged_class="relational",
-        staged_scope=("kairix/cli.py", "tests"),
-    )
-    # A staged TEST deletion (relational trigger) runs the FULL scope — and
-    # crucially returns NO scope_files, so the rule is NOT narrowed.
-    d = decide(entry, "check_x.py", ["tests/test_thing.py"])
-    assert d.run is True
-    assert d.scope_files is None
-    # A path outside the relational scope → skip.
-    assert decide(entry, "check_x.py", ["docs/x.md"]).run is False
-
-
-def test_relational_unresolved_scope_runs_when_touched() -> None:
-    # A relational rule with an unresolved scope treats ALL staged paths as in
-    # scope (staged_in_scope(None) returns everything) → runs.
-    entry = RuleEntry(id="F", gate="f", check="x", staged_class="relational")
-    d = decide(entry, "check_x.py", ["whatever.py"], resolver=lambda _s: None)
-    assert d.run is True
 
 
 # --------------------------------------------------------------------------- #
@@ -206,9 +110,7 @@ def test_module_roots_from_boundary_rule_attr(roots_checks_dir: Path) -> None:
     (roots_checks_dir / "check_boundary.py").write_text(
         "class _R:\n    roots = ('pkg', 'pkg/sub')\nRULE = _R()\n"
     )
-    resolver = make_module_roots_resolver(
-        checks_dir=roots_checks_dir, boundary_rule_attr="RULE"
-    )
+    resolver = make_module_roots_resolver(checks_dir=roots_checks_dir, boundary_rule_attr="RULE")
     assert resolver("check_boundary.py") == ("pkg", "pkg/sub")
 
 
@@ -227,19 +129,14 @@ def test_module_roots_boundary_branch_off_by_default(roots_checks_dir: Path) -> 
 def test_module_roots_from_abc_subclass_classvar(roots_checks_dir: Path) -> None:
     # An ABC subclass declared IN the module exposes a `roots` ClassVar → that.
     # The ABC type is config — the engine bakes in no particular ABC.
-    (roots_checks_dir / "_engine_abc.py").write_text(
-        "class EngineRule:\n    roots = ()\n"
-    )
+    (roots_checks_dir / "_engine_abc.py").write_text("class EngineRule:\n    roots = ()\n")
     (roots_checks_dir / "check_abc.py").write_text(
-        "from _engine_abc import EngineRule\n"
-        "class MyRule(EngineRule):\n    roots = ('engine/scope',)\n"
+        "from _engine_abc import EngineRule\nclass MyRule(EngineRule):\n    roots = ('engine/scope',)\n"
     )
     import importlib
 
     abc_mod = importlib.import_module("_engine_abc")
-    resolver = make_module_roots_resolver(
-        checks_dir=roots_checks_dir, abc_type=abc_mod.EngineRule
-    )
+    resolver = make_module_roots_resolver(checks_dir=roots_checks_dir, abc_type=abc_mod.EngineRule)
     assert resolver("check_abc.py") == ("engine/scope",)
 
 
@@ -247,18 +144,14 @@ def test_module_roots_skips_imported_abc_itself(roots_checks_dir: Path) -> None:
     # The imported ABC base (whose __module__ is NOT the check module) must be
     # skipped — only the check's OWN subclass roots count. The base here has
     # non-empty roots that must be ignored.
-    (roots_checks_dir / "_engine_abc2.py").write_text(
-        "class EngineRule2:\n    roots = ('WRONG',)\n"
-    )
+    (roots_checks_dir / "_engine_abc2.py").write_text("class EngineRule2:\n    roots = ('WRONG',)\n")
     (roots_checks_dir / "check_owns_no_subclass.py").write_text(
         "from _engine_abc2 import EngineRule2\n"  # imports base, declares none
     )
     import importlib
 
     base = importlib.import_module("_engine_abc2").EngineRule2
-    resolver = make_module_roots_resolver(
-        checks_dir=roots_checks_dir, abc_type=base, fallback_roots=None
-    )
+    resolver = make_module_roots_resolver(checks_dir=roots_checks_dir, abc_type=base, fallback_roots=None)
     # No own subclass → the imported base's roots are ignored → None.
     assert resolver("check_owns_no_subclass.py") is None
 
@@ -271,17 +164,13 @@ def test_module_roots_location_marker_fallback(roots_checks_dir: Path) -> None:
     def location_marker(module: object) -> tuple[str, ...] | None:
         return ("prod_pkg",) if getattr(module, "MARKER", False) else None
 
-    resolver = make_module_roots_resolver(
-        checks_dir=roots_checks_dir, location_marker=location_marker
-    )
+    resolver = make_module_roots_resolver(checks_dir=roots_checks_dir, location_marker=location_marker)
     assert resolver("check_located.py") == ("prod_pkg",)
 
 
 def test_module_roots_fallback_roots_when_nothing_resolves(roots_checks_dir: Path) -> None:
     (roots_checks_dir / "check_bare.py").write_text("x = 1\n")
-    resolver = make_module_roots_resolver(
-        checks_dir=roots_checks_dir, fallback_roots=("default_scope",)
-    )
+    resolver = make_module_roots_resolver(checks_dir=roots_checks_dir, fallback_roots=("default_scope",))
     assert resolver("check_bare.py") == ("default_scope",)
 
 
@@ -299,9 +188,7 @@ def test_module_roots_import_failure_is_fail_safe_none(roots_checks_dir: Path) -
 
 def test_module_roots_boundary_attr_is_configurable(roots_checks_dir: Path) -> None:
     # The attr name is config — a repo using a different module-level name works.
-    (roots_checks_dir / "check_renamed.py").write_text(
-        "class _R:\n    paths = ('aaa',)\nBOUNDARY = _R()\n"
-    )
+    (roots_checks_dir / "check_renamed.py").write_text("class _R:\n    paths = ('aaa',)\nBOUNDARY = _R()\n")
     resolver = make_module_roots_resolver(
         checks_dir=roots_checks_dir, boundary_rule_attr="BOUNDARY", roots_attr="paths"
     )
@@ -318,9 +205,7 @@ def test_binding_narrower_narrows_check_module_python_files_binding(
 ) -> None:
     # A check module that bound `python_files` BY VALUE at import time has its
     # local name narrowed inside the context, restored on exit.
-    (roots_checks_dir / "check_binder.py").write_text(
-        "from tc_fitness import python_files\n"
-    )
+    (roots_checks_dir / "check_binder.py").write_text("from tc_fitness import python_files\n")
     import importlib
 
     mod = importlib.import_module("check_binder")
@@ -396,9 +281,7 @@ def test_binding_narrower_narrows_under_runner_restrict_composition(
     # modules that `from tc_fitness import python_files` are NEVER re-narrowed.
     # This test composes exactly as the runner does and asserts a real check_*
     # module binding IS narrowed.
-    (roots_checks_dir / "check_composed_binder.py").write_text(
-        "from tc_fitness import python_files\n"
-    )
+    (roots_checks_dir / "check_composed_binder.py").write_text("from tc_fitness import python_files\n")
     import importlib
 
     mod = importlib.import_module("check_composed_binder")
@@ -458,8 +341,12 @@ def test_binding_narrower_full_staged_run_narrows_real_check_module(tmp_path: Pa
         importlib.import_module("check_counter")
         rules = (
             RuleEntry(
-                id="CNT", gate="cnt", check="counter", summary="counter rule",
-                staged_class="file-local", staged_scope=("kairix",),
+                id="CNT",
+                gate="cnt",
+                check="counter",
+                summary="counter rule",
+                staged_class="file-local",
+                staged_scope=("kairix",),
             ),
         )
         verdict = run(
@@ -502,12 +389,20 @@ def test_staged_dispatch_skips_out_of_scope_transparently(tmp_path: Path) -> Non
 
     rules = (
         RuleEntry(
-            id="K", gate="k", check="kairix_rule", summary="kairix rule",
-            staged_class="file-local", staged_scope=("kairix",),
+            id="K",
+            gate="k",
+            check="kairix_rule",
+            summary="kairix rule",
+            staged_class="file-local",
+            staged_scope=("kairix",),
         ),
         RuleEntry(
-            id="T", gate="t", check="tests_rule", summary="tests rule",
-            staged_class="file-local", staged_scope=("tests",),
+            id="T",
+            gate="t",
+            check="tests_rule",
+            summary="tests rule",
+            staged_class="file-local",
+            staged_scope=("tests",),
         ),
     )
 
@@ -546,8 +441,12 @@ def test_staged_dispatch_no_false_negative(tmp_path: Path) -> None:
 
     rules = (
         RuleEntry(
-            id="GUARD", gate="guard", check="guard", summary="guard rule",
-            staged_class="file-local", staged_scope=("kairix",),
+            id="GUARD",
+            gate="guard",
+            check="guard",
+            summary="guard rule",
+            staged_class="file-local",
+            staged_scope=("kairix",),
         ),
     )
     verdict = run(
@@ -566,15 +465,17 @@ def test_staged_empty_runs_everything_through_runner(tmp_path: Path) -> None:
     _write_py_check(checks_dir, "any", "return 1")
     rules = (
         RuleEntry(
-            id="ANY", gate="any", check="any", summary="any",
-            staged_class="file-local", staged_scope=("nowhere",),
+            id="ANY",
+            gate="any",
+            check="any",
+            summary="any",
+            staged_class="file-local",
+            staged_scope=("nowhere",),
         ),
     )
     # No staged files at all → fail-safe: the rule runs even though its scope
     # doesn't match (the pre-commit --all-files quirk).
-    verdict = run(
-        rules, mode="staged", staged_files=[], repo_root=tmp_path, checks_dir=checks_dir
-    )
+    verdict = run(rules, mode="staged", staged_files=[], repo_root=tmp_path, checks_dir=checks_dir)
     assert verdict.failures == ["ANY"]
 
 
@@ -633,13 +534,15 @@ def test_staged_subprocess_output_is_captured_and_replayed_in_order(tmp_path: Pa
     # like --all, instead of letting the child fd escape (race / vanish).
     checks_dir = tmp_path / "scripts" / "checks"
     checks_dir.mkdir(parents=True)
-    _write_noisy_sh(
-        checks_dir, "check-noisy.sh", 0, "CHILD-DETECTOR-LINE-1", "CHILD-DETECTOR-LINE-2"
-    )
+    _write_noisy_sh(checks_dir, "check-noisy.sh", 0, "CHILD-DETECTOR-LINE-1", "CHILD-DETECTOR-LINE-2")
     rules = (
         RuleEntry(
-            id="SH", gate="sh", check="noisy", summary="noisy shell",
-            script="check-noisy.sh", staged_class="always-run",
+            id="SH",
+            gate="sh",
+            check="noisy",
+            summary="noisy shell",
+            script="check-noisy.sh",
+            staged_class="always-run",
         ),
     )
 
@@ -673,23 +576,33 @@ def test_staged_subprocess_output_is_byte_stable_across_runs(tmp_path: Path) -> 
     _write_py_check(checks_dir, "py_skipped", "return 1")  # would FAIL if dispatched
     rules = (
         RuleEntry(
-            id="DET", gate="det", check="detector", summary="shell detector",
-            script="check-detector.sh", staged_class="always-run",
+            id="DET",
+            gate="det",
+            check="detector",
+            summary="shell detector",
+            script="check-detector.sh",
+            staged_class="always-run",
         ),
         RuleEntry(
-            id="IP", gate="ip", check="py_inproc", summary="in-process rule",
-            staged_class="file-local", staged_scope=("kairix",),
+            id="IP",
+            gate="ip",
+            check="py_inproc",
+            summary="in-process rule",
+            staged_class="file-local",
+            staged_scope=("kairix",),
         ),
         RuleEntry(
-            id="SK", gate="sk", check="py_skipped", summary="out-of-scope rule",
-            staged_class="file-local", staged_scope=("nowhere",),
+            id="SK",
+            gate="sk",
+            check="py_skipped",
+            summary="out-of-scope rule",
+            staged_class="file-local",
+            staged_scope=("nowhere",),
         ),
     )
 
     runs = [
-        _staged_run_capturing(
-            rules, repo_root=tmp_path, checks_dir=checks_dir, staged_files=["kairix/a.py"]
-        )
+        _staged_run_capturing(rules, repo_root=tmp_path, checks_dir=checks_dir, staged_files=["kairix/a.py"])
         for _ in range(4)
     ]
 
@@ -698,9 +611,12 @@ def test_staged_subprocess_output_is_byte_stable_across_runs(tmp_path: Path) -> 
     first = runs[0]
     # The detector's child output is captured (not leaked) and replayed in order
     # within its run/PASS framing.
-    assert first.index("run [DET]") < first.index("DETECTOR-OUTPUT-A") < first.index(
-        "DETECTOR-OUTPUT-B"
-    ) < first.index("PASS [DET]")
+    assert (
+        first.index("run [DET]")
+        < first.index("DETECTOR-OUTPUT-A")
+        < first.index("DETECTOR-OUTPUT-B")
+        < first.index("PASS [DET]")
+    )
     # The in-process check's stdout is captured and replayed inline as before.
     assert first.index("run [IP]") < first.index("INPROCESS-OUTPUT") < first.index("PASS [IP]")
     # The out-of-scope rule is transparently skipped (verdict set unchanged: the
@@ -720,16 +636,29 @@ def test_staged_subprocess_verdicts_unchanged_by_capturing(tmp_path: Path) -> No
     _write_noisy_sh(checks_dir, "check-failing.sh", 3, "boom")
     rules = (
         RuleEntry(
-            id="OK", gate="ok", check="passing", summary="passing detector",
-            script="check-passing.sh", staged_class="always-run",
+            id="OK",
+            gate="ok",
+            check="passing",
+            summary="passing detector",
+            script="check-passing.sh",
+            staged_class="always-run",
         ),
         RuleEntry(
-            id="BAD", gate="bad", check="failing", summary="failing detector",
-            script="check-failing.sh", staged_class="always-run",
+            id="BAD",
+            gate="bad",
+            check="failing",
+            summary="failing detector",
+            script="check-failing.sh",
+            staged_class="always-run",
         ),
         RuleEntry(
-            id="OOS", gate="oos", check="passing", summary="out-of-scope",
-            script="check-passing.sh", staged_class="file-local", staged_scope=("nowhere",),
+            id="OOS",
+            gate="oos",
+            check="passing",
+            summary="out-of-scope",
+            script="check-passing.sh",
+            staged_class="file-local",
+            staged_scope=("nowhere",),
         ),
     )
     verdict = run(

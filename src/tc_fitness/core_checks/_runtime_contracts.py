@@ -1,8 +1,8 @@
 """Shared strict loading and protocol primitives for runtime contract checks.
 
 The public helpers in this module deliberately use only the standard library
-for JSON. YAML remains an optional input format and is imported only when a
-consumer selects a ``.yaml`` or ``.yml`` registry.
+for JSON. YAML is parsed using the required PyYAML runtime dependency, imported
+when a consumer selects a ``.yaml`` or ``.yml`` registry.
 """
 
 from __future__ import annotations
@@ -453,8 +453,8 @@ def _load_strict_yaml(
                 source,
                 "/",
                 "yaml-dependency-missing",
-                "YAML contract selected but the optional PyYAML dependency is not installed",
-                "install three-cubes-fitness[yaml] or use a JSON contract",
+                "YAML contract selected but the required PyYAML runtime dependency is not installed",
+                "repair the three-cubes-fitness installation or use a JSON contract",
             ),
         )
 

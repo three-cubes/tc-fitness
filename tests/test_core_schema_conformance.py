@@ -5,11 +5,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.schema_conformance import (
     build,
     file_missing_required_keys,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:

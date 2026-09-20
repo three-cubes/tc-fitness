@@ -8,7 +8,11 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 import tc_fitness
+
+pytestmark = pytest.mark.integration
 
 
 def test_version_matches_installed_metadata() -> None:

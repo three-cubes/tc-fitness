@@ -1,0 +1,22 @@
+schema: tc.fitness/check-contract/v1
+check: core:engine_version_floor
+config:
+  floor: 0.16.0
+  package: three-cubes-fitness
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: engine-version-floor
+      path: three-cubes-fitness pinned 0.15.0 is below floor 0.16.0
+      message_contains: pin
+dependencies: []

@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_commented_out_code import (
     NoCommentedOutCode,
     build,
     main,
     module_has_commented_code,
 )
+
+pytestmark = pytest.mark.integration
 
 _DEAD = """
 x = 1

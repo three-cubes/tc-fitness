@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_internal_patches import (
     NoInternalPatches,
     build,
     file_patches_internal,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _INTERNAL = frozenset({"scripts", "tools"})
 _EXEMPT = frozenset({"os", "subprocess", "pytest"})

@@ -27,6 +27,7 @@ from types import ModuleType
 from typing import Any
 
 from tc_fitness.core_checks import run_core_check
+from tc_fitness.core_checks._coverage_evidence import reject_external_report
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -72,12 +73,11 @@ def report_lacks_branches(report_path: Path, *, element_tree: Any | None = None)
 
     Reads the root ``<coverage>`` element's ``branch-rate`` and
     ``branches-valid`` attributes: a real branch-aware report carries both > 0.
-    A MISSING report returns ``False`` (nothing to assert yet — another run
-    will produce it). A malformed/unsafe report raises, surfacing the problem
-    rather than silently passing.
+    A missing report returns ``True``: absent evidence cannot satisfy branch
+    assurance. A malformed/unsafe report raises rather than silently passing.
     """
     if not report_path.exists():
-        return False
+        return True
     text = report_path.read_text(encoding="utf-8")
     _reject_unsafe_xml(text, str(report_path))
     et = element_tree if element_tree is not None else _resolve_element_tree()
@@ -108,7 +108,25 @@ class CoverageIncludesBranches(FitnessRule):
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, CoverageIncludesBranches)  # noqa: S101  # narrowing for mypy
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
+        reject_external_report(rule.coverage_report, rule._repo_root)
         return rule
+
+    def establish_baseline(self) -> Path:
+        """Refuse to freeze a state in which no evidence was measured at all.
+
+        Absent evidence produces the same violation key as a measured report
+        that falls short, so adopting a baseline while the report is missing
+        would record that key and turn the check permanently green — exactly
+        during onboarding, when the report is most likely not to have been
+        produced yet. Debt that was measured can be ratcheted; evidence that
+        was never produced cannot.
+        """
+        if not self._report_path().exists():
+            raise ValueError(
+                "cannot baseline absent coverage evidence: "
+                f"{self.coverage_report} does not exist; produce the report, then adopt"
+            )
+        return super().establish_baseline()
 
     def _report_path(self) -> Path:
         report = Path(self.coverage_report)
@@ -116,8 +134,7 @@ class CoverageIncludesBranches(FitnessRule):
 
     def enumerate_files(self) -> list[Path]:
         """The single artifact this rule judges: the coverage report itself."""
-        report = self._report_path()
-        return [report] if report.exists() else []
+        return [self._report_path()]
 
     def is_in_scope(self, rel: str) -> bool:
         """Admit the configured report regardless of where it sits."""

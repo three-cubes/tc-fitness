@@ -5,19 +5,25 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.coverage_floor import (
     build,
     main,
     parse_coverage_report,
 )
 
+pytestmark = pytest.mark.integration
 
-def _report(line_rates: dict[str, float], *, source: str = "src") -> str:
+
+def _report(line_rates: dict[str, float], *, source: str = "src", sources: list[str] | None = None) -> str:
     classes = "\n".join(f'<class filename="{name}" line-rate="{rate}"/>' for name, rate in line_rates.items())
+    source_values = sources if sources is not None else [source]
+    source_xml = "".join(f"<source>{value}</source>" for value in source_values)
     return (
         '<?xml version="1.0" ?>\n'
         '<coverage line-rate="0.5">\n'
-        f"  <sources><source>{source}</source></sources>\n"
+        f"  <sources>{source_xml}</sources>\n"
         f"  <packages><package><classes>\n{classes}\n"
         "  </classes></package></packages>\n"
         "</coverage>\n"
@@ -37,17 +43,72 @@ def test_parse_joins_source_root(tmp_path: Path) -> None:
     assert parsed == {"src/a.py": 40.0, "src/b.py": 100.0}
 
 
-def test_parse_missing_report_empty(tmp_path: Path) -> None:
-    assert parse_coverage_report(tmp_path / "nope.xml") == {}
+def test_absolute_source_root_is_normalised_to_repository_paths(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/tc_fitness/a.py", "value = 1\n")
+    report = _seed(
+        tmp_path,
+        "coverage.xml",
+        _report({"src/tc_fitness/a.py": 0.4}, source=str(tmp_path)),
+    )
+
+    assert parse_coverage_report(report, repo_root=tmp_path) == {"src/tc_fitness/a.py": 40.0}
+    rule = build({"roots": ["src/tc_fitness"], "floor_pct": 95.0}, repo_root=tmp_path)
+    assert rule.collect_violations() == {Path("src/tc_fitness/a.py")}
+
+
+def test_multiple_absolute_source_roots_resolve_existing_files(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/tc_fitness/a.py", "value = 1\n")
+    _seed(tmp_path, "scripts/helper.py", "value = 2\n")
+    report = _seed(
+        tmp_path,
+        "coverage.xml",
+        _report(
+            {"a.py": 1.0, "helper.py": 0.4},
+            sources=[str(tmp_path / "src" / "tc_fitness"), str(tmp_path / "scripts")],
+        ),
+    )
+
+    assert parse_coverage_report(report, repo_root=tmp_path) == {
+        "src/tc_fitness/a.py": 100.0,
+        "scripts/helper.py": 40.0,
+    }
+
+
+def test_missing_report_is_a_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "value = 1\n")
+    rule = build({"roots": ["src"], "floor_pct": 95.0}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("coverage.xml")}
+    assert rule.run() == 1
+
+
+def test_empty_report_is_a_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "value = 1\n")
+    _seed(tmp_path, "coverage.xml", "<coverage><sources><source>src</source></sources></coverage>")
+    rule = build({"roots": ["src"], "floor_pct": 95.0}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("coverage.xml")}
+
+
+def test_source_file_omitted_from_report_is_a_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/measured.py", "value = 1\n")
+    _seed(tmp_path, "src/omitted.py", "value = 2\n")
+    _seed(tmp_path, "coverage.xml", _report({"measured.py": 1.0}))
+    rule = build({"roots": ["src"], "floor_pct": 95.0}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("src/omitted.py")}
 
 
 def test_below_floor_is_violation(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "a = 1\n")
+    _seed(tmp_path, "src/b.py", "b = 1\n")
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.4, "b.py": 0.95}))
     rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
 
 
 def test_floor_is_config_driven(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "a = 1\n")
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.85}))
     # floor 90 → a.py violates; floor 80 → clean.
     assert {
@@ -63,6 +124,7 @@ def test_roots_scope_the_violation_set(tmp_path: Path) -> None:
 
 
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/a.py", "a = 1\n")
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}))
     rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
     assert rule.run() == 1
@@ -107,3 +169,17 @@ def _assert_no_repo_identity(module_file: Path) -> None:
             lowered = node.value.lower()
             for tok in ("kairix", "tc-agent-zone", "agent-zone", "kata"):
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
+
+
+def test_an_external_coverage_report_is_refused_at_configuration(tmp_path: Path) -> None:
+    """An out-of-repository report cannot be relativised, so the gate would crash."""
+    with pytest.raises(ValueError, match="inside the repository"):
+        build({"coverage_report": "/elsewhere/coverage.xml"}, repo_root=tmp_path)
+
+
+def test_absent_coverage_evidence_cannot_be_baselined(tmp_path: Path) -> None:
+    """Adopting a baseline with no report would turn the check permanently green."""
+    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
+
+    with pytest.raises(ValueError, match="cannot baseline absent coverage evidence"):
+        rule.establish_baseline()

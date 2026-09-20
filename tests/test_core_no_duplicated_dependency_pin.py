@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_duplicated_dependency_pin import (
     REMEDIATION,
     NoDuplicatedDependencyPin,
@@ -11,6 +13,8 @@ from tc_fitness.core_checks.no_duplicated_dependency_pin import (
     declared_exact_pins,
     restated_pins,
 )
+
+pytestmark = pytest.mark.integration
 
 _MANIFEST = """
 [project]

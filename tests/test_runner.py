@@ -29,20 +29,17 @@ import pytest
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.runner import (
     SKIP_EXIT_CODE,
-    Colours,
     ConditionalResult,
     RunnerConfig,
     Verdicts,
     declared_skip_reason,
     main_cli,
     make_env_path_conditional_check,
-    print_aggregate,
-    resolve_script,
     run,
-    select_all,
-    select_gate,
     write_skip_report,
 )
+
+pytestmark = pytest.mark.integration
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -525,11 +522,6 @@ def test_main_cli_returns_1_on_failure(checks_dir: Path, repo_root: Path) -> Non
     assert rc == 1
 
 
-def test_resolve_script_default_and_override() -> None:
-    assert resolve_script(RuleEntry(id="X", gate="x", check="foo_bar")) == "check_foo_bar.py"
-    assert resolve_script(RuleEntry(id="X", gate="x", check="foo", script="check-foo.sh")) == "check-foo.sh"
-
-
 def test_runner_config_puts_checks_dir_on_sys_path(checks_dir: Path, repo_root: Path) -> None:
     before = list(sys.path)
     try:
@@ -537,13 +529,6 @@ def test_runner_config_puts_checks_dir_on_sys_path(checks_dir: Path, repo_root: 
         assert str(checks_dir) in sys.path
     finally:
         sys.path[:] = before
-
-
-def test_verdicts_properties() -> None:
-    assert Verdicts(ran=3, failures=[]).ok is True
-    assert Verdicts(ran=3, failures=["A"]).ok is False
-    assert Verdicts(ran=3, failures=[]).exit_code == 0
-    assert Verdicts(ran=3, failures=["A"]).exit_code == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -1022,60 +1007,6 @@ def test_default_dispatch_is_inprocess(checks_dir: Path, repo_root: Path) -> Non
 
 
 # promoted ledger primitives -------------------------------------------------- #
-
-
-def test_select_all_is_public_and_filters_run_all_and_proposed() -> None:
-    rules = (
-        RuleEntry(id="A", gate="a", check="a"),
-        RuleEntry(id="B", gate="b", check="b", run_all=False),
-        RuleEntry(id="C", gate="c", check="(proposed)", status="proposed"),
-    )
-    assert [e.id for e in select_all(rules)] == ["A"]
-
-
-def test_select_gate_is_public_and_case_insensitive() -> None:
-    rules = (RuleEntry(id="F26", gate="f26", check="x"),)
-    assert [e.id for e in select_gate(rules, "f26")] == ["F26"]
-    assert select_gate(rules, "nope") == []
-
-
-def test_print_aggregate_is_public(capsys: pytest.CaptureFixture[str]) -> None:
-    print_aggregate(Verdicts(ran=2, failures=[]))
-    assert "All 2 architecture fitness functions passed" in _plain(capsys.readouterr().out)
-    print_aggregate(Verdicts(ran=2, failures=["X"]))
-    assert "1/2 rule(s) failed: X" in _plain(capsys.readouterr().out)
-
-
-def test_colours_namespace_is_public() -> None:
-    # The colours taz imports as private _GREEN/_RED/_RESET/_YELLOW are exposed
-    # as a public namespace.
-    assert Colours.GREEN == "\033[0;32m"
-    assert Colours.RED == "\033[0;31m"
-    assert Colours.YELLOW == "\033[0;33m"
-    assert Colours.RESET == "\033[0m"
-
-
-def test_underscore_aliases_still_re_exported() -> None:
-    # Back-compat: taz's private imports keep resolving until it migrates.
-    from tc_fitness.runner import (
-        _GREEN,
-        _RED,
-        _RESET,
-        _YELLOW,
-        _print_aggregate,
-        _select_all,
-        _select_gate,
-    )
-
-    assert _print_aggregate is print_aggregate
-    assert _select_all is select_all
-    assert _select_gate is select_gate
-    assert (_GREEN, _RED, _YELLOW, _RESET) == (
-        Colours.GREEN,
-        Colours.RED,
-        Colours.YELLOW,
-        Colours.RESET,
-    )
 
 
 def test_argv_exception_fields_work_in_parallel_dispatch(

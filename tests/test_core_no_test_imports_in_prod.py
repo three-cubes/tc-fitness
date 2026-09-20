@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_test_imports_in_prod import (
@@ -12,6 +13,8 @@ from tc_fitness.core_checks.no_test_imports_in_prod import (
     file_imports_test_tree,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _FROM_IMPORT = "from tests.fakes import FakeRepo\n"
 _BARE_IMPORT = "import tests\n"

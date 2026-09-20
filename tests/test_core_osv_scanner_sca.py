@@ -16,6 +16,8 @@ from tc_fitness.core_checks.osv_scanner_sca import (
 )
 from tc_fitness.runner import RunnerConfig, _load_core_check
 
+pytestmark = pytest.mark.integration
+
 
 def _report(*vulnerability_ids: str) -> dict[str, object]:
     return {

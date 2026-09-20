@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.shellcheck_disable_with_reason import (
     DEFAULT_MIN_RATIONALE_LEN,
     DEFAULT_RATIONALE_MARKERS,
@@ -14,6 +16,8 @@ from tc_fitness.core_checks.shellcheck_disable_with_reason import (
     is_shell_file,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _BARE = """\
 #!/usr/bin/env bash

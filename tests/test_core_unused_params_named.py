@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.unused_params_named import (
     UnusedParamsNamed,
     build,
     main,
     module_has_unused_param,
 )
+
+pytestmark = pytest.mark.integration
 
 _UNUSED = """
 def handle(event, context):

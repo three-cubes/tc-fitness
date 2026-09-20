@@ -44,6 +44,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -212,6 +213,7 @@ class CiConsumesSharedGate(FitnessRule):
 
         compiled = self._compile_patterns()
         if isinstance(compiled, str):
+            report_finding(self._name, ".", compiled)
             print(f"FAIL [{self._name}] — a configured pattern is not a valid regex:")
             print(f"  - {compiled}")
             print()
@@ -230,11 +232,9 @@ class CiConsumesSharedGate(FitnessRule):
             return 0
 
         scanned = ", ".join(sorted(path.name for path in files))
+        finding = f"{len(files)} workflow file(s) under {self.workflows_dir!r} ({scanned}), and NONE consumes the shared gate."
         print(f"FAIL [{self._name}] — CI runs but forked its quality gate off the shared standard:")
-        print(
-            f"  - {len(files)} workflow file(s) under {self.workflows_dir!r} "
-            f"({scanned}), and NONE consumes the shared gate."
-        )
+        print(f"  - {finding}")
         print(
             f"  - no `uses:` reference matches {self.reusable_pattern!r} and no step "
             f"matches {self.engine_pattern!r}."
@@ -243,6 +243,10 @@ class CiConsumesSharedGate(FitnessRule):
         print(self.remediation)
 
         if self.warn_only:
+            # A finding defaults to `fail`, and warn-only returns zero. Emitting
+            # one here would pair a passing terminal result with a failing
+            # finding, which the contract ledger rejects as incoherent evidence
+            # and any other consumer would read as a failure that did not fail.
             print()
             print(
                 f"warn-only [{self._name}] — reported above but NOT failing the build "
@@ -250,6 +254,7 @@ class CiConsumesSharedGate(FitnessRule):
                 f"remove warn_only to hard-enforce."
             )
             return 0
+        report_finding(self._name, ".", finding)
         return 1
 
 

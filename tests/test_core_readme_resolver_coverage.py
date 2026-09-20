@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.readme_resolver_coverage import (
     ReadmeResolverCoverage,
     build,
     directory_missing_resolver,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _mkdir(tmp_path: Path, rel: str) -> Path:

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.integrity_state_predicate import build, file_missing_state_predicate
+
+pytestmark = pytest.mark.integration
 
 _STATE = {"content_vectors": ("model", "embedded_at")}
 

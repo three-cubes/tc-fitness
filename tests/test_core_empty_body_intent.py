@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.empty_body_intent import (
     EmptyBodyIntent,
     build,
     main,
     module_has_undocumented_empty_body,
 )
+
+pytestmark = pytest.mark.integration
 
 _BARE = """
 def on_event(self, event):

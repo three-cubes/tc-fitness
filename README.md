@@ -4,6 +4,10 @@
 run `tc-fitness run` and it runs your linters, type-check, tests, coverage,
 security scan, and architecture rules, then gives you one pass or fail.
 
+Supported platform evidence covers Linux on Python 3.12 and 3.13, plus macOS
+CLI, Git and filesystem qualification on Python 3.12. Windows is unsupported
+until it has an equivalent installed-distribution qualification lane.
+
 **The tool knows HOW to run the checks. Your repo says WHAT to check** — you list
 the checks in a `[tool.tc_fitness]` block in your `pyproject.toml`, and
 tc-fitness runs them in order and gives you a single verdict.
@@ -274,6 +278,111 @@ integration/E2E tests. The hard gate verifies that a named test invokes the
 exact executable and asserts its result and produced output; it does not support
 baselines.
 
+### Check-contract execution
+
+Execute a `tc.fitness/check-contract/v1` case through the same CORE dispatcher:
+
+```sh
+tc-fitness run --contract path/to/contract.yaml --case violation --ledger artifacts/violation.json
+```
+
+These three arguments are required together and cannot be combined with ordinary
+gate options. The fixture is copied into a temporary repository; its declared
+config and a single catalogue entry are passed to the existing runner. Fixtures
+must be contained beneath the manifest, without symlinks or suppression baselines.
+Configuration must use fixture-relative paths and cannot select a baseline or
+an external rule name. Manifest bytes, parsed configuration, fixture digest and
+candidate identity are captured before dispatch. A changed manifest, original
+fixture or candidate source, or a baseline created by the executing fixture,
+invalidates the run before a ledger can be published.
+During dispatch, a context-local policy disables suppression reads in the shared
+file/key gates and custom CORE baseline loaders. Even a transient baseline
+removed before dispatch finishes cannot grandfather a detector finding. Ordinary
+consumer runs outside contract mode retain their existing baseline behaviour.
+Contract configuration also uses the reviewed per-CORE option inventory in
+`tc_fitness.check_contract_policy`. Unknown options fail closed: new aliases
+must be classified before assurance can use them. Adoption flags must be false,
+exclusion lists must be empty, and cutover, informational-job and test-filename
+exemption overrides are forbidden. OSV requires explicit `required: true`;
+mutation-report contracts require explicit `allow_missing_current: false`.
+Tier-marker contracts require explicit `require_module_marker: true` so
+contract assurance cannot fall back to generic function-level classification.
+Mutation `baseline_report` is a bound input report, not a suppression list.
+Normal scope, thresholds and expected identities remain detector policy inputs.
+The output directory must exist, and the ledger must be a new path outside the
+fixture. Retries retain the previous ledger and use a new output path.
+
+The command returns the observed result: 0 for pass, 1 for a check violation,
+and 2 for an execution or dependency error. An expected violation therefore still
+returns non-zero. To evaluate whether that observed result satisfies the case,
+use the process runner, which invokes the installed `tc-fitness run` entrypoint
+and validates its ledger:
+
+```python
+from pathlib import Path
+from tc_fitness.check_contract_execution import run_contract_case
+
+evidence = run_contract_case(
+    Path("path/to/contract.yaml"), "violation", Path("artifacts/violation.json")
+)
+```
+
+`CheckContractError` means the assurance case failed. Missing evidence, unexpected
+findings or exits, stale timestamps, changed inputs, and digest mismatches are
+failures. Each dependency-backed check reports its own unavailable executable as
+an `error`; the contract harness never synthesises a dependency finding or skips
+the check. That error satisfies only a case expecting its structured finding.
+
+An unavailable case can remove PATH-resolved tools from its execution environment
+without installing substitutes:
+
+```yaml
+environment:
+  schema: tc.fitness/check-environment/v1
+  path: empty
+```
+
+This optional per-case declaration accepts only `inherit` and `empty`. Omission
+means `inherit`; only the `unavailable` case may use `empty`. Its PATH points to
+an empty temporary directory during the same check dispatch and is then restored.
+Compliant and violation cases use the ordinary environment. The declaration is
+bound in the case digest and ledger. Absolute executable defaults remain absolute;
+a PATH-absence case must configure the real check to resolve its declared tool
+through PATH (for example, `python_executable: python3` for `script_help_smoke`).
+
+The `tc.fitness/check-ledger/v1` JSON binds the check and case, manifest and case
+digests, fixture contents and permissions, package version and source digest,
+execution environment, UUID and timestamps, expected and actual outcomes, and structured
+findings. `payload_digest` is SHA-256 over the UTF-8 JSON object with that field
+removed, sorted keys, compact separators, unescaped Unicode and no NaN values.
+The validator recomputes it; it is an integrity digest, not a signature.
+
+Checks emit findings through `tc_fitness.check_evidence.report_finding` at the
+actual decision point. `gate()`-based checks, including `license_present`, already
+use this interface. Custom checks must emit their own structured findings;
+console output is never parsed and detectors are never invoked twice.
+
+### Pytest tier assurance
+
+Canonical pytest tier assurance uses two complementary checks. Configure
+`core:every_test_has_tier_marker` with `require_module_marker = true` to require
+one literal module declaration, `pytestmark = pytest.mark.<tier>`, using
+`unit`, `contract`, `integration` or `e2e`. In this mode, `tier_markers` cannot
+change the vocabulary. Reusing `pytestmark`, aliasing pytest's marker namespace,
+and additional explicit tier applications fail; ordinary attributes and
+non-tier marks remain valid. The generic default retains configurable tiers
+and function-level markers for existing consumers.
+
+Also run `pytest -p tc_fitness.pytest_tiers --strict-markers` (register the four
+tiers in pytest configuration). This public plugin checks actual markers at
+collection finish, including parametrised, inherited and deselected items.
+Missing tiers, two identical tier marks and multiple different tiers fail with
+the node ID and exact marker list. It catches dynamic decorators and hook-added
+tiers without interpreting Python or starting another pytest process. tc-fitness
+enables it in its own pytest `addopts`; its source self-check uses the unsuppressed
+violation set. Collection assurance checks the items that pytest collects, not
+the correctness of tier selection or code that changes markers after collection.
+
 ## Library modules
 
 tc-fitness also ships these modules (the helpers `tc-fitness run` and a repo's
@@ -361,9 +470,9 @@ if err is None:
     absent = missing_keys(data, ("name", "version"))
 ```
 
-`load_yaml` imports PyYAML lazily and returns `(None, "PyYAML missing")` when it
-isn't installed, so the dependency is optional — install the `yaml` extra only if
-you call it.
+`load_yaml` is available in every default installation. YAML-backed public
+surfaces, including check-contract manifests, therefore do not require an
+optional extra to parse their configuration.
 
 ## What v0.2.0 adds
 
@@ -591,11 +700,11 @@ uv sync --all-extras --all-groups
 uv run pytest tests/ -q
 ```
 
-The package is self-contained: pure stdlib at runtime, PyYAML an optional extra.
-It must never import from `kairix` or `tc-agent-zone` — it is the shared core both
-depend on. `tests/test_lib.py` pins the call patterns consumers' checks depend on;
-`tests/test_ratchet.py` pins the reconciled ratchet grammar (40-char threshold;
-em-dash and hyphen; `NOSONAR` in the suppression set).
+The package has one runtime dependency, PyYAML, for its YAML-backed public
+surfaces. It must never import from `kairix` or `tc-agent-zone` — it is the
+shared core both depend on. `tests/test_lib.py` pins the call patterns consumers'
+checks depend on; `tests/test_ratchet.py` pins the reconciled ratchet grammar
+(40-char threshold; em-dash and hyphen; `NOSONAR` in the suppression set).
 
 ### Author or improve a CORE check
 

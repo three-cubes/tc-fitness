@@ -1,0 +1,12 @@
+name: Analysis
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/analyse@v1
+        with:
+          contract: runtime/contracts/analysis.md
+      - uses: azure/login@v2

@@ -39,6 +39,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -259,6 +260,8 @@ class HarnessCanonReference(FitnessRule):
             failures.append(drift_failure)
 
         if failures:
+            for failure in failures:
+                report_finding(self._name, ".", failure)
             print(f"FAIL [{self._name}] — agent harness has drifted from the shared canon:")
             for failure in failures:
                 print(f"  - {failure}")

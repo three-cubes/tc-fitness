@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.adr_number_unique import (
     DEFAULT_RECORD_PATTERN,
     AdrNumberUnique,
@@ -12,6 +14,8 @@ from tc_fitness.core_checks.adr_number_unique import (
     find_collisions,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _PATTERN = re.compile(DEFAULT_RECORD_PATTERN)
 

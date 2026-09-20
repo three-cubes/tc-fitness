@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_internal_monkeypatch import (
@@ -12,6 +13,8 @@ from tc_fitness.core_checks.no_internal_monkeypatch import (
     file_has_internal_patch,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _PATCH_DECORATOR = """
 from unittest.mock import patch

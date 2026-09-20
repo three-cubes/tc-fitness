@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -578,6 +579,11 @@ class BehaviouralEvidence(FitnessRule):
         if not findings:
             return 0
         for finding in findings:
+            report_finding(
+                self.name,
+                finding.source.as_posix(),
+                f"{finding.pointer}: {finding.code}: {finding.message}; fix: {finding.fix}",
+            )
             print(f"{finding.source}:{finding.pointer}: {finding.code}: {finding.message}", file=sys.stderr)
             print(f"fix: {finding.fix}", file=sys.stderr)
             print("next: run the declared behavioural test, then re-run this check", file=sys.stderr)

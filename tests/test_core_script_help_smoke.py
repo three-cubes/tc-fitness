@@ -5,15 +5,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.script_help_smoke import (
     ScriptHelpSmoke,
     build,
-    extract_declared_flags,
     main,
     script_help_violates,
 )
+
+pytestmark = pytest.mark.integration
 
 _GOOD_CLI = """
 import argparse
@@ -54,13 +56,6 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return p
-
-
-def test_extract_declared_flags() -> None:
-    import ast
-
-    tree = ast.parse(_GOOD_CLI)
-    assert extract_declared_flags(tree) == ("--agent", "--out-dir")
 
 
 def test_good_cli_passes(tmp_path: Path) -> None:

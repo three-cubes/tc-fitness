@@ -1,0 +1,27 @@
+schema: tc.fitness/check-contract/v1
+check: core:behavioural_evidence
+config:
+  surface_globs: [src/producer.py]
+  behaviour_markers: [integration]
+  claims:
+    - id: produced-output
+      surfaces: [src/producer.py]
+      tests: [checks/evidence.py]
+      executables: [src/producer.py]
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: behavioural-evidence
+          path: src/producer.py
+          message_contains: "without asserting a passed output"
+dependencies: []

@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.cognitive_complexity import (
     CognitiveComplexity,
     build,
     main,
     module_over_threshold,
 )
+
+pytestmark = pytest.mark.integration
 
 # A deeply nested function: nested ifs inside a loop push the score well past 15.
 _COMPLEX = """

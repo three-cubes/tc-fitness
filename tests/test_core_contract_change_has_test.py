@@ -18,9 +18,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.contract_change_has_test import build, main
+
+pytestmark = pytest.mark.integration
 
 # --------------------------------------------------------------------------- #
 # Fixtures: a canned git runner returning fixed merge-base + --name-only output.

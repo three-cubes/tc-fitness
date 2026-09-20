@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.no_test_only_kwargs import (
@@ -12,6 +13,8 @@ from tc_fitness.core_checks.no_test_only_kwargs import (
     find_test_only_kwargs_in_file,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _SEAM = """
 def route(intent, clock_fn=None):

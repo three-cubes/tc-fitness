@@ -29,6 +29,8 @@ import pytest
 from tc_fitness.gate import main, run_gate
 from tc_fitness.gate_config import load_config
 
+pytestmark = pytest.mark.integration
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 

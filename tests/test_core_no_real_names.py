@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_real_names import NoRealNames, build, file_has_real_name, main
+
+pytestmark = pytest.mark.integration
 
 
 def _seed(tmp_path: Path, rel: str, body: str) -> Path:

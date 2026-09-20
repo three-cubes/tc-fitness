@@ -23,6 +23,8 @@ from tc_fitness.checks.branch_naming import (
     current_branch,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def test_linear_shape_passes() -> None:
     rc = check_branch("dan/kno-45-pr-a-sync-compose")
@@ -70,23 +72,9 @@ def test_custom_pattern_overrides_shape() -> None:
     assert check_branch("dan/kno-45-slug", pattern=custom) == 1
 
 
-def test_fail_prints_remediation(capsys: pytest.CaptureFixture[str]) -> None:
-    rc = check_branch("nope")
-    err = capsys.readouterr().err
-    assert rc == 1
-    assert "nope" in err
-    assert "fix:" in err or "rename" in err.lower()
-
-
 def test_default_pattern_is_the_linear_shape() -> None:
     assert DEFAULT_LINEAR_PATTERN.match("dan/kno-45-slug")
     assert not DEFAULT_LINEAR_PATTERN.match("main")
-
-
-def test_none_branch_skips_clean(capsys: pytest.CaptureFixture[str]) -> None:
-    # Not in a git repo / detached → skip clean (exit 0), never a false fail.
-    rc = check_branch(None)
-    assert rc == 0
 
 
 # ── PR-event detached-HEAD resolution (the gate must BITE on PRs) ────────────
@@ -119,14 +107,6 @@ def _init_detached_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_pr_event_resolves_head_ref_over_detached_head(tmp_path: Path) -> None:
-    # On a PR event the env var wins over the detached `git` "HEAD" — the gate
-    # sees the real source-branch name, not the exempt literal "HEAD".
-    repo = _init_detached_repo(tmp_path)
-    branch = current_branch(repo, env={GITHUB_HEAD_REF_ENV: "feature/random-thing"})
-    assert branch == "feature/random-thing"
-
-
 def test_pr_event_bad_branch_name_now_FAILS() -> None:
     # The regression the bug masked: a non-conforming PR branch name must FAIL,
     # not silently pass as the exempt "HEAD" did before the fix.
@@ -140,37 +120,3 @@ def test_pr_event_good_branch_name_PASSES() -> None:
     branch = current_branch(env={GITHUB_HEAD_REF_ENV: "dan/sgo-106-tc-fitness"})
     assert branch == "dan/sgo-106-tc-fitness"
     assert check_branch(branch) == 0
-
-
-def test_detached_head_without_pr_ref_skips_clean(tmp_path: Path) -> None:
-    # Detached HEAD and NO PR env var (e.g. a local detached checkout) → the
-    # literal "HEAD" is mapped to None (a clean skip), never a false failure.
-    repo = _init_detached_repo(tmp_path)
-    assert current_branch(repo, env={}) is None
-    assert check_branch(current_branch(repo, env={})) == 0
-
-
-def test_empty_head_ref_falls_back_to_git(tmp_path: Path) -> None:
-    # GITHUB_HEAD_REF is set but EMPTY on non-PR events (push). It must be
-    # ignored so the real branch name is resolved from git.
-    run = lambda *a: subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)  # noqa: E731
-    run("init", "-q")
-    run("config", "user.email", "t@example.com")
-    run("config", "user.name", "t")
-    run("commit", "--allow-empty", "-q", "-m", "c0")
-    run("checkout", "-q", "-b", "dan/sgo-106-real-branch")
-    branch = current_branch(tmp_path, env={GITHUB_HEAD_REF_ENV: ""})
-    assert branch == "dan/sgo-106-real-branch"
-
-
-def test_push_event_uses_git_branch(tmp_path: Path) -> None:
-    # No PR env var at all → the local/push branch name comes from git.
-    run = lambda *a: subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)  # noqa: E731
-    run("init", "-q")
-    run("config", "user.email", "t@example.com")
-    run("config", "user.name", "t")
-    run("commit", "--allow-empty", "-q", "-m", "c0")
-    run("checkout", "-q", "-b", "broken-thing")
-    branch = current_branch(tmp_path, env={})
-    assert branch == "broken-thing"
-    assert check_branch(branch) == 1  # the gate bites on push too

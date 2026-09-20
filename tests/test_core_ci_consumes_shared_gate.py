@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
+import pytest
+
+from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks.ci_consumes_shared_gate import (
     CiConsumesSharedGate,
     build,
     main,
-    satisfying_mechanism,
     workflow_files,
 )
+
+pytestmark = pytest.mark.integration
 
 # A workflow that satisfies the reusable arm: a `uses:` reference to the pinned
 # canonical python-quality-gate reusable.
@@ -69,23 +72,6 @@ def test_workflow_files_enumerates_only_yaml(tmp_path: Path) -> None:
 
 def test_workflow_files_missing_dir_is_empty(tmp_path: Path) -> None:
     assert workflow_files(tmp_path / ".github" / "workflows") == []
-
-
-def test_satisfying_mechanism_prefers_reusable() -> None:
-    reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
-    engine = re.compile(r"\btc-fitness run\b")
-    # Carries BOTH: a comment mentioning `tc-fitness run` above the `uses:` line.
-    both = "# runs tc-fitness run under the hood\n" + _VIA_REUSABLE
-    hit = satisfying_mechanism(both, reusable_pattern=reusable, engine_pattern=engine)
-    assert hit is not None
-    mechanism, _line_no, _line = hit
-    assert "reusable-workflow" in mechanism
-
-
-def test_satisfying_mechanism_none_on_fork() -> None:
-    reusable = re.compile(r"three-cubes/tc-pipelines/\.github/workflows/python-quality-gate\.yml@")
-    engine = re.compile(r"\btc-fitness run\b")
-    assert satisfying_mechanism(_FORKED_GATE, reusable_pattern=reusable, engine_pattern=engine) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -253,3 +239,29 @@ def test_no_repo_strings_in_executable_code() -> None:
             lowered = node.value.lower()
             for tok in repo_tokens:
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
+
+
+def test_warn_only_adoption_emits_no_failure_finding(tmp_path: Path) -> None:
+    """A passing result paired with a failing finding is incoherent evidence."""
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("on: push\njobs:\n  a:\n    steps: []\n", encoding="utf-8")
+    rule = build({"warn_only": True}, repo_root=tmp_path)
+
+    with capture_check_evidence() as evidence:
+        assert rule.run() == 0
+
+    assert evidence.findings == []
+
+
+def test_a_configured_name_is_the_name_the_finding_carries(tmp_path: Path) -> None:
+    """A contract expectation keyed on the configured identity must be able to match."""
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("on: push\njobs:\n  a:\n    steps: []\n", encoding="utf-8")
+    rule = build({"name": "house-ci-gate"}, repo_root=tmp_path)
+
+    with capture_check_evidence() as evidence:
+        assert rule.run() == 1
+
+    assert [f.rule for f in evidence.findings] == ["house-ci-gate"]

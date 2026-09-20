@@ -19,6 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.lib import REPO_ROOT
 
 DEFAULT_TIMEOUT = 180
@@ -248,6 +249,14 @@ class OsvScannerSca:
             return 0
         passed, findings, execution = self.evaluate()
         if execution.status is not ScanStatus.EXECUTED:
+            report_finding(
+                "dependency-unavailable"
+                if execution.status is ScanStatus.MISSING_TOOL
+                else "osv-scanner-error",
+                ".",
+                execution.detail,
+                status="error",
+            )
             print(
                 f"INCOMPLETE osv_scanner_sca ({execution.status.value}): {execution.detail}. "
                 f"fix: install osv-scanner {self.scanner_version} and ensure every declared lockfile exists; "
@@ -255,6 +264,8 @@ class OsvScannerSca:
             )
             return 1
         if not passed:
+            for finding in findings:
+                report_finding("vulnerability", ".", f"OSV advisory {finding}")
             print(
                 f"FAIL osv_scanner_sca ({len(findings)} vulnerable advisory id(s)): "
                 f"{', '.join(findings)}. fix: update affected dependencies; "

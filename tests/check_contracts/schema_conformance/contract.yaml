@@ -1,0 +1,25 @@
+schema: tc.fitness/check-contract/v1
+check: core:schema_conformance
+config:
+  roots:
+  - config
+  required_keys:
+  - name
+  - version
+cases:
+- id: compliant
+  fixture: compliant
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: schema-conformance
+      path: config/service.yaml
+      message_contains: missing required key
+dependencies: []

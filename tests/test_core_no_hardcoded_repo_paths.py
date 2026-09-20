@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.no_hardcoded_repo_paths import (
     NoHardcodedRepoPaths,
     build,
     file_contains_needle,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _NEEDLE = "/data/development/myrepo/"
 _BAD = f'ROOT = "{_NEEDLE}"\n'

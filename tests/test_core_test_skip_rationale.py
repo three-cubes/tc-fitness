@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from _core_check_assertions import assert_no_repo_identity
 
 from tc_fitness.core_checks.test_skip_rationale import (
@@ -12,6 +13,8 @@ from tc_fitness.core_checks.test_skip_rationale import (
     file_has_skip_without_reason,
     main,
 )
+
+pytestmark = pytest.mark.integration
 
 _BARE_SKIP = """
 import pytest

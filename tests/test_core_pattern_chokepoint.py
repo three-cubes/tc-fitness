@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.core_checks.pattern_chokepoint import build, file_matches_any_pattern
+
+pytestmark = pytest.mark.integration
 
 _PATTERN = r"default_access_mode\s*="
 _BAD = 'session = driver.session(default_access_mode="WRITE")\n'

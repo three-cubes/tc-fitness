@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_test_imports_in_prod
+config: {"roots":["src"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-test-imports-in-prod
+          path: src/example.py
+          message_contains: "out of the test tree"
+dependencies: []

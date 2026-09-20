@@ -11,7 +11,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tc_fitness.context import CheckContext
+
+pytestmark = pytest.mark.integration
 
 
 def test_python_files_indexes_and_skips_pycache(tmp_path: Path) -> None:
