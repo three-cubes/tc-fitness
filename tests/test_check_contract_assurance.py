@@ -241,12 +241,11 @@ with socket.socket(fileno=int(sys.argv[1])) as listener:
                 writer.wait(timeout=5)
 
 
-@pytest.mark.parametrize("reader", ["gate", "gate_keys", "load_baseline", "checkov"])
+@pytest.mark.parametrize("reader", ["gate", "gate_keys", "load_baseline"])
 def test_scoped_baseline_policy_never_suppresses_and_restores_consumers(tmp_path: Path, reader: str) -> None:
     from contextvars import Context
 
     from tc_fitness.baseline import baseline_free_execution, load_baseline
-    from tc_fitness.core_checks.checkov_iac_security import CheckovIacSecurity
     from tc_fitness.lib import gate, gate_keys
 
     baseline = tmp_path / ".architecture" / "baseline"
@@ -261,7 +260,7 @@ def test_scoped_baseline_policy_never_suppresses_and_restores_consumers(tmp_path
             return gate_keys("example", {"src/example.py"}, "fix the defect", repo_root=tmp_path) == 0
         if reader == "load_baseline":
             return "src/example.py" in load_baseline("example", tmp_path)
-        return "src/example.py" in CheckovIacSecurity(tmp_path, name="example")._load_baseline()
+        raise AssertionError(f"unknown baseline reader: {reader}")
 
     assert is_suppressed()
     with pytest.raises(RuntimeError, match="test scope exits exceptionally"):
@@ -464,22 +463,3 @@ def test_real_required_scanner_reports_structured_error_with_empty_path(tmp_path
     assert result.returncode == 2
     assert actual["status"] == "error"
     assert actual["findings"][0]["rule"] == "dependency-unavailable"
-
-
-def test_missing_real_checkov_cannot_establish_an_empty_baseline(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "tc_fitness.core_checks.checkov_iac_security",
-            "--repo-root",
-            str(tmp_path),
-            "--establish-baseline",
-        ],
-        env={**os.environ, "PATH": ""},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 2
-    assert not (tmp_path / ".architecture" / "baseline").exists()

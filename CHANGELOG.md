@@ -15,6 +15,22 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+### Removed
+
+- **Python 3.12 support.** `requires-python` is now `>=3.13`. This is the one
+  entry in this release that is not additive: a consumer resolving on 3.12 will
+  not receive this version. Nothing needed it — tc-agent-zone, the only
+  consumer, already declares `requires-python = ">=3.13"`, pins
+  `.python-version` to 3.13 and runs every CI job on it.
+
+  Carrying the second interpreter cost a duplicated static-gate leg, a
+  duplicated distribution-qualification leg, and a standalone `tests` job that
+  existed only because the coverage transaction measured 3.12 while 3.13 went
+  unrun. All three are gone; the transaction runs the suite on 3.13, which is
+  the interpreter consumers actually use. The wiring test now holds in both
+  directions, so a classifier without a leg and a leg without a classifier both
+  fail.
+
 ### Added
 
 - **`lib.pinned_version(distribution, package)`** — reads back the exact version
@@ -81,15 +97,25 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ### Changed
 
+- **A failed measurement reports itself where the operator is looking.** The
+  transaction is now the only job that runs the suite, so it owns the
+  diagnosis. On failure it names the side and both log paths in the payload —
+  a producer failure previously reported `phase: transaction, side: null` and
+  named no file at all — and repeats the failing command's own output on
+  stderr, bounded to the last `LOG_TAIL_LINES` lines. stdout stays
+  machine-readable. Diagnosing a failed test no longer costs an artifact
+  download, in CI or under `make check`.
+
 - **Contract assurance rejects mutable or suppressed proof** — snapshot inputs
   and candidate source before dispatch, reject execution-time mutations and
   baseline influence, and exercise unavailable cases through real checks using
-  a versioned per-case environment declaration. Checkov now returns an error
-  when its required executable is absent and cannot create an empty adoption
-  baseline without running the scanner.
-  Contract execution disables baseline suppression at the shared read boundary,
-  including Checkov's custom loader, so transient baseline files cannot attest
-  false PASS. Ordinary consumer baseline semantics are unchanged.
+  a versioned per-case environment declaration. Checkov is an absolute clean-scan
+  gate: any finding, parser error, unavailable executable, malformed report or
+  scanner failure blocks. It no longer reads or writes a findings baseline; the
+  dev environment pins Checkov 3.2.531 and the integration contract runs that
+  executable against compliant and violating Bicep fixtures. Shared baseline
+  suppression remains disabled during assurance of checks that use baselines;
+  ordinary consumer baseline semantics are unchanged.
   A reviewed per-CORE option inventory now rejects unknown aliases, adoption
   modes and exclusion overrides in assurance while retaining normal consumer
   configuration. Mutation reports and OSV contracts require strict missing-input

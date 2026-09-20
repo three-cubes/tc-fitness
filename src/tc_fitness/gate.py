@@ -12,14 +12,12 @@ Because both shell out to the SAME command reading the SAME ``[tool.tc_fitness]`
 declaration, the gate has exactly one definition. There is no hand-copied pytest
 block to drift between ``scripts/ci/check.sh`` and ``ci.yml``.
 
-What it does NOT do
--------------------
-The engine orchestrates STEPS; it never owns a repo's specifics. The pytest
-scope, the ``--cov`` roots, the ruff/bandit targets, the detect-secrets baseline,
-and the consumer's fitness-check catalogue are all CONFIG (each a declared step),
-never baked into this module. Adding a step is a config edit in the consumer,
-not an engine change — that is the whole point (a reusable workflow that took
-these as *inputs* would just relocate the per-repo coupling into YAML).
+Configuration ownership
+-----------------------
+The engine owns step orchestration. Each consumer config declares its pytest
+scope, coverage roots, ruff and bandit targets, detect-secrets inputs, and
+fitness-check catalogue. Adding a repository-specific step changes that
+consumer config; shared orchestration remains in this module.
 
 Step kinds
 ----------
@@ -48,10 +46,13 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 
+from tc_fitness.baseline import baseline_free_execution
+from tc_fitness.catalogue import RuleEntry
 from tc_fitness.gate_config import (
     GateConfig,
     GateConfigError,
@@ -61,7 +62,7 @@ from tc_fitness.gate_config import (
     load_core_check_configs,
     plan_stages,
 )
-from tc_fitness.runner import Colours, main_cli, paths_from_file
+from tc_fitness.runner import Colours, dispatches_in_process, main_cli, paths_from_file
 
 _RED = Colours.RED
 _GREEN = Colours.GREEN
@@ -221,12 +222,14 @@ def _run_command_step(step: StepSpec, repo_root: Path, *, shard: tuple[int, int]
     return StepResult(step.id, "fail", gating=not step.continue_on_error)
 
 
-def _resolve_catalogue(ref: str) -> tuple[object, ...]:
+def _resolve_catalogue(ref: str) -> tuple[RuleEntry, ...]:
     """Import ``module.path:attr`` and return the ``tuple[RuleEntry, ...]``."""
     module_path, _, attr = ref.partition(":")
     module = import_module(module_path)
-    rules = getattr(module, attr)
-    return tuple(rules)
+    rules = tuple(getattr(module, attr))
+    if any(not isinstance(rule, RuleEntry) for rule in rules):
+        raise ValueError("catalogue entries must use tc_fitness.catalogue.RuleEntry")
+    return rules
 
 
 def _run_catalogue_step(
@@ -263,6 +266,9 @@ def _run_catalogue_step(
     print(f"{_YELLOW}run [{step.id}]{_RESET} {label}")
 
     repo_root_for_step = repo_root
+    if step.baseline_free and establish_baseline:
+        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance cannot establish baselines")
+        return StepResult(step.id, "fail")
     checks_dir = (repo_root / step.checks_dir).resolve() if step.checks_dir is not None else None
 
     # Make the catalogue module importable from the repo root (the consumer's
@@ -272,8 +278,9 @@ def _run_catalogue_step(
     if added:
         sys.path.insert(0, repo_root_str)
     try:
-        rules = _resolve_catalogue(catalogue_ref)
-    except (ImportError, AttributeError) as exc:
+        with baseline_free_execution() if step.baseline_free else nullcontext():
+            rules = _resolve_catalogue(catalogue_ref)
+    except (ImportError, AttributeError, ValueError) as exc:
         print(f"{_RED}FAIL [{step.id}]{_RESET} could not load catalogue {catalogue_ref!r}: {exc}")
         print(f'   fix: confirm the `catalogue = "module:attr"` ref resolves from {repo_root}')
         _print_fix_next(step)
@@ -291,16 +298,20 @@ def _run_catalogue_step(
     if establish_baseline:
         argv.append("--establish-baseline")
     core_check_configs = load_core_check_configs(repo_root)
-    rc = main_cli(
-        rules,  # type: ignore[arg-type]
-        argv,
-        repo_root=repo_root_for_step,
-        checks_dir=checks_dir,
-        dispatch=step.dispatch,
-        parallel_subprocess=step.parallel,
-        core_check_configs=core_check_configs,
-        staged_files=changed_files,
-    )
+    if step.baseline_free and any(not dispatches_in_process(rule) for rule in rules):
+        print(f"{_RED}FAIL [{step.id}]{_RESET} baseline-free assurance requires in-process checks")
+        return StepResult(step.id, "fail")
+    with baseline_free_execution() if step.baseline_free else nullcontext():
+        rc = main_cli(
+            rules,
+            argv,
+            repo_root=repo_root_for_step,
+            checks_dir=checks_dir,
+            dispatch=step.dispatch,
+            parallel_subprocess=step.parallel,
+            core_check_configs=core_check_configs,
+            staged_files=changed_files,
+        )
     if rc == 0:
         print(f"{_GREEN}PASS [{step.id}]{_RESET} {label}")
         return StepResult(step.id, "pass")
@@ -509,8 +520,7 @@ def _run_scheduled(
                 continue
             oc = outcomes[s.id]
             if not oc.printed:
-                if oc.out:
-                    sys.stdout.write(oc.out)
+                sys.stdout.write(oc.out)
                 if oc.err:
                     sys.stderr.write(oc.err)
             outcome.results.append(oc.result)
@@ -660,11 +670,17 @@ def main(argv: list[str] | None = None) -> int:
       ``--changed-files-from PATH`` runs the same smoke tier against a CI
       supplied PR-diff file list.
     """
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "assure-coverage":
+        from tc_fitness.coverage_transaction import main as coverage_main
+
+        return coverage_main(arguments[1:])
     parser = argparse.ArgumentParser(
         prog="tc-fitness",
         description="The single runnable quality gate — local == CI by construction.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("assure-coverage", help="fresh exact-base/candidate self-coverage transaction")
     run_p = sub.add_parser("run", help="run the repo's declared [tool.tc_fitness] gate")
     run_p.add_argument("--contract", type=Path, help="execute a check-contract manifest case")
     run_p.add_argument("--case", help="case id within --contract")

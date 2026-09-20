@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks._runtime_contracts import CONTRACT_SCHEMA, EVIDENCE_SCHEMA, canonical_json_bytes
+from tc_fitness.runtime_contract import main as runtime_contract_main
 
 pytestmark = pytest.mark.integration
 
@@ -40,6 +41,72 @@ def _run(*args: str) -> subprocess.CompletedProcess[bytes]:
         check=False,
         capture_output=True,
     )
+
+
+def _selection_args(registry: Path, output: Path) -> list[str]:
+    return [
+        "--contract",
+        str(registry),
+        "--environment",
+        "prod",
+        "--target",
+        "hermes",
+        "--output",
+        str(output),
+    ]
+
+
+def _valid_evidence(contract_digest: str) -> dict[str, object]:
+    return {
+        "schema": EVIDENCE_SCHEMA,
+        "contract_digest": contract_digest,
+        "source_sha": "a" * 40,
+        "image_digest": "sha256:" + "b" * 64,
+        "host_id": "vm-1",
+        "runtime_user": "openclaw",
+        "deployment_id": "deploy-20260911-001",
+        "configuration_identity": "sha256:" + "c" * 64,
+        "run_id": 7,
+        "attempt_id": 2,
+        "captured_at": datetime.now(UTC).isoformat(),
+        "checks": [
+            {
+                "id": "runtime-probe",
+                "status": "passed",
+                "observation": {"kind": "process", "state": "healthy"},
+            }
+        ],
+        "artifacts": [],
+    }
+
+
+def _verification_args(registry: Path, evidence: Path, output: Path) -> list[str]:
+    return [
+        "verify-evidence",
+        *_selection_args(registry, output),
+        "--evidence",
+        str(evidence),
+        "--expected-source-sha",
+        "a" * 40,
+        "--expected-image-digest",
+        "sha256:" + "b" * 64,
+        "--expected-host-id",
+        "vm-1",
+        "--expected-runtime-user",
+        "openclaw",
+        "--expected-deployment-id",
+        "deploy-20260911-001",
+        "--expected-configuration-identity",
+        "sha256:" + "c" * 64,
+        "--expected-run-id",
+        "7",
+        "--expected-attempt-id",
+        "2",
+        "--required-check",
+        "runtime-probe",
+        "--max-age-seconds",
+        "300",
+    ]
 
 
 def test_resolve_and_digest_write_canonical_results(tmp_path: Path) -> None:
@@ -407,3 +474,113 @@ def test_verify_cli_rejects_receipt_from_an_earlier_attempt(tmp_path: Path) -> N
     assert {finding["code"] for finding in json.loads(output.read_bytes())["findings"]} == {
         "attempt-id-mismatch"
     }
+
+
+def test_public_main_runs_each_contract_operation_against_real_files(tmp_path: Path) -> None:
+    registry_document = _registry()
+    registry = tmp_path / "registry.json"
+    registry.write_bytes(canonical_json_bytes(registry_document))
+    resolved = tmp_path / "resolved.json"
+    assert runtime_contract_main(["resolve", *_selection_args(registry, resolved)]) == 0
+    expected_contract = canonical_json_bytes(
+        {
+            "access": {},
+            "deployment": {},
+            "environment": "prod",
+            "evidence": {},
+            "filesystem": {},
+            "schema": CONTRACT_SCHEMA,
+            "target": "hermes",
+        }
+    )
+    assert resolved.read_bytes() == expected_contract
+
+    digest_output = tmp_path / "digest.json"
+    assert runtime_contract_main(["digest", *_selection_args(registry, digest_output)]) == 0
+    contract_digest = "sha256:" + hashlib.sha256(expected_contract).hexdigest()
+    assert json.loads(digest_output.read_bytes()) == {"contract_digest": contract_digest}
+
+    evidence = tmp_path / "evidence.json"
+    evidence.write_bytes(canonical_json_bytes(_valid_evidence(contract_digest)))
+    verification = tmp_path / "verification.json"
+    assert runtime_contract_main(_verification_args(registry, evidence, verification)) == 0
+    assert json.loads(verification.read_bytes()) == {"findings": [], "valid": True}
+
+
+def test_public_main_attributes_selection_failures_to_the_contract_file(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_bytes(canonical_json_bytes(_registry()))
+    output = tmp_path / "result.json"
+    arguments = ["resolve", *_selection_args(registry, output)]
+    arguments[arguments.index("--target") + 1] = "missing"
+
+    assert runtime_contract_main(arguments) == 1
+    finding = json.loads(output.read_bytes())["findings"][0]
+    assert finding["code"] == "unknown-target"
+    assert finding["source"] == str(registry)
+
+
+@pytest.mark.parametrize("operation", ["resolve", "digest", "verify-evidence"])
+def test_public_main_rejects_an_invalid_contract_before_any_operation(tmp_path: Path, operation: str) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_text('{"schema":"wrong"}', encoding="utf-8")
+    output = tmp_path / "result.json"
+    if operation == "verify-evidence":
+        arguments = _verification_args(registry, tmp_path / "absent-evidence.json", output)
+    else:
+        arguments = [operation, *_selection_args(registry, output)]
+
+    assert runtime_contract_main(arguments) == 1
+    payload = json.loads(output.read_bytes())
+    assert payload["valid"] is False
+    assert {finding["code"] for finding in payload["findings"]} == {"wrong-schema"}
+
+
+def test_public_main_rejects_invalid_evidence_before_runtime_validation(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_bytes(canonical_json_bytes(_registry()))
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"schema":"wrong"}', encoding="utf-8")
+    output = tmp_path / "result.json"
+
+    assert runtime_contract_main(_verification_args(registry, evidence, output)) == 1
+    payload = json.loads(output.read_bytes())
+    assert payload["valid"] is False
+    assert {finding["code"] for finding in payload["findings"]} == {"wrong-schema"}
+
+
+@pytest.mark.parametrize(
+    ("option", "wrong_value", "finding_code"),
+    [
+        ("--expected-source-sha", "d" * 40, "source-sha-mismatch"),
+        ("--expected-image-digest", "sha256:" + "d" * 64, "image-digest-mismatch"),
+        ("--expected-host-id", "vm-2", "host-id-mismatch"),
+        ("--expected-runtime-user", "hermes", "runtime-user-mismatch"),
+        ("--expected-deployment-id", "deploy-other", "deployment-id-mismatch"),
+        (
+            "--expected-configuration-identity",
+            "sha256:" + "d" * 64,
+            "configuration-identity-mismatch",
+        ),
+        ("--expected-run-id", "8", "run-id-mismatch"),
+        ("--expected-attempt-id", "3", "attempt-id-mismatch"),
+        ("--required-check", "missing-probe", "missing-required-check"),
+    ],
+)
+def test_public_main_enforces_each_independent_runtime_identity(
+    tmp_path: Path, option: str, wrong_value: str, finding_code: str
+) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_bytes(canonical_json_bytes(_registry()))
+    resolved = tmp_path / "resolved.json"
+    assert runtime_contract_main(["resolve", *_selection_args(registry, resolved)]) == 0
+    contract_digest = "sha256:" + hashlib.sha256(resolved.read_bytes()).hexdigest()
+    evidence = tmp_path / "evidence.json"
+    evidence.write_bytes(canonical_json_bytes(_valid_evidence(contract_digest)))
+    output = tmp_path / "result.json"
+    arguments = _verification_args(registry, evidence, output)
+    option_index = arguments.index(option)
+    arguments[option_index + 1] = wrong_value
+
+    assert runtime_contract_main(arguments) == 1
+    assert {finding["code"] for finding in json.loads(output.read_bytes())["findings"]} == {finding_code}

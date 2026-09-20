@@ -51,9 +51,51 @@ def test_detection_clean(tmp_path: Path) -> None:
     assert find_test_only_kwargs_in_file(p, suffixes=("_fn",)) == []
 
 
+def test_keyword_only_seam_is_reported_but_required_parameter_is_not(tmp_path: Path) -> None:
+    body = """def route(intent, *, clock_fn=None):
+    return intent
+
+def required(clock_fn):
+    return clock_fn()
+"""
+    _seed(tmp_path, "src/router.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_required_or_non_none_seam_suffix_is_not_a_test_seam(tmp_path: Path) -> None:
+    body = "def required(*, clock_fn):\n    return clock_fn()\n"
+    body += "def production(*, clock_fn=system_clock):\n    return clock_fn()\n"
+    _seed(tmp_path, "src/router.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 0
+
+
 def test_methods_on_class_are_exempt(tmp_path: Path) -> None:
     p = _seed(tmp_path, "deps.py", _METHOD_EXEMPT)
     assert find_test_only_kwargs_in_file(p, suffixes=("_fn",)) == []
+
+
+def test_nested_local_function_is_still_a_free_function(tmp_path: Path) -> None:
+    body = """class Router:
+    def handle(self):
+        def select(clock_fn=None):
+            return 1
+        return select()
+"""
+    _seed(tmp_path, "src/router.py", body)
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_unparseable_configured_source_is_reported(tmp_path: Path) -> None:
+    _seed(tmp_path, "src/router.py", "def route(:\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
 
 
 def test_suffixes_are_config_driven(tmp_path: Path) -> None:

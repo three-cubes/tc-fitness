@@ -1,0 +1,205 @@
+"""Behavioural and declarative contracts for this repository's self gate."""
+
+from __future__ import annotations
+
+import subprocess
+import tomllib
+from pathlib import Path
+
+import pytest
+import yaml
+from packaging.requirements import Requirement
+from packaging.version import Version
+
+from tc_fitness import coverage_admission
+
+REPOSITORY = Path(__file__).resolve().parents[1]
+
+pytestmark = pytest.mark.integration
+
+
+def test_static_evaluation_is_withheld_for_an_uncommitted_tree(tmp_path: Path) -> None:
+    (tmp_path / "Makefile").write_bytes((REPOSITORY / "Makefile").read_bytes())
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "Makefile"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Contract",
+            "-c",
+            "user.email=contract@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "uncommitted.py").write_text("value = 1\n")
+
+    result = subprocess.run(
+        ["make", "check-static"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "evaluation withheld: commit or remove every working-tree change" in (
+        result.stdout + result.stderr
+    )
+    assert "tc-fitness run" not in result.stdout
+
+
+def test_repository_gate_declares_static_evaluation_only() -> None:
+    configuration = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+    fitness = configuration["tool"]["tc_fitness"]
+
+    assert [step["id"] for step in fitness["steps"]] == [
+        "ruff",
+        "ruff-format",
+        "mypy",
+        "branch-naming",
+    ]
+    rendered = (REPOSITORY / "pyproject.toml").read_text()
+    assert "TC_FITNESS_ACCEPTED_COVERAGE" not in rendered
+    assert "accepted_coverage_receipt" not in rendered
+    assert "coverage_admission" not in rendered
+    assert "coverage_catalogue" not in rendered
+
+
+def test_pull_request_ci_has_one_exact_commit_coverage_transaction() -> None:
+    workflow = yaml.safe_load((REPOSITORY / ".github/workflows/ci.yml").read_text())
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers) == {"pull_request"}
+    jobs = workflow["jobs"]
+    assert "check-static" in jobs
+    assert "coverage-assurance" in jobs
+    assert "check" not in jobs
+
+    static_steps = jobs["check-static"]["steps"]
+    static_checkout = static_steps[0]
+    assert static_checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
+    static_commands = [step["run"] for step in static_steps if "run" in step]
+    assert any(
+        command.index("make prepare") < command.index("make check-static") for command in static_commands
+    )
+
+    assurance_steps = jobs["coverage-assurance"]["steps"]
+    assurance_checkout = assurance_steps[0]
+    assert assurance_checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
+    assurance_step = next(step for step in assurance_steps if "assure-coverage" in step.get("run", ""))
+    assert assurance_step["env"] == {
+        "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+        "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
+        "EVIDENCE_DIR": "${{ runner.temp }}/coverage-assurance",
+    }
+    commands = [step["run"] for step in assurance_steps if "run" in step]
+    assurance_commands = [command for command in commands if "assure-coverage" in command]
+    assert len(assurance_commands) == 1
+    command = assurance_commands[0]
+    assert '--base-commit "$BASE_SHA"' in command
+    assert '--candidate-commit "$HEAD_SHA"' in command
+    assert '--evidence-dir "$EVIDENCE_DIR"' in command
+    assert (
+        command.index("make prepare") < command.index("make assert-clean") < command.index("assure-coverage")
+    )
+
+    # Derived, not restated: a job added without joining the fan-in would be
+    # advisory, since the fan-in is what the branch requires. `no-attribution`
+    # is the one exception -- it is required in its own right, so routing it
+    # through the fan-in would only delay the verdict it already gives.
+    required_in_its_own_right = {"quality-gate", "no-attribution"}
+    assert set(jobs["quality-gate"]["needs"]) == set(jobs) - required_in_its_own_right
+
+
+def test_the_coverage_job_outlasts_the_measurement_backstop() -> None:
+    """The measurement must fail with evidence, never be cancelled without it.
+
+    A run killed by the runner leaves the operator a cancelled job; a run
+    stopped by the producer leaves a transaction receipt naming the side and
+    phase that stalled. Whichever bound is smaller decides which of those the
+    operator gets, so the producer's must be the one that fires first.
+    """
+    workflow = yaml.safe_load((REPOSITORY / ".github/workflows/ci.yml").read_text())
+    declared = workflow["jobs"]["coverage-assurance"].get("timeout-minutes")
+    if declared is None:
+        # No declaration means GitHub's six-hour default, far above the backstop.
+        return
+
+    assert int(declared) * 60 > coverage_admission.MEASUREMENT_BACKSTOP_SECONDS
+
+
+def test_the_measurement_backstop_is_not_a_budget() -> None:
+    """A backstop tuned near a real run turns slow into failed.
+
+    Both sides of the transaction are measured concurrently on one machine, so
+    a legitimate run already pays for two instrumented suites sharing cores.
+    The backstop must leave room for that rather than assume a quiet runner.
+    """
+    assert coverage_admission.MEASUREMENT_BACKSTOP_SECONDS >= 3600
+
+
+def _pinned_interpreters(node: object) -> set[str]:
+    """Every interpreter the workflow pins, wherever it pins it."""
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "python-version":
+                found.update(str(v) for v in (value if isinstance(value, list) else [value]))
+            else:
+                found |= _pinned_interpreters(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _pinned_interpreters(item)
+    return {version for version in found if not version.startswith("${{")}
+
+
+def test_the_gate_runs_exactly_the_interpreters_the_package_advertises() -> None:
+    """Advertising a version nothing runs, and running one nothing advertises, both fail.
+
+    Held in both directions on purpose. One direction catches a classifier
+    added without a leg to prove it; the other catches a leg left behind when
+    a version is dropped, which is how a retired interpreter keeps costing
+    build minutes long after anything needs it.
+    """
+    workflow = yaml.safe_load((REPOSITORY / ".github/workflows/ci.yml").read_text())
+    manifest = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+
+    classifiers = manifest["project"].get("classifiers", [])
+    advertised = {c.rsplit(" :: ", 1)[-1] for c in classifiers if "Programming Language :: Python :: 3." in c}
+
+    assert advertised == _pinned_interpreters(workflow)
+
+
+def test_the_type_checker_targets_the_floor_the_package_declares() -> None:
+    """A type check against a version nobody runs proves nothing about the one they do."""
+    manifest = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+    declared = Requirement("python" + manifest["project"]["requires-python"])
+    floor = next(s.version for s in declared.specifier if s.operator == ">=")
+
+    assert manifest["tool"]["mypy"]["python_version"] == floor
+
+
+def test_the_coverage_floor_supports_every_option_the_producer_emits() -> None:
+    """A configuration option is only honoured by the release that introduced it.
+
+    Coverage.py ignores nothing it does not recognise — it refuses the run — and
+    a floor below the introducing release lets a consumer resolve a Coverage.py
+    that cannot honour the producer's own generated configuration.
+    """
+    introduced = {"patch": Version("7.10"), "branch": Version("7.5"), "parallel": Version("7.5")}
+    manifest = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+    declared = next(r for r in manifest["project"]["dependencies"] if r.startswith("coverage"))
+    floor = Version(next(s.version for s in Requirement(declared).specifier if s.operator == ">="))
+
+    emitted = {
+        line.split("=", 1)[0].strip()
+        for line in coverage_admission.RUN_SECTION.splitlines()
+        if "=" in line and not line.startswith("[")
+    }
+    unsupported = {name for name in emitted if introduced.get(name, floor) > floor}
+
+    assert not unsupported, unsupported

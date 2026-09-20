@@ -149,7 +149,7 @@ def _path_fragment(value: ast.expr, constants: Mapping[str, str]) -> str | None:
         left = _path_fragment(value.left, constants)
         right = _path_fragment(value.right, constants)
         if right is None:
-            return left
+            return None
         return f"{left.rstrip('/')}/{right.lstrip('/')}" if left else right
     return None
 

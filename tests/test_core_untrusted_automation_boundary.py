@@ -70,6 +70,22 @@ def test_separate_untrusted_and_privileged_jobs_are_clean(tmp_path: Path) -> Non
     assert build(_CONFIG, repo_root=tmp_path).collect_violations() == set()
 
 
+def test_single_workflow_string_config_is_supported(tmp_path: Path) -> None:
+    _seed(tmp_path, _SAFE)
+
+    assert build(dict(_CONFIG, workflows=".github/workflows/responder.yml"), repo_root=tmp_path).run() == 0
+
+
+def test_none_workflow_config_selects_no_workflows(tmp_path: Path) -> None:
+    assert build(dict(_CONFIG, workflows=None), repo_root=tmp_path).run() == 0
+
+
+@pytest.mark.parametrize("invalid", [7, "", [".github/workflows/responder.yml", 7]])
+def test_invalid_string_list_configuration_is_rejected(tmp_path: Path, invalid: object) -> None:
+    with pytest.raises(ValueError, match="must be a string or a sequence of non-empty strings"):
+        build(dict(_CONFIG, workflows=invalid), repo_root=tmp_path)
+
+
 def test_untrusted_job_with_write_permission_is_flagged(tmp_path: Path) -> None:
     body = _SAFE.replace(
         "contents: read\n    steps:\n      - uses: example/autonomous",
@@ -147,12 +163,89 @@ def test_action_references_are_matched_case_insensitively(tmp_path: Path) -> Non
     assert _violates(_seed(tmp_path, body)) is True
 
 
-def test_absent_configured_workflow_is_vacuously_clean(tmp_path: Path) -> None:
-    assert build(_CONFIG, repo_root=tmp_path).collect_violations() == set()
+def test_absent_configured_workflow_is_incomplete_evidence(tmp_path: Path) -> None:
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
 
 
 def test_invalid_configured_workflow_is_flagged(tmp_path: Path) -> None:
     assert _violates(_seed(tmp_path, "jobs: [")) is True
+
+
+@pytest.mark.parametrize(
+    "body", ["jobs: []\n", "jobs:\n  investigate: true\n", "jobs:\n  investigate:\n    steps: null\n"]
+)
+def test_workflow_shape_that_cannot_be_evaluated_is_reported(tmp_path: Path, body: str) -> None:
+    _seed(tmp_path, body)
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
+@pytest.mark.parametrize(
+    "steps",
+    ["steps: [unstructured-step]", "steps: autonomous-action@v1"],
+)
+def test_malformed_step_entries_are_incomplete_not_clean(tmp_path: Path, steps: str) -> None:
+    _seed(tmp_path, f"jobs:\n  investigate:\n    {steps}\n")
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
+def test_valid_empty_jobs_and_no_untrusted_action_are_clean(tmp_path: Path) -> None:
+    body = "name: scheduled\njobs:\n  build:\n    steps:\n      - run: make check\n"
+    _seed(tmp_path, body)
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 0
+
+
+def test_normalised_contract_path_inside_runtime_root_is_clean(tmp_path: Path) -> None:
+    body = _SAFE.replace("agentic/skills/ops/remediate/SKILL.md", "./agentic/ops/../skills/remediate.md")
+    _seed(tmp_path, body)
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 0
+
+
+def test_absolute_runtime_contract_path_is_rejected(tmp_path: Path) -> None:
+    _seed(tmp_path, _SAFE.replace("agentic/skills/ops/remediate/SKILL.md", "/agentic/skills/remediate.md"))
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
+def test_contract_path_that_escapes_runtime_root_is_rejected(tmp_path: Path) -> None:
+    _seed(tmp_path, _SAFE.replace("agentic/skills/ops/remediate/SKILL.md", "../../outside.md"))
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
+def test_untrusted_action_without_contract_input_is_rejected(tmp_path: Path) -> None:
+    body = _SAFE.replace("        with:\n          prompt-file: agentic/skills/ops/remediate/SKILL.md\n", "")
+    _seed(tmp_path, body)
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
+def test_workflow_level_write_permission_is_inherited_by_untrusted_job(tmp_path: Path) -> None:
+    body = _SAFE.replace("on: workflow_dispatch", "on: workflow_dispatch\npermissions:\n  id-token: write")
+    body = body.replace("    permissions:\n      contents: read\n", "")
+    _seed(tmp_path, body)
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
+def test_step_credential_environment_is_flagged(tmp_path: Path) -> None:
+    body = _SAFE.replace(
+        "prompt-file: agentic/skills/ops/remediate/SKILL.md",
+        "prompt-file: agentic/skills/ops/remediate/SKILL.md\n        env:\n          GH_TOKEN: ${{ secrets.token }}",
+    )
+    _seed(tmp_path, body)
+
+    assert build(_CONFIG, repo_root=tmp_path).run() == 1
+
+
+def test_no_contract_constraint_is_clean_when_not_configured(tmp_path: Path) -> None:
+    _seed(tmp_path, "jobs:\n  investigate:\n    steps:\n      - uses: example/autonomous-action@v1\n")
+    config = dict(_CONFIG, runtime_contract_roots=[], contract_keys=[])
+
+    assert build(config, repo_root=tmp_path).run() == 0
 
 
 def test_existing_baseline_cannot_hide_a_boundary_violation(tmp_path: Path) -> None:

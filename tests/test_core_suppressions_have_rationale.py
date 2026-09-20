@@ -47,6 +47,30 @@ def test_rationale_satisfies(tmp_path: Path) -> None:
     assert file_has_bare_suppression(p, _COMPILED) is False
 
 
+@pytest.mark.parametrize(
+    "suppression",
+    [
+        "# pragma: no cover",
+        "# type: ignore[arg-type]",
+        "# nosec B603",
+    ],
+)
+def test_all_security_and_coverage_suppressions_require_rationale(tmp_path: Path, suppression: str) -> None:
+    _seed(tmp_path, "src/silenced.py", f"value = 1  {suppression}\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
+def test_unreadable_text_bytes_do_not_hide_bare_suppression(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "silenced.py"
+    source.parent.mkdir()
+    source.write_bytes(b"value = 1  # noqa: S123 \xff\n")
+    rule = build({"roots": ["src"]}, repo_root=tmp_path)
+
+    assert rule.run() == 1
+
+
 def test_bare_patterns_config_driven(tmp_path: Path) -> None:
     # A consumer-specific bare token.
     p = _seed(tmp_path, "src/c.py", "z = 1  # SILENCE\n")

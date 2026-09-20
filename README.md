@@ -4,9 +4,9 @@
 run `tc-fitness run` and it runs your linters, type-check, tests, coverage,
 security scan, and architecture rules, then gives you one pass or fail.
 
-Supported platform evidence covers Linux on Python 3.12 and 3.13, plus macOS
-CLI, Git and filesystem qualification on Python 3.12. Windows is unsupported
-until it has an equivalent installed-distribution qualification lane.
+Supported platform evidence covers Linux and macOS on Python 3.13, each with
+installed-distribution qualification of the CLI, Git and filesystem surfaces.
+Windows is unsupported until it has an equivalent qualification lane.
 
 **The tool knows HOW to run the checks. Your repo says WHAT to check** — you list
 the checks in a `[tool.tc_fitness]` block in your `pyproject.toml`, and
@@ -138,18 +138,24 @@ library modules tc-fitness ships.
 
 ## The `[tool.tc_fitness]` config
 
-`tc-fitness run` is the one command both CI and your laptop invoke, so the local
-check and the CI check are the same by construction — there is no hand-copied
-pytest/lint block to drift between a `scripts/ci/check.sh` and a CI workflow.
+Consumer repositories use `tc-fitness run` as the shared static gate. This
+repository composes that gate with its own exact-commit coverage transaction:
 
 ```bash
-uv run tc-fitness run         # local: this is what `make check` becomes
+make prepare       # sync the lock and apply deterministic formatting fixes
+make smoke         # <60s staged feedback; never admissible coverage evidence
+make check         # clean committed tree + static gate + fresh base/head coverage
 ```
 
 ```yaml
-# CI: the reusable python-quality-gate.yml shrinks to
-#   checkout → setup-uv → uv run tc-fitness run
+# Self CI: matrix check-static + one exact-base/head coverage-assurance job
 ```
+
+`make check` runs preparation first and withholds evaluation if preparation
+changes a file or any other working-tree change is present. Commit the exact
+bytes to evaluate, then rerun it. Coverage evidence is written outside the
+checkout. `make check-static` runs ruff, format verification, mypy and branch
+naming without repeating the coverage transaction.
 
 You declare the check **once**, in a `[tool.tc_fitness]` block in your
 `pyproject.toml` (or a dedicated `.tc-fitness.toml`):
@@ -361,6 +367,128 @@ Checks emit findings through `tc_fitness.check_evidence.report_finding` at the
 actual decision point. `gate()`-based checks, including `license_present`, already
 use this interface. Custom checks must emit their own structured findings;
 console output is never parsed and detectors are never invoked twice.
+
+### Independent coverage floors
+
+The existing `core:coverage_floor` check supports strict, baseline-free admission
+by configuring `branch_floor_pct` alongside its per-file line floor:
+
+```toml
+[tool.tc_fitness.core_checks.coverage_floor]
+roots = ["src/tc_fitness"]
+coverage_report = "coverage.xml"
+floor_pct = 95
+branch_floor_pct = 95
+critical_branch_files = [
+  "src/tc_fitness/gate.py",
+  "src/tc_fitness/runner.py",
+  "src/tc_fitness/gate_config.py",
+  "src/tc_fitness/runtime_contract.py",
+]
+```
+
+This mode requires complete Cobertura file and line detail, reconciles summary
+counts, and calculates line and branch percentages independently. Critical files
+require 100% branch coverage. Missing files/details, inconsistent counts, invalid
+thresholds, exemptions and empty source scope cannot pass. Untracked Python files
+within the declared roots are included. Existing line-only consumers remain
+compatible when `branch_floor_pct` is absent.
+
+The repository's self gate measures fresh branch-aware evidence for the exact
+base and candidate commits. It enforces the absolute floors, exact-base
+changed-line coverage and non-regression in one transaction. Missing or
+uncommitted evidence is an error.
+
+### Exact-base coverage and evidence handoff
+
+The new self-assurance transaction measures both exact commits afresh:
+
+```bash
+tc-fitness assure-coverage --base-commit <full-base-sha> \
+  --candidate-commit <full-head-sha> --evidence-dir /external/new-evidence \
+  --output /external/path/result.json
+```
+
+It verifies HEAD and ancestry, creates two detached clean worktrees, runs the
+fixed self-assurance test/profile in each, and immediately compares immutable
+in-memory measurements. It enforces 95 percent line/branch floors, 100 percent
+critical-predicate branches and changed executable lines, plus non-regression
+from the fresh exact-base measurement. Neither accepted receipts/digests nor
+candidate-configured roots, tests, floors or base selectors are inputs. The
+optional JSON is output-only and cannot be imported for admission.
+
+Each detached checkout gets its own external environment provisioned with
+`uv sync --locked --all-extras`. Coverage and pytest run through that
+environment's Python; provisioning or test failure is a terminal error, never
+a fallback to the controller environment. Measurements retain the lock digest
+and actual Python, Coverage.py, pytest and uv identities. The current trusted
+engine independently parses and adjudicates the reports. Its fixed pytest
+configuration registers tier names but does not load the candidate's tier
+plugin or candidate-selected pytest configuration.
+
+The evidence directory must be outside the checkout, new or empty and not a
+symlink. Per-side provisioning logs, Python/pytest/Coverage output, XML/JSON
+and `transaction.json` survive both success and failure; error output names
+the failing side/phase and relative native log paths. Only detached worktrees
+and their temporary environments are cleaned up. The controller recognises
+complete registered contract-fixture directories using its own manifest
+validator; those fixture cases run through their public contract tests rather
+than being collected as outer pytest modules. Malformed or unregistered
+directories remain subject to ordinary collection.
+
+Possible branch arcs come from Coverage.py's analysis of bound Python source.
+JSON executed/missing arcs must partition those opportunities, and XML must
+agree on each branch's total and covered exits. Removing metadata from both
+reports cannot turn a real branch into a zero-opportunity measurement.
+
+The engine accepts full immutable IDs only. Trusted local and hosted wrappers
+resolve the Git event or default-branch merge base. The self gate does not
+select an accepted receipt or allow the candidate to choose its anchor.
+
+`core:new_code_coverage` accepts `exact_base_commit` and `candidate_commit` as
+full immutable Git object IDs (or explicit `env:NAME` bindings). This mode
+requires `floor_pct = 100`, complete Python roots and no exemptions. It rejects
+unavailable/non-ancestor bases, mismatched HEAD, dirty or untracked source,
+missing reports and missing executable-line detail. Coverage.py's own source
+analysis supplies the executable-line inventory; report omissions cannot turn
+changed executable statements into non-code. Ordinary `base_ref` consumers keep
+their existing behaviour when exact identities are absent.
+
+The receipt producer remains available to consumer repositories that use the
+receipt-admission API. It is not part of this repository's self gate:
+
+```bash
+uv run python -m tc_fitness.coverage_admission produce \
+  --base-commit "$TC_FITNESS_BASE_COMMIT" \
+  --candidate-commit "$TC_FITNESS_CANDIDATE_COMMIT" \
+  --source src/tc_fitness --config pyproject.toml \
+  --run-id "$TC_FITNESS_RUN_ID" --attempt-id "$TC_FITNESS_ATTEMPT_ID" \
+  --output "$TC_FITNESS_COVERAGE_OUTPUT" \
+  --digest-output "$TC_FITNESS_COVERAGE_DIGEST_FILE" -- -m pytest -q
+```
+
+The output directory and digest handoff must be new for each attempt; the digest
+handoff is outside the candidate checkout. The producer never replaces previous
+evidence or marks its own measurement accepted. It binds exact commits, complete
+source bytes, tracked configuration, XML/JSON digests, integer counts, timestamps,
+run/attempt identity, test command, Python and Coverage.py versions.
+
+`coverage_receipt` activates receipt admission on the existing coverage checks.
+Its configuration also supplies `coverage_receipt_digest`,
+`accepted_coverage_receipt`, `accepted_coverage_digest`, `coverage_config`,
+`run_id`, `attempt_id` and `max_age_seconds`. Digests may be literal `sha256:...`
+or `file:/absolute/external/path` / `file:env:NAME` handoffs. A digest computed
+from the receipt being checked is not an independent trust anchor.
+
+Consumer CI/storage must select and protect the **latest accepted** digest. The
+producer and validator do not implement an acceptance store, bootstrap waiver,
+signature or hostile-process sandbox. Digest binding detects changed evidence;
+it cannot authenticate an attacker who also controls the trusted handoff.
+
+Catalogue steps may declare `baseline_free = true`. They must be gating,
+in-process and non-parallel; shell dispatch, optional/missing execution and
+baseline adoption are rejected. The existing baseline API ignores suppression
+reads and rejects writes throughout catalogue import and check execution.
 
 ### Pytest tier assurance
 

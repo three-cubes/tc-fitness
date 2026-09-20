@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
+import sys
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
 import pytest
 
 from tc_fitness.core_checks.coverage_includes_branches import (
+    _resolve_element_tree,
     build,
     main,
     report_lacks_branches,
@@ -34,6 +39,12 @@ def test_lines_only_report_violates(tmp_path: Path) -> None:
 def test_branch_aware_report_clean(tmp_path: Path) -> None:
     p = _seed(tmp_path, _BRANCH_AWARE)
     assert report_lacks_branches(p) is False
+
+
+def test_standard_library_parser_observes_the_real_branch_report(tmp_path: Path) -> None:
+    p = _seed(tmp_path, _BRANCH_AWARE)
+
+    assert report_lacks_branches(p, element_tree=ElementTree) is False
 
 
 def test_missing_report_is_a_violation(tmp_path: Path) -> None:
@@ -80,6 +91,67 @@ def test_main_runs(tmp_path: Path) -> None:
     assert main(["--repo-root", str(tmp_path)]) == 0
 
 
+def test_python_module_entrypoint_uses_stdlib_xml_when_site_packages_are_disabled(tmp_path: Path) -> None:
+    _seed(tmp_path, _BRANCH_AWARE)
+    source_root = Path(__file__).parents[1] / "src"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-m",
+            "tc_fitness.core_checks.coverage_includes_branches",
+            "--repo-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(source_root)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "coverage-includes-branches" in result.stdout
+
+
+def test_python_module_entrypoint_reports_its_check_result(tmp_path: Path) -> None:
+    _seed(tmp_path, _BRANCH_AWARE)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tc_fitness.core_checks.coverage_includes_branches",
+            "--repo-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "coverage-includes-branches" in result.stdout
+
+
+def test_report_path_can_be_bound_to_a_real_process_environment_value(tmp_path: Path) -> None:
+    report = _seed(tmp_path, _BRANCH_AWARE)
+    program = (
+        "import os, sys; from pathlib import Path; "
+        "from tc_fitness.core_checks.coverage_includes_branches import build; "
+        "os.environ['FITNESS_COVERAGE_REPORT'] = sys.argv[1]; "
+        "raise SystemExit(build({'coverage_report': 'env:FITNESS_COVERAGE_REPORT'}, "
+        "repo_root=Path(sys.argv[2])).run())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program, str(report), str(tmp_path)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "coverage-includes-branches" in result.stdout
+
+
 def test_no_repo_strings_in_executable_code() -> None:
     import tc_fitness.core_checks.coverage_includes_branches as mod
 
@@ -98,10 +170,37 @@ def test_no_repo_strings_in_executable_code() -> None:
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
 
 
-def test_an_external_coverage_report_is_refused_at_configuration(tmp_path: Path) -> None:
-    """An out-of-repository report cannot be relativised, so the gate would crash."""
-    with pytest.raises(ValueError, match="inside the repository"):
-        build({"coverage_report": "/elsewhere/coverage.xml"}, repo_root=tmp_path)
+def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Path) -> None:
+    """An external report is legitimate; its finding still has to relativise."""
+    external = tmp_path / "evidence" / "coverage.xml"
+    external.parent.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    rule = build({"coverage_report": str(external)}, repo_root=repo)
+
+    assert rule.enumerate_files() == [repo / "coverage.xml"]
+
+
+def test_the_parser_falls_back_to_the_standard_library_without_defusedxml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumer installing the package alone still parses reports."""
+    monkeypatch.setitem(sys.modules, "defusedxml", None)
+
+    assert _resolve_element_tree() is ElementTree
+
+
+def test_measured_branch_evidence_can_be_baselined(tmp_path: Path) -> None:
+    """Debt that was measured is ratchetable; only absent evidence is refused."""
+    (tmp_path / "coverage.xml").write_text(
+        '<coverage branch-rate="0" branches-valid="0"><sources><source>.</source></sources></coverage>'
+    )
+    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
+
+    baseline = rule.establish_baseline()
+
+    entries = [line for line in baseline.read_text().splitlines() if line and not line.startswith("#")]
+    assert entries == ["coverage.xml"]
 
 
 def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
@@ -110,3 +209,10 @@ def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="cannot baseline absent coverage evidence"):
         rule.establish_baseline()
+
+
+def test_a_report_inside_the_repository_keeps_its_relative_identity(tmp_path: Path) -> None:
+    """The in-repository path is the ordinary case and must relativise unchanged."""
+    rule = build({"coverage_report": "reports/coverage.xml"}, repo_root=tmp_path)
+
+    assert rule.enumerate_files() == [tmp_path / "reports" / "coverage.xml"]

@@ -190,6 +190,21 @@ def test_parse_added_lines_multiple_hunks_one_file() -> None:
     assert parse_added_lines(diff) == {"src/m.py": {1, 12, 13}}
 
 
+def test_parse_added_lines_keeps_unprefixed_paths_and_ignores_removed_lines() -> None:
+    diff = (
+        "diff --git src/a.py src/a.py\n"
+        "--- src/a.py\n"
+        "+++ src/a.py\n"
+        "@@ malformed hunk\n"
+        "@@ -1,2 +1,2 @@\n"
+        "-old = 1\n"
+        "+new = 2\n"
+        "\\ No newline at end of file\n"
+    )
+
+    assert parse_added_lines(diff) == {"src/a.py": {1}}
+
+
 # --------------------------------------------------------------------------- #
 # Rule end-to-end via the injected git seam.
 # --------------------------------------------------------------------------- #

@@ -33,6 +33,7 @@ dist_dir="$workdir/dist"
 rebuilt_dir="$workdir/rebuilt"
 fixture_dir="$workdir/fixture"
 runtime_requirements="$workdir/runtime-requirements.txt"
+declared_pins="$workdir/declared-pins.txt"
 
 mkdir -p "$dist_dir" "$rebuilt_dir" "$fixture_dir"
 uv export --project "$repo_root" --locked --no-dev --no-emit-project \
@@ -109,7 +110,9 @@ qualify() {
   uv pip install --python "$environment/bin/python" --require-hashes -r "$runtime_requirements"
   uv pip install --no-deps --no-index --python "$environment/bin/python" "$wheel"
 
+  "$environment/bin/python" -c 'import coverage'
   "$environment/bin/tc-fitness" --help >/dev/null
+  "$environment/bin/tc-fitness" assure-coverage --help >/dev/null
   "$environment/bin/tc-fitness" run --repo-root "$fixture_dir"
   "$environment/bin/tc-fitness-runtime-contract" --help >/dev/null
   "$environment/bin/tc-fitness-runtime-contract" resolve \
@@ -134,6 +137,126 @@ qualify() {
     --required-check distribution-fixture \
     --max-age-seconds 300 \
     --output "$verification"
+
+  # Coverage parsing is an assurance extra, not a default-install dependency.
+  # Install the assurance extras through the locked PROJECT resolver rather than
+  # an exported requirements file. An export flattens the resolution and loses
+  # `[tool.uv] override-dependencies`, so the reviewed asteval security override
+  # stops applying and the resolver reports Checkov's vulnerable pin as a
+  # conflict. --inexact keeps the candidate artifact installed above and
+  # --no-install-project stops a source checkout replacing the artifact under
+  # qualification.
+  UV_PROJECT_ENVIRONMENT="$environment" uv sync \
+    --project "$repo_root" \
+    --locked \
+    --all-extras \
+    --all-groups \
+    --no-install-project \
+    --inexact
+  # Prove the override survived, reading what to expect from the manifest. A
+  # literal here would be a second source of truth no dependency tooling
+  # updates: the bump would land in pyproject and the lock while this stayed
+  # behind, and the check would fail closed against the version the project
+  # actually installs.
+  uv run --no-project --python "$python_bin" python - \
+    "$repo_root/pyproject.toml" "$declared_pins" <<'DECLARED'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+manifest, destination = (Path(value) for value in sys.argv[1:3])
+declared = tomllib.loads(manifest.read_text(encoding="utf-8"))
+overrides = declared.get("tool", {}).get("uv", {}).get("override-dependencies", [])
+exact = dict(
+    match.groups()
+    for match in (
+        re.fullmatch(r"\s*([A-Za-z0-9._-]+)\s*==\s*([^\s;]+)\s*", entry) for entry in overrides
+    )
+    if match
+)
+if not exact:
+    raise SystemExit("the manifest declares no exact dependency override to qualify")
+destination.write_text(
+    "".join(f"{name}=={version}\n" for name, version in exact.items()), encoding="utf-8"
+)
+DECLARED
+  "$environment/bin/python" - "$declared_pins" <<'INSTALLED'
+import sys
+from importlib.metadata import version
+from pathlib import Path
+
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    name, _, expected = line.partition("==")
+    installed = version(name)
+    if installed != expected:
+        raise SystemExit(f"{name} resolved to {installed}, not the declared override {expected}")
+INSTALLED
+  "$environment/bin/checkov" --version >/dev/null
+  echo "qualified $label locked assurance tools"
+  "$environment/bin/python" - "$workdir/$label-coverage" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+root.mkdir()
+(root / "src/tc_fitness").mkdir(parents=True)
+(root / "tests").mkdir()
+(root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+(root / "pyproject.toml").write_text(
+    # Bound to the interpreter this qualification lane runs, so a literal
+    # floor cannot outlive the version it was written for.
+    f"[project]\nname='installed-assurance-fixture'\nversion='0.0.0'"
+    f"\nrequires-python='>={sys.version_info.major}.{sys.version_info.minor}'\n"
+    "[project.optional-dependencies]\ndev=['coverage==7.14.2','pytest==9.1.0']\n"
+)
+
+def run(*args):
+    return subprocess.run(args, cwd=root, check=True, capture_output=True, text=True, timeout=90).stdout.strip()
+
+def commit():
+    run("git", "add", ".")
+    run("git", "-c", "user.name=Contract", "-c", "user.email=contract@example.invalid", "commit", "-qm", "fixture")
+    return run("git", "rev-parse", "HEAD")
+
+run("git", "init", "-q")
+run("uv", "lock", "--python", sys.executable)
+source = root / "src/tc_fitness/subject.py"
+source.write_text("def choose(flag):\n    return 1\n")
+test = root / "tests/test_subject.py"
+test.write_text(
+    "import runpy\nimport pytest\npytestmark=pytest.mark.integration\n"
+    "def test_choices():\n    choose=runpy.run_path('src/tc_fitness/subject.py')['choose']\n"
+    "    assert choose(False)==1\n"
+)
+# Fixed critical predicates must be present even in the tiny shipped-surface proof.
+for name in ("gate", "runner", "gate_config", "runtime_contract"):
+    (root / f"src/tc_fitness/{name}.py").write_text("")
+base = commit()
+source.write_text("def choose(flag):\n    if flag:\n        return 2\n    return 1\n")
+test.write_text(test.read_text() + "    assert choose(True)==2\n")
+candidate = commit()
+payload = json.loads(run(
+    str(Path(sys.executable).with_name("tc-fitness")), "assure-coverage", "--repo-root", str(root),
+    "--base-commit", base, "--candidate-commit", candidate,
+    "--evidence-dir", str(root.with_name(root.name + "-evidence")),
+))
+if (payload["status"] != "pass" or payload["base"]["commit"] != base
+        or payload["candidate"]["commit"] != candidate
+        or payload["base"]["counts"]["branches"] != 0
+        or payload["candidate"]["counts"]["covered_branches"] != 2):
+    raise SystemExit("installed coverage transaction did not prove the exact A/B branch change")
+retained = root.with_name(root.name + "-evidence")
+if json.loads((retained / "transaction.json").read_text()) != payload:
+    raise SystemExit("installed transaction did not retain its terminal evidence")
+for side in ("base", "candidate"):
+    for name in ("run.stdout.log", "run.stderr.log", "coverage.xml", "coverage.json"):
+        if not (retained / side / "measurement" / name).is_file():
+            raise SystemExit("installed transaction lost its measurement evidence")
+PY
+  echo "qualified $label coverage transaction"
 }
 
 cd "$workdir"

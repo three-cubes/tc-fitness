@@ -58,3 +58,19 @@ def test_extract_declared_flags() -> None:
 
     tree = ast.parse(_GOOD_CLI)
     assert extract_declared_flags(tree) == ("--agent", "--out-dir")
+
+
+def test_extract_declared_flags_ignores_short_dynamic_and_duplicate_arguments() -> None:
+    import ast
+
+    tree = ast.parse(
+        """
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("-v", "--verbose")
+parser.add_argument(dynamic_flag)
+parser.add_argument("--verbose")
+"""
+    )
+
+    assert extract_declared_flags(tree) == ("--verbose",)

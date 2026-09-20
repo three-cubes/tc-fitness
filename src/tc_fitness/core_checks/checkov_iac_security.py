@@ -1,48 +1,8 @@
-"""CORE check: checkov_iac_security — IaC-security scan that gates NET-NEW
-Checkov misconfigurations in an Infrastructure-as-Code tree.
+"""CORE check: require a clean Checkov scan of the configured IaC directory.
 
-A consumer that ships cloud IaC (Bicep, Terraform, CloudFormation, …) wraps
-Checkov (Apache-2.0, ``pip``-installable) over its IaC directory, parses the
-failed checks, and FAILs the build ONLY on findings not already recorded in a
-shrink-only baseline. Pre-existing findings are grandfathered there so the gate
-never breaks the build on debt it did not introduce — it blocks a NEW
-misconfiguration reaching the trunk.
-
-Key-based, not per-file
------------------------
-A Checkov finding's identity is ``<check_id>|<file_path>|<resource>`` — a
-line-independent KEY, and one file can carry several findings. That does not fit
-the per-file :class:`tc_fitness.fitness_rule.FitnessRule` baseline (whose unit is
-an offending file), so this CORE check is a bespoke key-baselined gate — the
-same shape the engine's own ``branch_naming`` takes when the per-file model
-does not apply. It reads/writes ``.architecture/baseline/<name>-findings.txt``
-via the canonical baseline parse contract (:func:`tc_fitness.parse_baseline_text`).
-
-Required consumer-provided tool
-------------------------------
-Checkov is the only heavy dependency, and it is CONSUMER-provided: when the
-``checkov`` binary is absent, the configured check returns an error (exit 2).
-An unavailable scanner cannot establish a findings baseline either.
-The engine adds NO runtime dependency — a consumer pins Checkov into its own
-tool environment so ``tc-fitness run`` has the binary. The scan itself runs as a
-subprocess of the trusted binary over the consumer-configured scan directory.
-
-Injectable runner
------------------
-The Checkov invocation is a dependency-injected ``runner`` seam, so a test drives
-the diff logic with canned Checkov JSON (no binary, no network) instead of
-patching module internals.
-
-Config (``[tool.tc_fitness.core_checks.checkov_iac_security]``):
-
-* ``scan_dir`` — repo-relative IaC directory to scan (default ``"."``).
-* ``framework`` — Checkov framework flag (default ``"bicep"``).
-* ``name`` — baseline-name root → ``.architecture/baseline/<name>-findings.txt``.
-* ``timeout`` — subprocess wall-clock ceiling in seconds (default ``180``).
-
-Ported from tc-agent-zone ``scripts/checks/checkov_iac_security.py`` (SGO-297)
-and re-expressed repo-agnostic: no scan path, framework, or baseline name is
-baked in — every one arrives from the consumer's config.
+Every Checkov finding blocks. Parsing failures, malformed reports, unavailable
+executables, and scanner execution errors also block because the scan has not
+proved that the IaC tree is clean.
 """
 
 from __future__ import annotations
@@ -51,141 +11,149 @@ import argparse
 import json
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
-from pathlib import Path
+from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from tc_fitness.baseline import baseline_dir, parse_baseline_text, read_baseline_text, render_baseline
 from tc_fitness.check_evidence import report_finding
 from tc_fitness.lib import REPO_ROOT
 from tc_fitness.lib import remediation as _remediation
 
-#: Repo-NEUTRAL defaults — a consumer narrows these via config.
 DEFAULT_SCAN_DIR = "."
 DEFAULT_FRAMEWORK = "bicep"
-DEFAULT_NAME = "checkov-iac-security"
 DEFAULT_TIMEOUT = 180
-
-#: Baseline suffix for the key-based grandfather list (distinct from the
-#: per-file ``-files.txt`` a :class:`FitnessRule` uses).
-BASELINE_SUFFIX = "-findings.txt"
-
-#: Checkov summary key for the count of files its parser skipped. Hoisted to a
-#: single site so the coupling between the report shape and the readers is
-#: explicit.
 _PARSING_ERRORS_KEY = "parsing_errors"
 
-# A runner takes the (resolved) scan dir and returns Checkov's parsed JSON, or
-# None when Checkov is unavailable. Injected in tests to avoid patching internals.
-Runner = Callable[[Path], "dict[str, Any] | list[Any] | None"]
-
 REMEDIATION = _remediation(
-    fix=(
-        "remediate each net-new misconfiguration above (the per-line trailer names "
-        "the policy + fix), OR — if the risk is accepted — append the finding key to "
-        "the checkov findings baseline with a justification."
-    ),
-    nxt="re-run this check to confirm no net-new findings remain.",
+    fix="remediate every Checkov finding and correct every IaC parsing error before merging.",
+    nxt="re-run this check and confirm Checkov reports zero findings and zero parsing errors.",
     run="python -m tc_fitness.core_checks.checkov_iac_security",
-    passing="every IaC resource passes its Checkov policy, or an accepted risk is baselined with a reason",
-    forbidden="a new resource ships a Checkov policy violation with no remediation and no baseline entry",
+    passing="Checkov completes successfully with zero policy findings and zero parsing errors",
+    forbidden="IaC is admitted when Checkov reports a policy finding, parsing error, or execution failure",
 )
 
 
+class CheckovScanError(RuntimeError):
+    """The scanner did not produce a complete, trustworthy report."""
+
+
 def checkov_binary() -> str | None:
-    """Absolute path to the ``checkov`` executable, or ``None`` when not installed."""
+    """Return the installed Checkov executable, or ``None`` when it is absent."""
     return shutil.which("checkov")
+
+
+def _validated_report(report: Any) -> tuple[list[dict[str, Any]], int]:
+    """Return one report's failed checks and parse-error count, or refuse it."""
+    if not isinstance(report, dict):
+        raise CheckovScanError("Checkov JSON report must be an object")
+    results = report.get("results")
+    summary = report.get("summary")
+    if not isinstance(results, dict) or not isinstance(summary, dict):
+        raise CheckovScanError("Checkov JSON report is missing results or summary")
+    failed = results.get("failed_checks")
+    if not isinstance(failed, list) or not all(isinstance(item, dict) for item in failed):
+        raise CheckovScanError("Checkov JSON report has an invalid failed_checks list")
+    parsing_errors = summary.get(_PARSING_ERRORS_KEY)
+    if not isinstance(parsing_errors, int) or isinstance(parsing_errors, bool) or parsing_errors < 0:
+        raise CheckovScanError("Checkov JSON report has an invalid parsing_errors count")
+    return failed, parsing_errors
+
+
+def _parse_report(payload: str) -> dict[str, Any]:
+    """Decode Checkov JSON into one validated report of the whole scan.
+
+    Checkov emits a single report object, or — when the scan spans more than one
+    framework — a list of them. A list is aggregated into the same shape, so a
+    finding raised under any framework still blocks. An empty list carries no
+    report at all, so it cannot evidence a clean tree and is refused.
+    """
+    try:
+        payloads = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise CheckovScanError(f"Checkov returned invalid JSON: {exc.msg}") from exc
+    if isinstance(payloads, list) and not payloads:
+        raise CheckovScanError("Checkov JSON report list is empty")
+    reports = payloads if isinstance(payloads, list) else [payloads]
+    failed: list[dict[str, Any]] = []
+    parsing_errors = 0
+    for report in reports:
+        report_failed, report_parsing_errors = _validated_report(report)
+        failed.extend(report_failed)
+        parsing_errors += report_parsing_errors
+    return {"results": {"failed_checks": failed}, "summary": {_PARSING_ERRORS_KEY: parsing_errors}}
 
 
 def run_checkov(
     scan_dir: Path,
     *,
     framework: str = DEFAULT_FRAMEWORK,
-    checkov_bin: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
-) -> dict[str, Any] | list[Any] | None:
-    """Run Checkov over ``scan_dir`` and return its parsed JSON.
+) -> tuple[int, dict[str, Any]] | None:
+    """Run the installed scanner and return its exit status and validated report.
 
-    Returns ``None`` when the Checkov binary is not installed. The
-    binary is a fixed, trusted argv0 and the scan dir is a config-declared path
-    resolved under the repo root — no shell, no attacker-controlled input.
+    ``None`` means Checkov is unavailable. All other incomplete scan outcomes
+    raise :class:`CheckovScanError` so callers cannot treat them as clean.
     """
-    binary = checkov_bin or checkov_binary()
+    binary = checkov_binary()
     if binary is None:
         return None
-    proc = subprocess.run(
-        [binary, "-d", str(scan_dir), "--framework", framework, "--output", "json", "--quiet", "--compact"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
-    )
-    payload = proc.stdout.strip()
-    if not payload:
-        # No parsable output (e.g. nothing to scan) — treat as an empty report.
-        return {"results": {"failed_checks": []}, "summary": {_PARSING_ERRORS_KEY: 0}}
-    parsed: dict[str, Any] | list[Any] = json.loads(payload)
-    return parsed
+    try:
+        process = subprocess.run(
+            [
+                binary,
+                "-d",
+                str(scan_dir),
+                "--framework",
+                framework,
+                "--output",
+                "json",
+                "--quiet",
+                "--compact",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CheckovScanError(f"Checkov execution failed: {exc}") from exc
+    if process.returncode not in (0, 1):
+        raise CheckovScanError(f"Checkov exited with unexpected status {process.returncode}")
+    report = _parse_report(process.stdout)
+    return process.returncode, report
 
 
-def _reports(data: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
-    """Checkov emits a single report dict, or a list of them (multi-framework)."""
-    return data if isinstance(data, list) else [data]
+def _finding_line(failed_check: Mapping[str, Any]) -> str:
+    """Render a scanner finding as concise, actionable diagnostic output."""
+    check_id = str(failed_check.get("check_id", "unknown-check"))
+    check_name = str(failed_check.get("check_name", "Checkov policy violation"))
+    file_path = str(failed_check.get("file_path", "<unknown>"))
+    line_range = failed_check.get("file_line_range")
+    if isinstance(line_range, list) and len(line_range) >= 2:
+        file_path = f"{file_path}:{line_range[0]}-{line_range[1]}"
+    resource = str(failed_check.get("resource", "<unknown>"))
+    guideline = failed_check.get("guideline")
+    guidance = f" See {guideline}." if guideline else ""
+    return f"  - [{check_id}] {check_name}: {resource} at {file_path}.{guidance}"
 
 
-def parse_failed(data: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
-    """Flatten every ``failed_checks`` entry across one-or-many Checkov reports."""
-    out: list[dict[str, Any]] = []
-    for report in _reports(data):
-        results = report.get("results") or {}
-        out.extend(results.get("failed_checks") or [])
-    return out
-
-
-def parsing_error_count(data: dict[str, Any] | list[Any]) -> int:
-    """Total Checkov parse failures — surfaced (not gated) so silent skips show."""
-    total = 0
-    for report in _reports(data):
-        errors = (report.get("summary") or {}).get(_PARSING_ERRORS_KEY, 0)
-        total += errors if isinstance(errors, int) else len(errors)
-    return total
-
-
-def finding_key(failed_check: dict[str, Any]) -> str:
-    """Line-independent identity for a failed check: ``check_id|file_path|resource``."""
-    return f"{failed_check.get('check_id')}|{failed_check.get('file_path')}|{failed_check.get('resource')}"
-
-
-def net_new_findings(failed: list[dict[str, Any]], baseline: set[str]) -> list[dict[str, Any]]:
-    """Failed checks whose key is not already grandfathered in the baseline."""
-    return [fc for fc in failed if finding_key(fc) not in baseline]
-
-
-def _format_finding(failed_check: dict[str, Any], *, scan_dir: str) -> str:
-    """One agent-actionable line per net-new finding (fix:/next:/run:)."""
-    key = finding_key(failed_check)
-    line_range = failed_check.get("file_line_range") or []
-    location = failed_check.get("file_path", "<unknown>")
-    if len(line_range) >= 2:
-        location = f"{location}:{line_range[0]}-{line_range[1]}"
-    guide = failed_check.get("guideline") or f"Checkov policy {failed_check.get('check_id')}"
-    return (
-        f"  - [{failed_check.get('check_id')}] {failed_check.get('check_name', '')} — "
-        f"resource {failed_check.get('resource')} at {location}. "
-        f"fix: remediate the resource per {guide}, OR — if the risk is accepted — append "
-        f"'{key}' to the checkov findings baseline with a justification; "
-        f"next: re-run this check to confirm clean; "
-        f"run: checkov -d {scan_dir} --framework {failed_check.get('framework', DEFAULT_FRAMEWORK)} "
-        f"--check {failed_check.get('check_id')}"
-    )
+def _finding_path(failed_check: Mapping[str, Any], *, scan_path: Path, scan_dir: str) -> str:
+    """Return the finding path relative to the consumer repository."""
+    absolute = failed_check.get("file_abs_path")
+    if isinstance(absolute, str):
+        try:
+            relative = Path(absolute).resolve().relative_to(scan_path)
+        except ValueError:
+            relative = Path(Path(absolute).name)
+    else:
+        relative = Path(Path(str(failed_check.get("file_path", "unknown"))).name)
+    return (PurePosixPath(scan_dir) / PurePosixPath(relative.as_posix())).as_posix()
 
 
 class CheckovIacSecurity:
-    """Key-baselined IaC-security gate over a Checkov scan (not a per-file rule)."""
+    """Absolute IaC-security gate: all findings and parse errors fail."""
 
-    #: Canonical check name — mirrors the ``FitnessRule.name`` role so the
-    #: registry/discovery can reason about this module uniformly.
-    name = DEFAULT_NAME
+    name = "checkov_iac_security"
 
     def __init__(
         self,
@@ -193,167 +161,116 @@ class CheckovIacSecurity:
         *,
         scan_dir: str = DEFAULT_SCAN_DIR,
         framework: str = DEFAULT_FRAMEWORK,
-        name: str = DEFAULT_NAME,
         timeout: int = DEFAULT_TIMEOUT,
-        runner: Runner | None = None,
     ) -> None:
-        raw_root = repo_root if repo_root is not None else REPO_ROOT
-        self._repo_root: Path = raw_root.resolve()
+        self._repo_root = (repo_root if repo_root is not None else REPO_ROOT).resolve()
         self._scan_dir = scan_dir
         self._framework = framework
-        self._name = name
         self._timeout = timeout
-        # DI seam: a test injects canned Checkov JSON; None => the real binary.
-        self._runner = runner
-        self._last_net_new: list[dict[str, Any]] = []
 
     @classmethod
-    def from_config(
-        cls,
-        config: Mapping[str, Any],
-        *,
-        repo_root: Path | None = None,
-    ) -> CheckovIacSecurity:
-        """Build an instance from a consumer's ``[tool.tc_fitness]`` config dict."""
+    def from_config(cls, config: Mapping[str, Any], *, repo_root: Path | None = None) -> CheckovIacSecurity:
+        """Build the check from its reviewed consumer configuration."""
         return cls(
             repo_root=repo_root,
             scan_dir=str(config.get("scan_dir", DEFAULT_SCAN_DIR)),
             framework=str(config.get("framework", DEFAULT_FRAMEWORK)),
-            name=str(config.get("name", DEFAULT_NAME)),
             timeout=int(config.get("timeout", DEFAULT_TIMEOUT)),
         )
 
     @property
     def scan_path(self) -> Path:
-        """The resolved absolute scan directory under the repo root."""
+        """The configured IaC path resolved from the repository root."""
         return (self._repo_root / self._scan_dir).resolve()
 
-    @property
-    def baseline_path(self) -> Path:
-        """The key-based baseline file for this check."""
-        return baseline_dir(self._repo_root) / f"{self._name}{BASELINE_SUFFIX}"
-
-    def _active_runner(self) -> Runner:
-        if self._runner is not None:
-            return self._runner
-        return lambda sd: run_checkov(sd, framework=self._framework, timeout=self._timeout)
-
-    def _load_baseline(self) -> set[str]:
-        return parse_baseline_text(read_baseline_text(self.baseline_path, encoding="utf-8"))
-
     def evaluate(self) -> tuple[bool, list[str], dict[str, Any]]:
-        """Run the scan and diff against the baseline.
-
-        Pure orchestration around the injected runner: canned JSON in tests,
-        the real binary in production. When the runner returns ``None`` (Checkov
-        absent), required scan evidence is unavailable and the gate fails.
-        """
-        data = self._active_runner()(self.scan_path)
-        if data is None:
+        """Run Checkov and determine whether the complete scan is clean."""
+        try:
+            result = run_checkov(self.scan_path, framework=self._framework, timeout=self._timeout)
+        except CheckovScanError as exc:
+            return (
+                False,
+                [str(exc)],
+                {
+                    "unavailable": False,
+                    "execution_error": True,
+                    "failed": 0,
+                    _PARSING_ERRORS_KEY: 0,
+                    "findings": [],
+                },
+            )
+        if result is None:
             return (
                 False,
                 [],
-                {"unavailable": True, "failed": 0, "baselined": 0, "net_new": 0, _PARSING_ERRORS_KEY: 0},
+                {
+                    "unavailable": True,
+                    "execution_error": False,
+                    "failed": 0,
+                    _PARSING_ERRORS_KEY: 0,
+                    "findings": [],
+                },
             )
-        failed = parse_failed(data)
-        baseline = self._load_baseline()
-        net_new = net_new_findings(failed, baseline)
-        self._last_net_new = net_new
-        errors = [_format_finding(fc, scan_dir=self._scan_dir) for fc in net_new]
+
+        exit_code, report = result
+        failed = report["results"]["failed_checks"]
+        parsing_errors = report["summary"][_PARSING_ERRORS_KEY]
+        errors = [_finding_line(item) for item in failed]
+        if exit_code:
+            errors.append(f"Checkov exited with status {exit_code}.")
+        if parsing_errors:
+            errors.append(f"Checkov could not parse {parsing_errors} IaC file(s).")
         meta = {
             "unavailable": False,
+            "execution_error": False,
+            "exit_code": exit_code,
             "failed": len(failed),
-            "baselined": len(baseline),
-            "net_new": len(net_new),
-            _PARSING_ERRORS_KEY: parsing_error_count(data),
+            _PARSING_ERRORS_KEY: parsing_errors,
+            "findings": failed,
         }
-        return (not net_new), errors, meta
+        return exit_code == 0 and not failed and parsing_errors == 0, errors, meta
 
     def run(self) -> int:
-        """Print a PASS/FAIL verdict and return the process exit code."""
+        """Print the gate result and return its process exit code."""
         passed, errors, meta = self.evaluate()
         if meta["unavailable"]:
             report_finding(
                 "dependency-unavailable", ".", "required executable unavailable: checkov", status="error"
             )
-            print(
-                "ERROR checkov_iac_security (required checkov executable not installed). "
-                "fix: install checkov into the tool environment to enable the scan; "
-                "next: re-run this check; "
-                "run: checkov --version"
-            )
+            print("ERROR checkov_iac_security: checkov is unavailable; install the pinned scanner and retry.")
             return 2
-        if meta[_PARSING_ERRORS_KEY]:
-            print(
-                f"NOTE checkov_iac_security: {meta[_PARSING_ERRORS_KEY]} "
-                "IaC file(s) Checkov could not parse (not gated)."
-            )
+        if meta["execution_error"]:
+            report_finding("checkov-execution-error", ".", errors[0], status="error")
+            print(f"ERROR checkov_iac_security: {errors[0]}")
+            return 2
         if passed:
-            print(
-                f"PASS checkov_iac_security ({meta['failed']} finding(s), "
-                f"all {meta['baselined']} baselined; 0 net-new)"
-            )
+            print("PASS checkov_iac_security (0 findings, 0 parsing errors)")
             return 0
-        for finding in self._last_net_new:
+        for finding in meta["findings"]:
             report_finding(
-                str(finding.get("check_id", "checkov-finding")),
-                str(finding.get("file_path", ".")),
-                str(finding.get("check_name", "Checkov policy violation")),
+                "checkov-policy",
+                _finding_path(finding, scan_path=self.scan_path, scan_dir=self._scan_dir),
+                _finding_line(finding),
             )
-        print(f"FAIL checkov_iac_security ({meta['net_new']} net-new finding(s)):")
-        for line in errors:
-            print(line)
-        print()
+        if meta[_PARSING_ERRORS_KEY]:
+            report_finding("checkov-parsing-error", self._scan_dir, errors[-1])
+        print("FAIL checkov_iac_security:")
+        print("\n".join(errors))
         print(REMEDIATION)
         return 1
 
-    def establish_baseline(self) -> Path:
-        """Freeze today's findings as the frozen key baseline; return the path."""
-        data = self._active_runner()(self.scan_path)
-        if data is None:
-            raise RuntimeError("required checkov executable unavailable; cannot establish a baseline")
-        keys = sorted({finding_key(fc) for fc in parse_failed(data)})
-        path = self.baseline_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render_baseline(self._name, keys), encoding="utf-8")
-        return path
-
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> CheckovIacSecurity:
-    """Factory the engine calls to bind this CORE check to a consumer's config."""
+    """Factory used by the CORE check catalogue."""
     return CheckovIacSecurity.from_config(config, repo_root=repo_root)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``.
-
-    A bespoke entrypoint (this check is not a :class:`FitnessRule`, so it does
-    not reuse ``run_core_check``); the two universal flags behave identically.
-    """
+    """CLI entry point for a direct Checkov scan."""
     parser = argparse.ArgumentParser(prog=CheckovIacSecurity.name)
-    parser.add_argument(
-        "--establish-baseline",
-        action="store_true",
-        help="freeze today's findings as the baseline (rule adoption mode).",
-    )
-    parser.add_argument(
-        "--repo-root",
-        type=Path,
-        default=None,
-        help="repo root to scan (default: current working directory).",
-    )
+    parser.add_argument("--repo-root", type=Path, default=None, help="repository root to scan")
     args = parser.parse_args(argv)
-
-    rule = CheckovIacSecurity.from_config({}, repo_root=args.repo_root)
-    if args.establish_baseline:
-        try:
-            path = rule.establish_baseline()
-        except RuntimeError as exc:
-            print(f"ERROR checkov_iac_security: {exc}")
-            return 2
-        print(f"established baseline: {path}")
-        return 0
-    return rule.run()
+    return CheckovIacSecurity(repo_root=args.repo_root).run()
 
 
 if __name__ == "__main__":

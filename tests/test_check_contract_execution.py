@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -119,6 +120,133 @@ def _fast_import_single_file(path: str, content: bytes) -> bytes:
     )
 
 
+def make_git_contract(
+    root: Path,
+    *,
+    history: bytes | None = None,
+    extra_file: bool = False,
+) -> Path:
+    """Create a public contract bound to a real local fast-import Git history."""
+    fixture = root / "fixture"
+    violation_fixture = root / "violation"
+    fixture.mkdir()
+    (violation_fixture / "src").mkdir(parents=True)
+    (violation_fixture / "src" / "example.py").write_text("value = 1\n")
+    history_path = fixture / ".contract" / "git.fast-import"
+    history_path.parent.mkdir()
+    history_path.write_bytes(
+        history
+        if history is not None
+        else _fast_import_single_file("src/example.py", b"# SPDX-License-Identifier: MIT\nvalue = 1\n")
+    )
+    if extra_file:
+        (fixture / "unbound.txt").write_text("not covered by the Git tree\n")
+    manifest = root / "git-contract.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "tc.fitness/check-contract/v1",
+                "check": "core:license_present",
+                "config": {"roots": ["src"]},
+                "cases": [
+                    {
+                        "id": "compliant",
+                        "fixture": "fixture",
+                        "environment": {
+                            "schema": "tc.fitness/check-environment/v2",
+                            "path": "inherit",
+                            "git": {
+                                "schema": "tc.fitness/git-fixture/v1",
+                                "history": ".contract/git.fast-import",
+                                "checkout": "refs/heads/candidate",
+                            },
+                        },
+                        "expected": {"status": "pass", "exit": "zero", "findings": []},
+                    },
+                    {
+                        "id": "violation",
+                        "fixture": "violation",
+                        "expected": {
+                            "status": "fail",
+                            "exit": "nonzero",
+                            "findings": [
+                                {
+                                    "rule": "license-present",
+                                    "path": "src/example.py",
+                                    "message_contains": "license header",
+                                }
+                            ],
+                        },
+                    },
+                ],
+                "dependencies": [],
+            }
+        )
+    )
+    return manifest
+
+
+def make_script_help_contract(root: Path, source: str) -> Path:
+    fixture = root / "fixture"
+    (fixture / "src").mkdir(parents=True)
+    (fixture / "src" / "entrypoint.py").write_text(source)
+    compliant = root / "compliant"
+    (compliant / "src").mkdir(parents=True)
+    (compliant / "src" / "entrypoint.py").write_text(
+        "import argparse\ndef main():\n"
+        "    parser = argparse.ArgumentParser()\n"
+        "    parser.add_argument('--value')\n"
+        "    parser.parse_args()\n"
+    )
+    violation = root / "violation"
+    (violation / "src").mkdir(parents=True)
+    (violation / "src" / "entrypoint.py").write_text(
+        "import argparse\nraise SystemExit(1)\ndef main():\n"
+        "    parser = argparse.ArgumentParser()\n"
+        "    parser.add_argument('--value')\n"
+        "    parser.parse_args()\n"
+    )
+    manifest = root / "script-help.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "tc.fitness/check-contract/v1",
+                "check": "core:script_help_smoke",
+                "config": {"roots": ["src"], "python_executable": "python3"},
+                "cases": [
+                    {
+                        "id": "compliant",
+                        "fixture": "compliant",
+                        "expected": {"status": "pass", "exit": "zero", "findings": []},
+                    },
+                    {
+                        "id": "violation",
+                        "fixture": "violation",
+                        "expected": {
+                            "status": "fail",
+                            "exit": "nonzero",
+                            "findings": [
+                                {
+                                    "rule": "script-help-smoke",
+                                    "path": "src/entrypoint.py",
+                                    "message_contains": "argparse",
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "id": "script-help",
+                        "fixture": "fixture",
+                        "expected": {"status": "pass", "exit": "zero", "findings": []},
+                    },
+                ],
+                "dependencies": [],
+            }
+        )
+    )
+    return manifest
+
+
 def test_public_contract_materialises_bound_git_history(tmp_path: Path) -> None:
     manifest = make_contract(tmp_path)
     fixture = tmp_path / "compliant"
@@ -156,6 +284,217 @@ def test_public_contract_materialises_bound_git_history(tmp_path: Path) -> None:
         "history": ".contract/git.fast-import",
         "schema": "tc.fitness/git-fixture/v1",
     }
+
+
+def _fast_import_symlink(path: str, target: bytes) -> bytes:
+    return (
+        b"blob\nmark :1\ndata "
+        + str(len(target)).encode()
+        + b"\n"
+        + target
+        + b"\ncommit refs/heads/candidate\nmark :2\n"
+        + b"author Contract Fixture <fixture@example.invalid> 0 +0000\n"
+        + b"committer Contract Fixture <fixture@example.invalid> 0 +0000\n"
+        + b"data 7\ninitial\n"
+        + f"M 120000 :1 {path}\n\n".encode()
+        + b"reset refs/remotes/origin/main\nfrom :2\n\n"
+    )
+
+
+def test_public_executor_runs_real_git_fixture_and_writes_terminal_ledger(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+
+    manifest = make_git_contract(tmp_path)
+    ledger = tmp_path / "ledger.json"
+    assert execute_contract_case(manifest, "compliant", ledger) == 0
+    evidence = json.loads(ledger.read_text())
+    assert evidence["actual"]["status"] == "pass"
+    assert evidence["actual"]["exit"] == "zero"
+    assert evidence["environment"]["git"]["checkout"] == "refs/heads/candidate"
+
+
+@pytest.mark.parametrize(
+    ("history", "extra_file", "message"),
+    [
+        (b"not fast-import data\n", False, "cannot materialise Git contract fixture"),
+        (_fast_import_symlink("src/example.py", b"../../outside"), False, "unsupported modes: 120000"),
+        (None, True, "may contain only its .contract history input"),
+        (b"x" * (1024 * 1024 + 1), False, "exceeds the 1 MiB limit"),
+    ],
+    ids=["malformed-history", "symlink-mode", "unbound-extra-file", "history-size-limit"],
+)
+def test_public_executor_rejects_unbound_or_unsafe_git_tree_inputs(
+    tmp_path: Path,
+    history: bytes | None,
+    extra_file: bool,
+    message: str,
+) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = make_git_contract(tmp_path, history=history, extra_file=extra_file)
+    with pytest.raises(CheckContractError, match=message):
+        execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
+
+
+def test_public_executor_requires_regular_readable_git_history(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = make_git_contract(tmp_path)
+    history = tmp_path / "fixture" / ".contract" / "git.fast-import"
+    history.unlink()
+    with pytest.raises(CheckContractError, match="must be a regular file"):
+        execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
+
+
+def test_public_executor_reports_missing_git_executable_without_patch_seams(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = make_git_contract(tmp_path)
+    original = os.environ.get("PATH")
+    os.environ["PATH"] = ""
+    try:
+        with pytest.raises(CheckContractError, match="FileNotFoundError"):
+            execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
+    finally:
+        if original is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = original
+
+
+def test_public_executor_restores_path_when_dependency_case_starts_with_unset_path(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+
+    manifest = make_contract(tmp_path, dependency=True)
+    original = os.environ.pop("PATH", None)
+    try:
+        ledger = tmp_path / "unavailable-ledger.json"
+        assert execute_contract_case(manifest, "unavailable", ledger) == 2
+        assert "PATH" not in os.environ
+        assert json.loads(ledger.read_text())["actual"]["status"] == "error"
+    finally:
+        if original is not None:
+            os.environ["PATH"] = original
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"roots": ["../outside"]}, "fixture-relative"),
+        ({"roots": ["src"], "nested": [{"name": "../outside"}]}, "external rule name"),
+    ],
+)
+def test_public_executor_rejects_nonportable_config_values(
+    tmp_path: Path, config: dict[str, object], message: str
+) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = make_contract(tmp_path)
+    data = yaml.safe_load(manifest.read_text())
+    data["config"] = config
+    manifest.write_text(yaml.safe_dump(data))
+    with pytest.raises(CheckContractError, match=message):
+        execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
+
+
+def test_public_executor_rejects_missing_case_and_existing_or_nested_ledger(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = make_contract(tmp_path)
+    with pytest.raises(CheckContractError, match="unknown contract case"):
+        execute_contract_case(manifest, "absent", tmp_path / "ledger.json")
+
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text("retained")
+    with pytest.raises(CheckContractError, match="already exists"):
+        execute_contract_case(manifest, "compliant", ledger)
+
+    inside = tmp_path / "compliant" / "nested-ledger.json"
+    with pytest.raises(CheckContractError, match="outside the input fixture"):
+        execute_contract_case(manifest, "compliant", inside)
+
+
+def _mutating_script(target: Path) -> str:
+    return (
+        "from pathlib import Path\n"
+        f"Path({str(target)!r}).write_text('mutation observed')\n"
+        "import argparse\n"
+        "def main():\n"
+        "    parser = argparse.ArgumentParser()\n"
+        "    parser.add_argument('--value')\n"
+        "    parser.parse_args()\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+
+
+@pytest.mark.parametrize("effect", ["manifest", "original-fixture", "suppression-baseline"])
+def test_public_executor_rejects_mutations_from_the_executed_fixture(tmp_path: Path, effect: str) -> None:
+    from tc_fitness.check_contract_execution import execute_contract_case
+    from tc_fitness.check_contracts import CheckContractError
+
+    manifest = tmp_path / "script-help.yaml"
+    fixture = tmp_path / "fixture"
+    source_path = fixture / "src" / "entrypoint.py"
+    if effect == "manifest":
+        script_source = _mutating_script(manifest)
+    elif effect == "original-fixture":
+        script_source = _mutating_script(source_path)
+    else:
+        script_source = (
+            "from pathlib import Path\n"
+            "(Path(__file__).resolve().parents[1] / '.architecture' / 'baseline').mkdir(parents=True)\n"
+            "import argparse\n"
+            "def main():\n"
+            "    parser = argparse.ArgumentParser()\n"
+            "    parser.add_argument('--value')\n"
+            "    parser.parse_args()\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        )
+    manifest = make_script_help_contract(tmp_path, script_source)
+    with pytest.raises(CheckContractError, match=r"changed|created a suppression baseline"):
+        execute_contract_case(manifest, "script-help", tmp_path / "ledger.json")
+
+
+def test_public_executor_detects_mutation_of_candidate_source_snapshot(tmp_path: Path) -> None:
+    from tc_fitness import check_contract_execution
+    from tc_fitness.check_contracts import CheckContractError
+
+    source_dir = tmp_path / "candidate-source"
+    source_dir.mkdir()
+    candidate_file = source_dir / "check_contract_execution.py"
+    shutil.copy2(
+        Path(__file__).parents[1] / "src" / "tc_fitness" / "check_contract_execution.py", candidate_file
+    )
+    namespace: dict[str, object] = {"__file__": str(candidate_file), "__name__": "candidate_executor"}
+    candidate_code = compile(
+        candidate_file.read_text(encoding="utf-8"), str(check_contract_execution.__file__), "exec"
+    )
+    exec(candidate_code, namespace)  # noqa: S102 - execute copied production candidate without mutating live source
+    execute_contract_case = namespace["execute_contract_case"]
+    manifest = make_script_help_contract(tmp_path, _mutating_script(candidate_file))
+    with pytest.raises(CheckContractError, match="candidate source changed"):
+        execute_contract_case(manifest, "script-help", tmp_path / "ledger.json")
+
+
+def test_ledger_validator_reports_missing_contract_snapshot(tmp_path: Path) -> None:
+    from tc_fitness.check_contract_execution import validate_contract_ledger
+    from tc_fitness.check_contracts import CheckContractError
+
+    with pytest.raises(CheckContractError, match="cannot read contract snapshot"):
+        validate_contract_ledger(
+            tmp_path / "missing.yaml",
+            "compliant",
+            tmp_path / "ledger.json",
+            process_exit=0,
+            started_after=datetime.now(UTC),
+        )
 
 
 @pytest.mark.parametrize(

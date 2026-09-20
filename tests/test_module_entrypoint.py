@@ -10,18 +10,67 @@ evidence describes the thing under test.
 
 from __future__ import annotations
 
+import importlib
 import os
+import runpy
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from tc_fitness import __main__ as module_entrypoint
 from tc_fitness import runner
+from tc_fitness.gate import main as gate_main
+
+# ``tc_fitness/__init__.py`` re-exports ``gate_config.gate`` under the bare
+# name ``gate``, which shadows the ``tc_fitness.gate`` submodule as a package
+# ATTRIBUTE (though not in ``sys.modules``). ``importlib.import_module`` reads
+# the module registry directly, so it is the one lookup that survives the
+# shadowing.
+gate_module = importlib.import_module("tc_fitness.gate")
 
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_importing_the_module_entrypoint_binds_the_consoles_main_without_running_it() -> None:
+    """Import must reach this assertion at all, which it only does if the guard held.
+
+    Were the ``if __name__ == "__main__":`` guard absent or wrong, the module
+    import above (at collection time, with ``__name__ ==
+    "tc_fitness.__main__"``) would itself call ``sys.exit(main())`` and abort
+    collection before any test body ran. Reaching this line is therefore
+    itself evidence the not-taken branch was taken; the identity check on top
+    confirms ``__main__`` re-exports the exact ``main`` the ``tc-fitness``
+    console script (``pyproject.toml``'s ``tc_fitness.gate:main``) dispatches.
+    """
+    assert module_entrypoint.main is gate_main
+
+
+def test_running_the_module_as_a_script_invokes_main_and_exits_with_its_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Executing the file under ``run_name="__main__"`` takes the guarded branch.
+
+    ``runpy.run_path`` runs the real module body in-process (not a
+    subprocess), so this is the precise counterpart to the import above:
+    together they exercise both the imported and the executed path of the
+    same guard.
+    """
+    calls: list[None] = []
+
+    def _fake_main() -> int:
+        calls.append(None)
+        return 3
+
+    monkeypatch.setattr(gate_module, "main", _fake_main)
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(REPO_ROOT / "src" / "tc_fitness" / "__main__.py"), run_name="__main__")
+
+    assert exc.value.code == 3
+    assert calls == [None]
 
 
 def test_module_entrypoint_exposes_the_same_cli_as_the_console_script() -> None:

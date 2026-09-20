@@ -21,6 +21,7 @@ The proofs:
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -291,6 +292,21 @@ def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.Ca
     assert "could not load catalogue" in out
 
 
+def test_catalogue_step_rejects_entries_outside_the_public_schema(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (repo / "invalid_catalogue.py").write_text("ENTRIES = (object(),)\n")
+    _write_config(
+        repo,
+        '[[steps]]\nid = "f"\ncatalogue = "invalid_catalogue:ENTRIES"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert not outcome.ok
+    assert "could not load catalogue" in _plain(capsys.readouterr().out)
+
+
 # --------------------------------------------------------------------------- #
 # --staged smoke tier — the <60s fast-feedback entrypoint
 # --------------------------------------------------------------------------- #
@@ -408,6 +424,27 @@ def test_shard_ignores_step_without_shard_args(repo: Path) -> None:
     assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
     # Opt-in only: a step without shard_args is untouched even under --shard.
     assert marker.read_text() == "|"
+
+
+def test_assure_coverage_help_is_routed_to_its_public_parser(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["assure-coverage", "--help"])
+
+    assert exc.value.code == 0
+    assert "--evidence-dir EVIDENCE_DIR" in capsys.readouterr().out
+
+
+def test_python_module_cli_shows_help_from_a_real_child_process(repo: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.gate", "--help"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "The single runnable quality gate" in result.stdout
 
 
 @pytest.mark.parametrize("spec", ["5/4", "0/4", "abc", "2/0", "2"])
@@ -611,3 +648,219 @@ def test_catalogue_step_runs_concurrently_with_subprocess_step(
     assert outcome.ok
     assert "PASS [lint]" in out  # subprocess leg (pool)
     assert "run [fitness]" in out  # in-process catalogue leg (main thread) replayed cleanly
+
+
+def test_baseline_free_catalogue_rejects_baseline_adoption(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\nbaseline_free = true\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo, establish_baseline=True)
+
+    assert not outcome.ok
+    assert "baseline-free assurance cannot establish baselines" in _plain(capsys.readouterr().out)
+
+
+def test_baseline_free_catalogue_rejects_out_of_process_rules(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checks = repo / "scripts/checks"
+    checks.mkdir(parents=True)
+    (checks / "check.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (repo / "shell_catalogue.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "ENTRIES = (RuleEntry(id='shell', gate='shell', check='shell', script='check.sh'),)\n"
+    )
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "shell_catalogue:ENTRIES"\n'
+        'checks_dir = "scripts/checks"\nbaseline_free = true\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert not outcome.ok
+    assert "baseline-free assurance requires in-process checks" in _plain(capsys.readouterr().out)
+
+
+def test_unknown_only_selector_runs_nothing_and_reports_valid_ids(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(repo, '[[steps]]\nid = "known"\nrun = ["false"]\n')
+
+    outcome = run_gate(load_config(repo), repo, only=["missing"])
+
+    assert outcome.ok
+    output = _plain(capsys.readouterr().out)
+    assert "unknown step id(s): ['missing']" in output
+    assert "run [known]" not in output
+
+
+def test_scheduled_smoke_skips_expensive_member_and_replays_stderr(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "cheap"\nstage = "parallel"\nshell = "echo diagnostic >&2"\n'
+        '[[steps]]\nid = "other"\nstage = "parallel"\nrun = ["true"]\n'
+        '[[steps]]\nid = "expensive"\nstage = "parallel"\nrun = ["false"]\nskip_when_staged = true\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo, staged=True)
+
+    captured = capsys.readouterr()
+    assert outcome.ok
+    assert "SKIP [expensive]" in _plain(captured.out)
+    assert "diagnostic" in captured.err
+
+
+def test_scheduled_fail_fast_stops_before_next_stage(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        'fail_fast = true\n[[steps]]\nid = "bad"\nstage = "first"\nrun = ["false"]\n'
+        '[[steps]]\nid = "later"\nstage = "second"\ndepends_on = ["first"]\nshell = "touch later"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert not outcome.ok
+    assert not (repo / "later").exists()
+    assert "stopping after the failing stage (first)" in _plain(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("allow_missing", [False, True])
+def test_scheduled_missing_program_obeys_allow_missing(
+    repo: Path, capsys: pytest.CaptureFixture[str], allow_missing: bool
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "missing"\nstage = "parallel"\nrun = ["definitely-not-a-real-prog-xyz"]\n'
+        + ("allow_missing = true\n" if allow_missing else "")
+        + '[[steps]]\nid = "companion"\nstage = "parallel"\nrun = ["true"]\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert outcome.ok is allow_missing
+    assert ("SKIP [missing]" if allow_missing else "FAIL [missing]") in _plain(capsys.readouterr().out)
+
+
+def test_main_rejects_partial_or_mixed_contract_invocation(repo: Path) -> None:
+    contract = repo / "contract.yaml"
+    ledger = repo / "ledger.json"
+    contract.write_text("schema: invalid\n")
+    with pytest.raises(SystemExit):
+        main(["run", "--contract", str(contract)])
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "run",
+                "--contract",
+                str(contract),
+                "--case",
+                "case",
+                "--ledger",
+                str(ledger),
+                "--repo-root",
+                str(repo),
+            ]
+        )
+
+
+def test_main_returns_two_for_invalid_contract(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    contract = repo / "contract.yaml"
+    ledger = repo / "ledger.json"
+    contract.write_text("schema: invalid\n")
+
+    code = main(
+        [
+            "run",
+            "--contract",
+            str(contract),
+            "--case",
+            "case",
+            "--ledger",
+            str(ledger),
+        ]
+    )
+
+    assert code == 2
+    assert "FAIL check contract" in _plain(capsys.readouterr().err)
+
+
+def test_main_routes_mutation_subcommand_to_its_public_parser() -> None:
+    with pytest.raises(SystemExit):
+        main(["mutation"])
+
+
+def test_catalogue_preserves_repo_path_that_caller_already_owns(repo: Path) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+    path = str(repo)
+    sys.path.insert(0, path)
+    try:
+        assert run_gate(load_config(repo), repo).ok
+        assert path in sys.path
+    finally:
+        sys.path.remove(path)
+
+
+def test_catalogue_threads_baseline_adoption_to_ordinary_rules(repo: Path) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+
+    assert run_gate(load_config(repo), repo, establish_baseline=True).ok
+
+
+def test_in_memory_configuration_has_no_file_banner(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from tc_fitness.gate_config import GateConfig, StepSpec
+
+    config = GateConfig(name="in-memory", steps=(StepSpec(id="ok", run=("true",)),))
+
+    assert run_gate(config, repo).ok
+    assert "(config:" not in _plain(capsys.readouterr().out)
+
+
+def test_scheduled_shard_reaches_opted_in_command(repo: Path) -> None:
+    marker = repo / "marker.txt"
+    (repo / "probe.py").write_text(
+        "import os,sys\nfrom pathlib import Path\n"
+        "Path('marker.txt').write_text(sys.argv[1] + '|' + os.environ['COVERAGE_FILE'])\n"
+    )
+    _write_config(
+        repo,
+        f'[[steps]]\nid = "probe"\nstage = "parallel"\nrun = ["{sys.executable}", "probe.py"]\n'
+        'shard_args = ["{index}/{total}"]\n'
+        '[[steps]]\nid = "companion"\nstage = "parallel"\nrun = ["true"]\n',
+    )
+
+    assert run_gate(load_config(repo), repo, shard=(2, 4)).ok
+    assert marker.read_text() == "2/4|.coverage.2"
+
+
+def test_module_entrypoint_runs_public_gate(repo: Path) -> None:
+    _write_config(repo, '[[steps]]\nid = "ok"\nrun = ["true"]\n')
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tc_fitness.gate", "run", "--repo-root", str(repo)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+
+    assert result.returncode == 0
+    assert "PASS [ok]" in _plain(result.stdout)

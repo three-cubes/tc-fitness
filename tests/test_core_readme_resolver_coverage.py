@@ -75,6 +75,22 @@ def test_exempt_dirs_config_driven(tmp_path: Path) -> None:
     assert rule.collect_violations() == set()
 
 
+def test_missing_scan_root_is_skipped_while_files_are_not_candidates(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
+    _mkdir(tmp_path, "docs/architecture")
+
+    rule = build({"roots": ["missing", "docs"]}, repo_root=tmp_path)
+
+    assert rule.collect_violations() == {Path("docs/architecture")}
+
+
+def test_existing_resolver_directory_has_no_violation(tmp_path: Path) -> None:
+    _with_readme(tmp_path, "platform")
+
+    assert build({}, repo_root=tmp_path).collect_violations() == set()
+
+
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _mkdir(tmp_path, "platform")
     rule = ReadmeResolverCoverage.from_config({}, repo_root=tmp_path)

@@ -27,7 +27,6 @@ from types import ModuleType
 from typing import Any
 
 from tc_fitness.core_checks import run_core_check
-from tc_fitness.core_checks._coverage_evidence import reject_external_report
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -108,7 +107,6 @@ class CoverageIncludesBranches(FitnessRule):
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, CoverageIncludesBranches)  # noqa: S101  # narrowing for mypy
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
-        reject_external_report(rule.coverage_report, rule._repo_root)
         return rule
 
     def establish_baseline(self) -> Path:
@@ -129,19 +127,35 @@ class CoverageIncludesBranches(FitnessRule):
         return super().establish_baseline()
 
     def _report_path(self) -> Path:
-        report = Path(self.coverage_report)
+        if self.coverage_report.startswith("env:"):
+            from tc_fitness.coverage_admission import configured
+
+            report = Path(configured(self.coverage_report))
+        else:
+            report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
     def enumerate_files(self) -> list[Path]:
-        """The single artifact this rule judges: the coverage report itself."""
-        return [self._report_path()]
+        """The single artifact this rule judges: the coverage report itself.
+
+        Keyed inside the repository root even when the report legitimately sits
+        outside it. The gate relativises every violation to that root, so an
+        external absolute path would raise instead of producing the fail-closed
+        missing-evidence verdict.
+        """
+        report = self._report_path()
+        try:
+            return [self._repo_root / report.resolve().relative_to(self._repo_root.resolve())]
+        except ValueError:
+            return [self._repo_root / report.name]
 
     def is_in_scope(self, rel: str) -> bool:
         """Admit the configured report regardless of where it sits."""
         return True
 
     def file_has_violation(self, path: Path) -> bool:
-        return report_lacks_branches(path)
+        # The key is repository-relative; the report it stands for may not be.
+        return report_lacks_branches(self._report_path())
 
 
 def build(

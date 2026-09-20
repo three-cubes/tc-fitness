@@ -13,6 +13,7 @@ import yaml
 from tc_fitness.check_contracts import (
     CheckContractError,
     load_check_contract,
+    registered_contract_directory,
     validate_contract_registry,
 )
 from tc_fitness.core_checks import CORE_CHECKS
@@ -28,6 +29,31 @@ def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def _valid_contract(check: str = "core:example_check") -> dict[str, object]:
+    return {
+        "schema": "tc.fitness/check-contract/v1",
+        "check": check,
+        "config": {},
+        "cases": [
+            {
+                "id": "compliant",
+                "fixture": "compliant",
+                "expected": {"status": "pass", "exit": "zero", "findings": []},
+            },
+            {
+                "id": "violation",
+                "fixture": "violation",
+                "expected": {
+                    "status": "fail",
+                    "exit": "nonzero",
+                    "findings": [{"rule": "example", "path": "src/broken.py", "message_contains": "missing"}],
+                },
+            },
+        ],
+        "dependencies": [],
+    }
 
 
 def test_shipped_core_registry_has_exact_behavioural_contract_coverage() -> None:
@@ -182,6 +208,83 @@ dependencies: []
     assert [case.id for case in contract.cases] == ["compliant", "violation"]
     assert contract.cases[1].expected.exit == "nonzero"
     assert contract.cases[1].expected.findings[0].path == "src/broken.py"
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"evidence_class": "unreviewed"}, "evidence_class must be one of"),
+        ({"live_qualification": "unreviewed"}, "live_qualification must be one of"),
+        ({"release_admission": "yes"}, "release_admission must be a boolean"),
+        ({"evidence_class": "protocol-unit"}, "requires an explicitly unmet live qualification"),
+    ],
+)
+def test_evidence_metadata_rejects_unqualified_manifest_claims(
+    tmp_path: Path, metadata: dict[str, object], message: str
+) -> None:
+    contract = _valid_contract()
+    contract.update(metadata)
+    manifest = _write(tmp_path / "contract.yaml", yaml.safe_dump(contract, sort_keys=False))
+
+    with pytest.raises(CheckContractError, match=message):
+        load_check_contract(manifest)
+
+
+def test_git_case_environment_rejects_an_unknown_nested_schema(tmp_path: Path) -> None:
+    contract = _valid_contract()
+    cases = contract["cases"]
+    assert isinstance(cases, list)
+    cases[0]["environment"] = {
+        "schema": "tc.fitness/check-environment/v2",
+        "path": "inherit",
+        "git": {
+            "schema": "tc.fitness/git-fixture/v0",
+            "history": ".contract/history.fi",
+            "checkout": "refs/heads/main",
+        },
+    }
+    manifest = _write(tmp_path / "contract.yaml", yaml.safe_dump(contract, sort_keys=False))
+
+    with pytest.raises(CheckContractError, match="v1 schema"):
+        load_check_contract(manifest)
+
+
+def test_registered_contract_directory_requires_its_name_registration_and_fixtures(tmp_path: Path) -> None:
+    registry = tmp_path / "example_check"
+    registry.mkdir()
+    for case in ("compliant", "violation"):
+        (registry / case).mkdir()
+    manifest = _write(registry / "contract.yaml", yaml.safe_dump(_valid_contract(), sort_keys=False))
+
+    assert registered_contract_directory(registry, ("core:example_check",)) is not None
+    assert registered_contract_directory(registry, ()) is None
+
+    copied = tmp_path / "copied"
+    copied.mkdir()
+    for case in ("compliant", "violation"):
+        (copied / case).mkdir()
+    _write(copied / "contract.yaml", manifest.read_text())
+    assert registered_contract_directory(copied, ("core:example_check",)) is None
+
+
+@pytest.mark.parametrize("fixture", ["/absolute-fixture", "../escape", "missing", "linked"])
+def test_registered_contract_directory_rejects_nonportable_or_unbound_fixtures(
+    tmp_path: Path, fixture: str
+) -> None:
+    registry = tmp_path / "example_check"
+    registry.mkdir()
+    (registry / "compliant").mkdir()
+    if fixture == "linked":
+        target = tmp_path / "outside"
+        target.mkdir()
+        (registry / fixture).symlink_to(target, target_is_directory=True)
+    contract = _valid_contract()
+    cases = contract["cases"]
+    assert isinstance(cases, list)
+    cases[1]["fixture"] = fixture
+    _write(registry / "contract.yaml", yaml.safe_dump(contract, sort_keys=False))
+
+    assert registered_contract_directory(registry, ("core:example_check",)) is None
 
 
 def test_manifest_cannot_grant_its_own_release_admission(tmp_path: Path) -> None:

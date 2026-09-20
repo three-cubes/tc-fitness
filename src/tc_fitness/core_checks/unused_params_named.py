@@ -70,7 +70,11 @@ def _is_abstract_or_overload(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
         only = body[0]
         if isinstance(only, ast.Pass):
             return True
-        if isinstance(only, ast.Expr) and isinstance(only.value, ast.Constant):
+        if (
+            isinstance(only, ast.Expr)
+            and isinstance(only.value, ast.Constant)
+            and (isinstance(only.value.value, str) or only.value.value is ...)
+        ):
             return True
         if _is_not_implemented_raise(only):
             return True
@@ -128,13 +132,13 @@ def _function_has_unused_param(func: ast.FunctionDef | ast.AsyncFunctionDef) -> 
 def module_has_unused_param(path: Path) -> bool:
     """True iff any function in ``path`` has an unused, non-underscore parameter.
 
-    Pure helper (the detection core). A syntax / decode error is treated as
-    "no violation" — another check owns unparseable files.
+    Pure helper (the detection core). A syntax / decode / read error is a
+    violation because the configured source could not be evaluated.
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (SyntaxError, UnicodeDecodeError):
-        return False
+    except (SyntaxError, UnicodeDecodeError, OSError):
+        return True
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _function_has_unused_param(node):
             return True

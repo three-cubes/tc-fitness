@@ -14,6 +14,20 @@ from collections.abc import Mapping
 from tc_fitness.check_contracts import CheckContractError
 
 _FILE_OPTIONS = frozenset({"roots", "extensions", "exempt_files", "name"})
+_COVERAGE_EVIDENCE_OPTIONS = frozenset(
+    {
+        "exact_base_commit",
+        "candidate_commit",
+        "coverage_receipt",
+        "coverage_receipt_digest",
+        "accepted_coverage_receipt",
+        "accepted_coverage_digest",
+        "coverage_config",
+        "run_id",
+        "attempt_id",
+        "max_age_seconds",
+    }
+)
 _RUNTIME_OPTIONS = frozenset(
     {
         "contract_file",
@@ -44,7 +58,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "canonical_commit_identity": frozenset(
         {"allowed_emails", "allowed_name_patterns", "base_ref", "head_ref", "cutover_ref"}
     ),
-    "checkov_iac_security": frozenset({"scan_dir", "framework", "name", "timeout"}),
+    "checkov_iac_security": frozenset({"scan_dir", "framework", "timeout"}),
     "ci_consumes_shared_gate": frozenset(
         {"workflows_dir", "reusable_pattern", "engine_pattern", "warn_only", "baseline_ok"}
     ),
@@ -54,7 +68,8 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     ),
     "cognitive_complexity": frozenset({"threshold"}),
     "contract_change_has_test": frozenset({"contract_surface", "test_globs", "base_ref"}),
-    "coverage_floor": frozenset({"floor_pct", "coverage_report"}),
+    "coverage_floor": frozenset({"floor_pct", "coverage_report", "branch_floor_pct", "critical_branch_files"})
+    | _COVERAGE_EVIDENCE_OPTIONS,
     "coverage_includes_branches": frozenset({"coverage_report"}),
     "deterministic_tests": frozenset(
         {"seed", "repeats", "order_seeds", "test_command", "use_randomly", "timeout_seconds"}
@@ -68,7 +83,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "integrity_state_predicate": frozenset({"state_tables"}),
     "license_present": frozenset({"markers", "header_lines"}),
     "mutation_survival_ratchet": frozenset({"baseline_report", "current_report", "allow_missing_current"}),
-    "new_code_coverage": frozenset({"floor_pct", "coverage_report", "base_ref"}),
+    "new_code_coverage": frozenset({"floor_pct", "coverage_report", "base_ref"}) | _COVERAGE_EVIDENCE_OPTIONS,
     "no_commented_out_code": frozenset({"min_run"}),
     "no_duplicate_string": frozenset({"min_length", "min_occurrences"}),
     "no_duplicated_dependency_pin": frozenset({"manifest", "min_version_parts"}),

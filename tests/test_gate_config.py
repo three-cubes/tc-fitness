@@ -19,11 +19,13 @@ import pytest
 
 from tc_fitness.gate_config import (
     GateConfigError,
+    StepSpec,
     find_config_file,
     load_config,
     load_core_check_configs,
     parse_config,
     parse_core_check_configs,
+    plan_stages,
 )
 
 pytestmark = pytest.mark.integration
@@ -227,6 +229,80 @@ def test_depends_on_unknown_stage_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError) as exc:
         parse_config_table("[[steps]]\nid = 'a'\nstage = 'A'\ndepends_on = ['Z']\nrun = ['x']\n", tmp_path)
     assert "unknown stage" in str(exc.value)
+
+
+def test_stage_cannot_depend_on_itself(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError, match="depends on itself"):
+        parse_config_table(
+            "[[steps]]\nid = 'a'\nstage = 'build'\ndepends_on = ['build']\nrun = ['true']\n",
+            tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        "run=['true']",
+        "catalogue='module:RULES'\ndispatch='subprocess'",
+        "catalogue='module:RULES'\nparallel=true",
+        "catalogue='module:RULES'\nallow_missing=true",
+        "catalogue='module:RULES'\ncontinue_on_error=true",
+    ],
+)
+def test_baseline_free_requires_a_gating_inprocess_catalogue_without_skips(
+    tmp_path: Path, options: str
+) -> None:
+    with pytest.raises(GateConfigError, match="baseline-free assurance requires"):
+        parse_config_table(f"[[steps]]\nid='baseline'\n{options}\nbaseline_free=true\n", tmp_path)
+
+
+def test_baseline_free_accepts_a_gating_inprocess_catalogue() -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid='baseline'\ncatalogue='module:RULES'\nbaseline_free=true\n",
+        Path.cwd(),
+    )
+
+    assert cfg.steps[0].baseline_free
+
+
+def test_non_strict_stage_planning_drops_a_filtered_dependency() -> None:
+    step = StepSpec(id="kept", run=("true",), stage="kept", depends_on=("filtered",))
+
+    stages = plan_stages((step,), strict=False)
+
+    assert len(stages) == 1
+    assert stages[0].name == "kept"
+    assert stages[0].depends_on == frozenset()
+
+
+def test_join_stage_waits_until_each_real_predecessor_is_ready() -> None:
+    steps = (
+        StepSpec(id="first", run=("true",), stage="first"),
+        StepSpec(id="second", run=("true",), stage="second"),
+        StepSpec(id="join", run=("true",), stage="join", depends_on=("first", "second")),
+    )
+
+    stages = plan_stages(steps)
+
+    assert tuple(stage.name for stage in stages) == ("first", "second", "join")
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("[tool]\ntc_fitness = 'not a table'\n", "must be a table"),
+        ("steps = [false]\n", "is not a table"),
+        ("[[steps]]\nid='x'\nshell=1\n", "`shell` must be a string"),
+        ("[[steps]]\nid='x'\nrun=['true']\nbaseline_free=1\n", "baseline_free must be a boolean"),
+        ("[[steps]]\nid='x'\nrun=['true']\nstage=1\n", "`stage` must be a non-empty string"),
+    ],
+)
+def test_malformed_table_and_step_shapes_are_rejected(tmp_path: Path, body: str, message: str) -> None:
+    config = tmp_path / ("pyproject.toml" if body.startswith("[tool]") else ".tc-fitness.toml")
+    config.write_text(body)
+
+    with pytest.raises(GateConfigError, match=message):
+        load_config(tmp_path)
 
 
 def test_skip_when_staged_parses(tmp_path: Path) -> None:

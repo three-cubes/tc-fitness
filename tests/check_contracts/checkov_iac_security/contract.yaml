@@ -1,6 +1,6 @@
 schema: tc.fitness/check-contract/v1
 check: core:checkov_iac_security
-evidence_class: protocol-unit
+evidence_class: integration
 live_qualification: required-unmet
 release_admission: false
 config:
@@ -16,9 +16,9 @@ cases:
       status: fail
       exit: nonzero
       findings:
-        - rule: CKV_FIXTURE_1
+        - rule: checkov-policy
           path: infra/main.bicep
-          message_contains: fixture violation
+          message_contains: CKV_AZURE_35
   - id: unavailable
     fixture: unavailable
     environment: {schema: tc.fitness/check-environment/v1, path: empty}

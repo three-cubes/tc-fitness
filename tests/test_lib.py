@@ -116,6 +116,21 @@ def test_gate_fail_on_stale_fails_when_baseline_entry_no_longer_violates(
     assert "STALE" in out or "stale" in out
 
 
+def test_gate_stale_failure_without_remediation_keeps_the_actionable_stale_notice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline_dir = tmp_path / ".architecture" / "baseline"
+    baseline_dir.mkdir(parents=True)
+    (baseline_dir / "rule-x-files.txt").write_text("kairix/resolved.py\n")
+
+    rc = gate("rule-x", set(), "fix it", repo_root=tmp_path, fail_on_stale=True)
+
+    output = capsys.readouterr().out
+    assert rc == 1
+    assert "kairix/resolved.py" in output
+    assert "STALE" in output
+
+
 def test_gate_fail_on_stale_passes_and_prints_counts_when_no_stale(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -134,6 +149,16 @@ def test_gate_fail_on_stale_passes_and_prints_counts_when_no_stale(
     # The counts banner reports new (0) vs grandfathered (2).
     assert "0" in out and "2" in out
     assert "grandfathered" in out
+
+
+def test_gate_strict_pass_with_no_grandfathered_entries_reports_clean_counts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = gate("rule-x", set(), "fix it", repo_root=tmp_path, fail_on_stale=True)
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "clean (0 new, 0 grandfathered)" in output
 
 
 def test_gate_fail_on_stale_default_false_is_unchanged(
@@ -305,6 +330,20 @@ def test_gate_keys_shrinks_only_is_clean(tmp_path: Path, capsys: pytest.CaptureF
     rc = gate_keys("f30", {"F30:a"}, "fix it", repo_root=tmp_path)
     assert rc == 0
     assert "grandfathered" in capsys.readouterr().out
+
+
+def test_gate_keys_strict_pass_when_all_grandfathered_keys_remain(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline_dir = tmp_path / ".architecture" / "baseline"
+    baseline_dir.mkdir(parents=True)
+    (baseline_dir / "f30-ids.txt").write_text("F30:a\n")
+
+    rc = gate_keys("f30", {"F30:a"}, "fix it", repo_root=tmp_path, fail_on_stale=True)
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "1 grandfathered" in output
 
 
 def test_gate_keys_paths_suffix_selects_paths_baseline(tmp_path: Path) -> None:

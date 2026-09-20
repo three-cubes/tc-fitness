@@ -75,7 +75,7 @@ def report_is_malformed(path: Path) -> bool:
         return True
     if data.get("schema_version") != REQUIRED_SCHEMA_VERSION:
         return True
-    return not isinstance(data.get("packages", {}), dict)
+    return "packages" not in data or not isinstance(data["packages"], dict)
 
 
 class MutationSurvivalRatchet(FitnessRule):

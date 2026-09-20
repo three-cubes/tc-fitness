@@ -7,22 +7,23 @@ name = "three-cubes-fitness"
 version = "0.16.1"
 description = "Shared architecture-fitness primitives + the single runnable quality gate for Three Cubes repos (kairix, tc-agent-zone): the `tc-fitness run` gate orchestrator (one binary CI and local both invoke), baseline-gating helpers, agent-actionable emit/YAML helpers, the unified ratchet grammar, the catalogue-driven repo-agnostic check runner, and the declarative seam-absorption factories + branch-naming gate."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Three Cubes" }]
 keywords = ["fitness-functions", "architecture", "ratchet", "ci", "quality-gate"]
 classifiers = [
   "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
 
 # Near-stdlib at runtime. The `tc-fitness run` gate orchestrator uses the stdlib
 # `tomllib` (3.11+) to read the consumer's `[tool.tc_fitness]` config.
 #
-# Check-contract manifests are a shipped public surface, so their YAML parser
-# must be available in every default installation.
+# Check-contract manifests and exact-source coverage admission are shipped
+# public surfaces, so their parsers must exist in every default installation.
+# The producer's generated configuration sets `[run] patch = subprocess`, which
+# Coverage.py introduced in 7.10; an earlier release measures no child process.
 #
 # `packaging` is the reference implementation of the specifications it reads:
 # PEP 508 requirements, PEP 440 versions and PEP 503 names. Hand-rolled regexes
@@ -34,7 +35,7 @@ classifiers = [
 # It is imported lazily, inside the two functions that parse requirements, so
 # importing this package remains a stdlib-only operation: a bare checkout still
 # reports its version and degrades legibly.
-dependencies = ["packaging>=23.2", "PyYAML>=6.0"]
+dependencies = ["coverage>=7.10", "packaging>=23.2", "PyYAML>=6.0"]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and
@@ -48,7 +49,15 @@ dev = [
   "pytest-cov>=5.0",
   "ruff>=0.15,<0.16",
   "mypy>=1.11",
+  "checkov==3.2.531",
 ]
+
+[tool.uv]
+# Checkov 3.2.531 (and the current 3.3.19 release) declares asteval==1.0.6,
+# which is affected by GHSA-89v8-rhwq-hf77 and GHSA-9w56-46f6-3qhx.  The fixed
+# 1.0.9 release is API-compatible with Checkov's use and is exercised by the
+# real Checkov contract tests and the repository OSV scan.
+override-dependencies = ["asteval==1.0.9"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tc_fitness"]
@@ -125,10 +134,18 @@ ignore = ["E501", "RUF022"]
 "src/tc_fitness/core_checks/osv_scanner_sca.py" = ["S404", "S603"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = true
 warn_unused_ignores = true
 files = ["src/tc_fitness"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/tc_fitness"]
+
+[tool.coverage.report]
+exclude_lines = []
+partial_branches = []
 
 [[tool.mypy.overrides]]
 # PyYAML is a required runtime dependency, but does not ship type stubs.
@@ -144,12 +161,10 @@ module = ["defusedxml", "defusedxml.*"]
 ignore_missing_imports = true
 
 # ── tc-fitness gate declaration — the engine eats its own dog food ───────────
-# The engine runs THROUGH the gate it ships: `uv run tc-fitness run` reads this
-# block and runs the engine's own quality gate (ruff / format / mypy / pytest)
-# plus its own branch-naming module — the SAME binary both CI and a local run
-# invoke, so local == CI by construction. ci.yml's `check` matrix job shrinks to
-# `setup-uv-cached → uv run tc-fitness run`, keeping the py3.12/3.13 matrix
-# caller-side while the gate's STEPS live here as config, never hand-copied YAML.
+# `uv run tc-fitness run` owns deterministic static evaluation: ruff, format,
+# strict typing and branch naming. `make check` composes that static gate with
+# one fresh exact-base/candidate coverage transaction; CI uses the same split so
+# its Python matrix never repeats the full coverage measurement.
 [tool.tc_fitness]
 name = "three-cubes-fitness self gate"
 
@@ -183,18 +198,6 @@ skip_when_staged = true
 fix = "resolve the type error mypy reports"
 next = "re-run `tc-fitness run`"
 
-# pytest with coverage — the engine's self-test suite (the same command ci.yml
-# ran), producing coverage.xml for the downstream Sonar handoff. Dropped from
-# the `--staged` <60s smoke (skip_when_staged): the full coverage run is the
-# expensive full-tree leg the smoke deliberately defers to the merge gate.
-[[tool.tc_fitness.steps]]
-id = "pytest"
-summary = "pytest (with coverage)"
-run = ["pytest", "-q", "--cov=tc_fitness", "--cov-report=term-missing", "--cov-report=xml"]
-skip_when_staged = true
-fix = "fix the failing test or the code under test"
-next = "re-run `tc-fitness run`"
-
 # The engine's OWN branch-naming gate, run against the gate. branch_naming is an
 # engine-shipped module (`tc_fitness.checks.branch_naming`) with a `python -m`
 # entrypoint; it gates the LIVE branch name (not a per-file baseline), so it is
@@ -205,4 +208,4 @@ id = "branch-naming"
 summary = "branch_naming (engine's own convention gate)"
 run = ["python", "-m", "tc_fitness.checks.branch_naming"]
 fix = "rename the branch to the Linear <user>/<team>-<number>-<slug> shape"
-next = "re-run `tc-fitness run`"
+next = "re-run `make check-static`"

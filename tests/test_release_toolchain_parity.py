@@ -21,7 +21,9 @@ RESOLVER_USE = "./.github/actions/resolve-uv-version"
 DIRECT_SETUP_UV = "astral-sh/setup-uv@"
 SHARED_SETUP_UV = "three-cubes/tc-pipelines/actions/setup-uv-cached@"
 EXACT_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-QUALITY_GATE_WORKERS = frozenset({"check", "distribution-qualification"})
+#: Required in its own right, so routing it through the fan-in would only
+#: delay the verdict it already gives. Every other job is a fan-in worker.
+INDEPENDENTLY_REQUIRED = frozenset({"no-attribution"})
 FAN_IN_NEEDS_JSON = "${{ toJSON(needs) }}"
 FAN_IN_RUN = "python3 scripts/qualification/quality_gate_fanin.py"
 
@@ -97,14 +99,17 @@ def _quality_gate_violations(workflow: dict[str, Any]) -> list[str]:
         return ["workflow must declare exactly one job named Quality gate"]
 
     job_id, quality_gate = fan_ins[0]
+    # Derived from the workflow rather than restated, so adding a job without
+    # joining the fan-in fails here instead of shipping an advisory check.
+    workers = set(jobs) - INDEPENDENTLY_REQUIRED - {job_id}
     violations: list[str] = []
-    if job_id in QUALITY_GATE_WORKERS:
+    if not workers:
         violations.append("Quality gate must be distinct from its worker jobs")
     if "strategy" in quality_gate:
         violations.append("Quality gate must be a non-matrix fan-in job")
     needs = quality_gate.get("needs", [])
     needed_jobs = {needs} if isinstance(needs, str) else set(needs) if isinstance(needs, list) else set()
-    missing = sorted(QUALITY_GATE_WORKERS - needed_jobs)
+    missing = sorted(workers - needed_jobs)
     if missing:
         violations.append(f"Quality gate must need every worker: {', '.join(missing)}")
     if quality_gate.get("if") != "${{ always() }}":

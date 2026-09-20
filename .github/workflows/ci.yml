@@ -1,16 +1,11 @@
 name: CI
 
-# The engine eats its own dog food: it runs THROUGH the gate it ships. This job
-# shrinks to `setup-uv-cached → uv run tc-fitness run` — the SAME binary a local
-# run invokes (reading the SAME [tool.tc_fitness] block in pyproject.toml), so
-# the gate has one definition and local == CI by construction. The gate's STEPS
-# (ruff / format / mypy / pytest / branch-naming) are config in pyproject, never
-# hand-copied YAML here. The gate runs on Python 3.12 — the `requires-python >= 3.12`
-# floor and the interpreter the python-quality-gate reusable defaults to.
+# Pull requests run the static gate across supported Python versions and one
+# exact-base/candidate coverage transaction. Main does not repeat the full gate:
+# the protected PR result is the reviewed merge evidence and release workflows
+# own post-merge publication.
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -21,15 +16,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Self gate (Python ${{ matrix.python-version }})
+  check-static:
+    name: Static self gate
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
 
       - name: Resolve reviewed uv version
         id: uv-version
@@ -42,14 +36,56 @@ jobs:
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
           uv-version: ${{ steps.uv-version.outputs.version }}
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
           sync-args: "--all-extras"
 
-      # The single runnable gate. Reads [tool.tc_fitness] and runs ruff / format
-      # / mypy --strict / pytest / branch-naming in order. `--no-sync --no-build`:
-      # the env is already synced from the LOCKED lockfile above.
-      - name: Self gate (tc-fitness run)
-        run: uv run --no-sync --no-build tc-fitness run
+      - name: Static self gate
+        run: |
+          make prepare
+          make check-static
+
+  coverage-assurance:
+    name: Fresh exact-base coverage assurance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Resolve reviewed uv version
+        id: uv-version
+        uses: ./.github/actions/resolve-uv-version
+
+      - name: Locked uv install
+        uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
+        with:
+          uv-version: ${{ steps.uv-version.outputs.version }}
+          python-version: "3.13"
+          sync-args: "--all-extras"
+
+      - name: Measure and admit the exact candidate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVIDENCE_DIR: ${{ runner.temp }}/coverage-assurance
+        run: |
+          make prepare
+          make assert-clean
+          uv run --no-sync --no-build tc-fitness assure-coverage \
+            --base-commit "$BASE_SHA" \
+            --candidate-commit "$HEAD_SHA" \
+            --evidence-dir "$EVIDENCE_DIR"
+
+      - name: Retain exact coverage evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/coverage-assurance
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   distribution-qualification:
     name: Distribution qualification (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -57,15 +93,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            python-version: "3.12"
-          - os: ubuntu-latest
-            python-version: "3.13"
-          - os: macos-latest
-            python-version: "3.12"
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
 
       - name: Resolve reviewed uv version
         id: uv-version
@@ -83,10 +117,13 @@ jobs:
   quality-gate:
     name: Quality gate
     if: ${{ always() }}
-    needs: [check, distribution-qualification]
+    needs: [check-static, coverage-assurance, distribution-qualification]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
       - name: Require every qualification worker to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
@@ -108,6 +145,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Resolve reviewed uv version
         id: uv-version

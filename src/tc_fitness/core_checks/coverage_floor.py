@@ -23,16 +23,21 @@ domain-intrinsic default.
 from __future__ import annotations
 
 import importlib
+import math
 from collections.abc import Callable, Mapping
 from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.core_checks._coverage_evidence import (
-    reject_external_report,
+    CoverageCounts,
+    count_class_coverage,
+    coverage_integer,
     resolve_coverage_filename,
+    validate_coverage_rate,
 )
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -122,6 +127,40 @@ def parse_coverage_report(
     return out
 
 
+def parse_coverage_details(report_path: Path, *, repo_root: Path) -> dict[str, CoverageCounts]:
+    """Read complete, count-consistent Cobertura detail for strict admission."""
+    text = report_path.read_text(encoding="utf-8")
+    _reject_unsafe_xml(text, str(report_path))
+    root = _resolve_element_tree().fromstring(text)
+    if root.tag != "coverage":
+        raise ValueError("expected a Cobertura coverage report")
+    sources = [node.text.strip() for node in root.iter("source") if node.text and node.text.strip()]
+    result: dict[str, CoverageCounts] = {}
+    for element in root.iter("class"):
+        filename = element.get("filename")
+        if not filename:
+            raise ValueError("coverage class is missing its source filename")
+        relative = resolve_coverage_filename(filename, sources, repo_root=repo_root)
+        if relative in result:
+            raise ValueError("duplicate source file in coverage report")
+        result[relative] = count_class_coverage(element, repo_root / relative)
+    if not result:
+        raise ValueError("empty coverage report")
+    for prefix, total_attr, covered_attr in (
+        ("lines", "lines", "covered_lines"),
+        ("branches", "branches", "covered_branches"),
+    ):
+        total = sum(getattr(counts, total_attr) for counts in result.values())
+        covered = sum(getattr(counts, covered_attr) for counts in result.values())
+        if (
+            coverage_integer(root.get(f"{prefix}-valid")) != total
+            or coverage_integer(root.get(f"{prefix}-covered")) != covered
+        ):
+            raise ValueError("coverage report totals disagree with file detail")
+        validate_coverage_rate(root.get("line-rate" if prefix == "lines" else "branch-rate"), covered, total)
+    return result
+
+
 class CoverageFloor(FitnessRule):
     """Flags source files whose recorded line coverage is below the floor."""
 
@@ -132,6 +171,9 @@ class CoverageFloor(FitnessRule):
     #: Rule-specific knobs — instance attrs so ``from_config`` overrides them.
     floor_pct: float = DEFAULT_FLOOR_PCT
     coverage_report: str = DEFAULT_COVERAGE_REPORT
+    branch_floor_pct: float | None = None
+    critical_branch_files: frozenset[str] = frozenset()
+    receipt_config: dict[str, Any] | None = None
 
     @classmethod
     def from_config(
@@ -145,37 +187,159 @@ class CoverageFloor(FitnessRule):
         assert isinstance(rule, CoverageFloor)  # noqa: S101  # narrowing for mypy
         rule.floor_pct = float(config.get("floor_pct", DEFAULT_FLOOR_PCT))
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
-        reject_external_report(rule.coverage_report, rule._repo_root)
+        if "coverage_receipt" in config:
+            if config.get("branch_floor_pct") is None:
+                raise ValueError("coverage receipt admission requires independent branch coverage")
+            rule.receipt_config = dict(config)
+        branch_floor = config.get("branch_floor_pct")
+        critical = config.get("critical_branch_files", [])
+        if not isinstance(critical, list) or any(not isinstance(path, str) for path in critical):
+            raise ValueError("critical_branch_files must be a list of repository-relative files")
+        rule.critical_branch_files = frozenset(critical)
+        if branch_floor is not None:
+            rule.branch_floor_pct = float(branch_floor)
+            for name in ("floor_pct", "branch_floor_pct"):
+                value = config.get(name, DEFAULT_FLOOR_PCT)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int | float)
+                    or not math.isfinite(value)
+                    or not 0 <= value <= 100
+                ):
+                    raise ValueError(f"{name} must be a finite percentage between zero and 100")
+            if not rule._roots or rule._exempt_files or rule._extensions != (".py",):
+                raise ValueError("strict coverage requires source roots, Python files and no exemptions")
+            measured_roots: set[Path] = set()
+            for source_root in rule._roots:
+                source = Path(source_root)
+                resolved = (rule._repo_root / source).resolve()
+                if (
+                    source.is_absolute()
+                    or ".." in source.parts
+                    or not resolved.is_dir()
+                    or not resolved.is_relative_to(rule._repo_root)
+                ):
+                    raise ValueError("strict coverage requires existing repository-relative source roots")
+                measured_roots.add(resolved)
+            critical_files: set[str] = set()
+            for relative in rule.critical_branch_files:
+                path = Path(relative)
+                resolved = (rule._repo_root / path).resolve()
+                if (
+                    path.is_absolute()
+                    or ".." in path.parts
+                    or path.suffix != ".py"
+                    or not any(resolved.is_relative_to(root) for root in measured_roots)
+                    or not resolved.is_file()
+                ):
+                    raise ValueError(
+                        "critical branch file must exist within the measured Python source roots"
+                    )
+                critical_files.add(resolved.relative_to(rule._repo_root).as_posix())
+            rule.critical_branch_files = frozenset(critical_files)
+        elif critical:
+            raise ValueError("critical branch files require branch_floor_pct")
         return rule
 
-    def establish_baseline(self) -> Path:
-        """Refuse to freeze a state in which no evidence was measured at all.
+    def _report_key(self) -> Path:
+        """Repository-relative identity for the report, even when it lives outside.
 
-        Absent evidence produces the same violation key as a measured report
-        that falls short, so adopting a baseline while the report is missing
-        would record that key and turn the check permanently green — exactly
-        during onboarding, when the report is most likely not to have been
-        produced yet. Debt that was measured can be ratcheted; evidence that
-        was never produced cannot.
+        The gate relativises every violation to the repository root, so an
+        absolute report outside it would raise rather than produce the
+        fail-closed missing-evidence verdict. Configuring one is legitimate —
+        the coverage transaction measures a snapshot and writes the report into
+        separate evidence storage — so the violation is keyed by file name
+        instead of rejected. That keeps the finding inside the root without
+        pretending the file is there.
         """
-        if not self._report_path().exists():
-            raise ValueError(
-                "cannot baseline absent coverage evidence: "
-                f"{self.coverage_report} does not exist; produce the report, then adopt"
-            )
-        return super().establish_baseline()
+        report = self._report_path()
+        try:
+            return report.resolve().relative_to(self._repo_root.resolve())
+        except ValueError:
+            return Path(report.name)
 
     def _report_path(self) -> Path:
-        report = Path(self.coverage_report)
+        if self.receipt_config is not None:
+            from tc_fitness.coverage_admission import configured
+
+            report = Path(configured(self.coverage_report))
+        else:
+            report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
     @cached_property
     def _coverage(self) -> dict[str, float]:
+        if self.branch_floor_pct is not None:
+            # Strict admission reads the exact integer counts. The report's
+            # own line-rate is a four-significant-digit summary, so a file
+            # measured at 94.996% is written as 0.95 and would clear a 95%
+            # floor it does not meet. ``_coverage_evidence`` states the same
+            # rule where it tolerates that rounding: summaries validate,
+            # floors use detail.
+            return {path: counts.line_pct for path, counts in self._details.items()}
         return parse_coverage_report(self._report_path(), repo_root=self._repo_root)
 
-    def _below_floor(self) -> dict[str, float]:
-        """Map of report-relative path → coverage for files under the floor."""
-        return {path: pct for path, pct in self._coverage.items() if pct < self.floor_pct}
+    @cached_property
+    def _details(self) -> dict[str, CoverageCounts]:
+        return parse_coverage_details(self._report_path(), repo_root=self._repo_root)
+
+    def _inventory_failure(self, sources: dict[str, Path]) -> str | None:
+        """Refuse floors computed from a report that is not the source's own.
+
+        A truncated report can drop an uncovered statement or a branching
+        line's attributes, restate its own summary to agree, and read as fully
+        covered. The source decides what is executable and where it branches,
+        so the report's inventory is validated against it before any floor is
+        evaluated. Only files the report measures are checked here — one it
+        omits entirely is already a per-file failure below.
+        """
+        from tc_fitness.coverage_admission import complete_line_hits
+        from tc_fitness.coverage_measurement import complete_branch_inventory
+
+        measured = {name: path for name, path in sources.items() if name in self._details}
+        if not measured:
+            return None
+        report = self._report_path()
+        try:
+            complete_line_hits(self._repo_root, report, measured)
+            complete_branch_inventory(self._repo_root, report, measured)
+        except (ValueError, KeyError, OSError) as exc:
+            return f"coverage report inventory does not match the measured source: {exc}"
+        return None
+
+    @cached_property
+    def _strict_failures(self) -> dict[str, str]:
+        details = self._details
+        # Include untracked/new source too; Git tracking cannot make the
+        # current package disappear from complete-source measurement.
+        sources = {
+            self._repo_relative(path).as_posix(): path
+            for source in self._roots
+            for path in (self._repo_root / source).rglob("*.py")
+            if path.is_file()
+        }
+        if not sources:
+            raise ValueError("strict coverage source roots contain no Python files")
+        failures: dict[str, str] = {}
+        inventory = self._inventory_failure(sources)
+        if inventory is not None:
+            failures[self._report_key().as_posix()] = inventory
+        for path in sorted(sources.values()):
+            relative = self._repo_relative(path).as_posix()
+            counts = details.get(relative)
+            if counts is None:
+                failures[relative] = "missing coverage detail for source file"
+                continue
+            messages = []
+            if counts.line_pct < self.floor_pct:
+                messages.append(f"line coverage {counts.line_pct:g}% below {self.floor_pct:g}%")
+            branch_floor = 100.0 if relative in self.critical_branch_files else self.branch_floor_pct
+            if branch_floor is not None and counts.branch_pct < branch_floor:
+                prefix = "critical branch" if relative in self.critical_branch_files else "branch"
+                messages.append(f"{prefix} coverage {counts.branch_pct:g}% below {branch_floor:g}%")
+            if messages:
+                failures[relative] = "; ".join(messages)
+        return failures
 
     def enumerate_files(self) -> list[Path]:
         """Enumerate the below-floor files named in the coverage report.
@@ -184,22 +348,59 @@ class CoverageFloor(FitnessRule):
         file by omitting it. A missing or empty report is represented by the
         report path itself so it produces an observable finding.
         """
+        if self.branch_floor_pct is not None:
+            return [self._repo_root / relative for relative in self._strict_failures]
         if not self._coverage:
-            return [self._report_path()]
+            return [self._repo_root / self._report_key()]
         return super().enumerate_files()
 
     def is_in_scope(self, rel: str) -> bool:
-        report_rel = self._repo_relative(self._report_path()).as_posix()
+        report_rel = self._report_key().as_posix()
         return rel == report_rel or super().is_in_scope(rel)
 
     def file_has_violation(self, path: Path) -> bool:
         """The report is absent/empty, or a source file is absent/below floor."""
         rel = self._repo_relative(path).as_posix()
-        report_rel = self._repo_relative(self._report_path()).as_posix()
+        if self.branch_floor_pct is not None:
+            return rel in self._strict_failures
+        report_rel = self._report_key().as_posix()
         if rel == report_rel:
             return not self._coverage
         measured = self._coverage.get(rel)
         return measured is None or measured < self.floor_pct
+
+    def run(self) -> int:
+        """Strict independent floors never consult a suppressible baseline."""
+        if self.branch_floor_pct is None:
+            return super().run()
+        failures = dict(self._strict_failures)
+        if self.receipt_config is not None:
+            from tc_fitness.coverage_admission import receipt_failures
+
+            failures.update(receipt_failures(self._repo_root, self.receipt_config))
+        for relative, message in failures.items():
+            report_finding(self.name, relative, message)
+            print(f"FAIL [{self.name}] {relative}: {message}")
+        return int(bool(failures))
+
+    def establish_baseline(self) -> Path:
+        """Refuse to freeze a state that was never measured.
+
+        Strict mode has no baseline at all. Outside it, absent evidence
+        produces the same violation key as a measured report falling short, so
+        adopting while the report is missing records that key and turns the
+        check permanently green -- during onboarding, when the report is least
+        likely to exist. Measured debt can be ratcheted; evidence that was
+        never produced cannot.
+        """
+        if self.branch_floor_pct is not None:
+            raise ValueError("strict coverage cannot establish a baseline")
+        if not self._report_path().exists():
+            raise ValueError(
+                "cannot baseline absent coverage evidence: "
+                f"{self.coverage_report} does not exist; produce the report, then adopt"
+            )
+        return super().establish_baseline()
 
 
 def build(

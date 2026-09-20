@@ -43,6 +43,26 @@ def test_clean(tmp_path: Path) -> None:
     assert file_imports_test_tree(p, forbidden_roots=("tests",)) is False
 
 
+def test_relative_and_similarly_named_imports_are_not_test_tree_imports(tmp_path: Path) -> None:
+    p = _seed(
+        tmp_path,
+        "m.py",
+        "from . import helpers\nimport testsupport.fixtures\nfrom test_utils import helper\n",
+    )
+
+    assert file_imports_test_tree(p, forbidden_roots=("tests",)) is False
+
+
+def test_unparseable_binary_and_missing_sources_are_ignored(tmp_path: Path) -> None:
+    syntax = _seed(tmp_path, "syntax.py", "from tests import (\n")
+    binary = tmp_path / "binary.py"
+    binary.write_bytes(b"import tests\n\xff")
+
+    assert file_imports_test_tree(tmp_path / "missing.py", forbidden_roots=("tests",)) is False
+    assert file_imports_test_tree(syntax, forbidden_roots=("tests",)) is False
+    assert file_imports_test_tree(binary, forbidden_roots=("tests",)) is False
+
+
 def test_forbidden_root_is_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "src/m.py", "from spec_tests.x import Y\n")
     default = NoTestImportsInProd.from_config({"roots": ["src"]}, repo_root=tmp_path)

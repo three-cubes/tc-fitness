@@ -54,9 +54,9 @@ REMEDIATION = _remediation(
 )
 
 
-def _is_test_only_kwarg(param: ast.arg | None, default: ast.expr | None, suffixes: tuple[str, ...]) -> bool:
+def _is_test_only_kwarg(param: ast.arg, default: ast.expr | None, suffixes: tuple[str, ...]) -> bool:
     """True iff (param, default) describes a ``*<suffix>=None`` kwarg."""
-    if param is None or default is None:
+    if default is None:
         return False
     if not param.arg.endswith(suffixes):
         return False
@@ -83,18 +83,19 @@ def find_test_only_kwargs_in_file(path: Path, *, suffixes: tuple[str, ...]) -> l
 
     Pure helper (the detection core): walks every free function (methods on a
     ``ClassDef`` are out of scope -- they are the canonical Deps shape). A
-    syntax / decode error is treated as "no violation".
+    syntax / decode / read error is a violation because the configured source
+    could not be evaluated.
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (SyntaxError, UnicodeDecodeError, OSError):
-        return []
+        return [("<unreadable>", "<source>", 1)]
     class_func_ids: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
-            for child in ast.walk(node):
-                if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
-                    class_func_ids.add(id(child))
+            class_func_ids.update(
+                id(child) for child in node.body if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
+            )
     out: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and id(node) not in class_func_ids:

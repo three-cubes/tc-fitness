@@ -64,6 +64,52 @@ def test_mock_in_comment_is_clean(tmp_path: Path) -> None:
     assert _flags(p) is False
 
 
+def test_unknown_package_mock_and_unresolved_spy_are_not_internal(tmp_path: Path) -> None:
+    p = _seed(
+        tmp_path,
+        "a.test.ts",
+        "vi.mock('lodash/fp');\nvi.spyOn(unimported, 'map');\n",
+    )
+
+    assert _flags(p) is False
+
+
+def test_named_import_alias_resolves_internal_spy_target(tmp_path: Path) -> None:
+    p = _seed(
+        tmp_path,
+        "a.test.ts",
+        "import { client as cli } from 'mcp-x/client';\nvi.spyOn(cli, 'send');\n",
+    )
+
+    assert _flags(p) is True
+
+
+def test_default_and_namespace_imports_resolve_spy_sources(tmp_path: Path) -> None:
+    internal = _seed(
+        tmp_path,
+        "default.test.ts",
+        "import client from 'mcp-x/client';\nvi.spyOn(client, 'send');\n",
+    )
+    external = _seed(
+        tmp_path,
+        "namespace.test.ts",
+        "import * as maps from 'lodash/fp';\nvi.spyOn(maps, 'map');\n",
+    )
+    exempt_prefix = _seed(
+        tmp_path,
+        "sdk.test.ts",
+        "import * as sdk from '@azure/openai';\nvi.spyOn(sdk, 'send');\n",
+    )
+
+    assert _flags(internal) is True
+    assert _flags(external) is False
+    assert _flags(exempt_prefix) is False
+
+
+def test_missing_source_is_ignored(tmp_path: Path) -> None:
+    assert _flags(tmp_path / "missing.test.ts") is False
+
+
 def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
     _seed(tmp_path, "pkg/a.test.ts", "vi.mock('../../src/client.js');\n")
     rule = NoInternalPatchesTs.from_config(

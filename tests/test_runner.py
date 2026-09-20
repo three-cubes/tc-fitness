@@ -20,8 +20,11 @@ repo's rules. The fixtures prove:
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -33,9 +36,12 @@ from tc_fitness.runner import (
     RunnerConfig,
     Verdicts,
     declared_skip_reason,
+    dispatches_in_process,
     main_cli,
     make_env_path_conditional_check,
     run,
+    run_bounded_process,
+    staged_paths,
     write_skip_report,
 )
 
@@ -318,6 +324,293 @@ def test_parallel_replays_subprocess_output(
     assert "DETECTOR-OUTPUT-MARKER" in out
 
 
+def test_parallel_mode_with_only_python_checks_needs_no_worker_results(
+    checks_dir: Path, repo_root: Path
+) -> None:
+    _write_py_check(checks_dir, "parallel_python", "return 0")
+    rules = (RuleEntry(id="PY", gate="py", check="parallel_python"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    assert verdict.ok
+    assert verdict.ran == 1
+
+
+def test_engine_core_rules_dispatch_inprocess_by_default() -> None:
+    entry = RuleEntry(id="CORE", gate="core", check="core:coverage_floor")
+
+    assert dispatches_in_process(entry)
+
+
+def test_parallel_replay_captures_stderr_from_a_real_subprocess(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = checks_dir / "stderr-only.sh"
+    script.write_text("#!/usr/bin/env bash\nprintf 'captured diagnostic\\n' >&2\n")
+    script.chmod(0o755)
+    rules = (RuleEntry(id="ERR", gate="err", check="err", script=script.name),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    captured = capsys.readouterr()
+    assert verdict.ok
+    assert "captured diagnostic" in captured.err
+
+
+def test_parallel_replay_reports_a_missing_script_as_a_failure(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rules = (RuleEntry(id="MISSING", gate="missing", check="missing", script="missing.sh"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    assert verdict.failures == ["MISSING"]
+    assert "check script not found: missing.sh" in _plain(capsys.readouterr().err)
+
+
+def test_parallel_replay_reports_a_real_child_launch_error(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = checks_dir / "missing-interpreter.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 0\n")
+    script.chmod(0o755)
+    rules = (RuleEntry(id="BAD-INTERPRETER", gate="bad-interpreter", check="bad", script=script.name),)
+
+    path = os.environ["PATH"]
+    os.environ["PATH"] = ""
+    try:
+        verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+    finally:
+        os.environ["PATH"] = path
+
+    assert verdict.failures == ["BAD-INTERPRETER"]
+    assert "could not launch missing-interpreter.sh" in _plain(capsys.readouterr().err)
+
+
+def test_parallel_replay_preserves_empty_skip_lines_from_the_conditional_factory(
+    checks_dir: Path, repo_root: Path
+) -> None:
+    env_var = f"TC_FITNESS_EMPTY_SKIP_{uuid.uuid4().hex.upper()}"
+    assert env_var not in os.environ
+    (checks_dir / "conditional.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (checks_dir / "conditional.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="EMPTY-SKIP",
+            gate="empty-skip",
+            check="conditional",
+            script="conditional.sh",
+            subprocess_arg_env=env_var,
+        ),
+    )
+    hook = make_env_path_conditional_check(
+        env_var=env_var,
+        default_rel="absent-report.xml",
+        repo_root=repo_root,
+    )
+
+    verdict = run(
+        rules,
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        parallel_subprocess=True,
+        conditional_check=hook,
+    )
+
+    assert verdict.ok
+    assert verdict.skipped == 1
+
+
+def test_parallel_conditional_subprocess_uses_a_real_environment_path(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env_var = f"TC_FITNESS_RUNTIME_PATH_{uuid.uuid4().hex.upper()}"
+    runtime_input = repo_root / "runtime-input.txt"
+    runtime_input.write_text("runtime input consumed\n")
+    script = checks_dir / "read-input.sh"
+    script.write_text('#!/usr/bin/env bash\ncat "$1"\n')
+    script.chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="RUNTIME-PATH",
+            gate="runtime-path",
+            check="read-input",
+            script=script.name,
+            subprocess_arg_env=env_var,
+        ),
+    )
+    assert env_var not in os.environ
+    os.environ[env_var] = str(runtime_input)
+    try:
+        verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+    finally:
+        del os.environ[env_var]
+
+    assert verdict.ok
+    assert "runtime input consumed" in _plain(capsys.readouterr().out)
+
+
+def test_parallel_replay_classifies_a_subprocess_skip_exit_code(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The buffer-and-replay path has its own ``SKIP_EXIT_CODE`` check to cover.
+
+    ``_run_one_subprocess`` (streamed straight to fd1) already proves exit 77
+    is classified as a skip; ``--parallel``/``--staged`` route through the
+    SEPARATE capturing replay function instead, which re-implements the same
+    classification over the buffered output and needs its own test.
+    """
+    _write_sh_check(checks_dir, "check-skip.sh", SKIP_EXIT_CODE, echo="SKIP skip1: no input")
+    rules = (RuleEntry(id="SKIP1", gate="skip1", check="skip1", script="check-skip.sh"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+
+    assert verdict.ran == 0
+    assert verdict.skipped == 1
+    assert "PASS [SKIP1]" not in _plain(capsys.readouterr().out)
+
+
+def test_parallel_replay_classifies_a_declared_skip_marker_on_a_zero_exit(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A detector that exits 0 but prints its own ``SKIP <id>: reason`` marker
+    must be recognised on the replay path too, reading the reason from the
+    BUFFERED stdout rather than being counted as an ordinary pass."""
+    _write_sh_check(checks_dir, "check-marker.sh", 0, echo="SKIP marker1: tool not installed")
+    rules = (RuleEntry(id="marker1", gate="marker1", check="marker1", script="check-marker.sh"),)
+
+    verdict = run(rules, repo_root=repo_root, checks_dir=checks_dir, parallel_subprocess=True)
+    out = _plain(capsys.readouterr().out)
+
+    assert verdict.ran == 0
+    assert verdict.skipped == 1
+    assert verdict.skips == {"marker1": "tool not installed"}
+    assert "PASS [marker1]" not in out
+
+
+@pytest.mark.parametrize(("footer_contents", "printed"), [("fix path from a file", True), ("", False)])
+def test_failed_check_uses_the_consumer_footer_file_when_nonempty(
+    checks_dir: Path,
+    repo_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    footer_contents: str,
+    printed: bool,
+) -> None:
+    footer_path = repo_root / "paved-road.txt"
+    footer_path.write_text(footer_contents)
+    _write_py_check(checks_dir, "footer_failure", "return 1")
+    rules = (RuleEntry(id="FOOTER", gate="footer", check="footer_failure"),)
+
+    def read_consumer_footer(entry: RuleEntry) -> str | None:
+        assert entry.id == "FOOTER"
+        return footer_path.read_text()
+
+    verdict = run(
+        rules,
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        paved_road_footer=read_consumer_footer,
+    )
+
+    out = _plain(capsys.readouterr().out)
+    assert verdict.failures == ["FOOTER"]
+    assert ("fix path from a file" in out) is printed
+
+
+def test_staged_mode_counts_a_builtin_conditional_skip(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env_var = f"TC_FITNESS_STAGED_SKIP_{uuid.uuid4().hex.upper()}"
+    assert env_var not in os.environ
+    script = checks_dir / "conditional.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 0\n")
+    script.chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="STAGED-SKIP",
+            gate="staged-skip",
+            check="conditional",
+            script=script.name,
+            subprocess_arg_env=env_var,
+            staged_class="always-run",
+        ),
+    )
+    hook = make_env_path_conditional_check(
+        env_var=env_var,
+        default_rel="absent-report.xml",
+        repo_root=repo_root,
+        absent_skip_lines=("skip [STAGED-SKIP] report absent",),
+    )
+
+    verdict = run(
+        rules,
+        mode="staged",
+        staged_files=["any-change.txt"],
+        repo_root=repo_root,
+        checks_dir=checks_dir,
+        conditional_check=hook,
+    )
+
+    assert verdict.ok
+    assert verdict.skipped == 1
+    assert "staged selection: 0 ran, 1 skipped" in _plain(capsys.readouterr().out)
+
+
+def test_staged_mode_deduplicates_two_rules_for_one_real_script(checks_dir: Path, repo_root: Path) -> None:
+    _write_py_check(checks_dir, "staged_shared", "return 0")
+    rules = (
+        RuleEntry(id="STAGED-FIRST", gate="staged-first", check="staged_shared", staged_class="always-run"),
+        RuleEntry(id="STAGED-SECOND", gate="staged-second", check="staged_shared", staged_class="always-run"),
+    )
+
+    verdict = run(
+        rules, mode="staged", staged_files=["changed.py"], repo_root=repo_root, checks_dir=checks_dir
+    )
+
+    assert verdict.ok
+    assert verdict.ran == 1
+
+
+def test_staged_mode_records_a_real_failing_python_check(checks_dir: Path, repo_root: Path) -> None:
+    _write_py_check(checks_dir, "staged_failure", "return 1")
+    rules = (
+        RuleEntry(id="STAGED-FAIL", gate="staged-fail", check="staged_failure", staged_class="always-run"),
+    )
+
+    verdict = run(
+        rules, mode="staged", staged_files=["changed.py"], repo_root=repo_root, checks_dir=checks_dir
+    )
+
+    assert verdict.failures == ["STAGED-FAIL"]
+
+
+def test_staged_paths_reads_a_real_staged_git_change(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    staged = tmp_path / "staged.txt"
+    staged.write_text("ready\n")
+    subprocess.run(["git", "add", "staged.txt"], cwd=tmp_path, check=True)
+
+    assert staged_paths(tmp_path) == ["staged.txt"]
+
+
+def test_staged_paths_fails_safe_outside_a_git_repository(tmp_path: Path) -> None:
+    assert staged_paths(tmp_path) == []
+
+
+def test_staged_paths_fails_safe_when_git_is_not_on_path(tmp_path: Path) -> None:
+    original_path = os.environ["PATH"]
+    os.environ["PATH"] = ""
+    try:
+        assert staged_paths(tmp_path) == []
+    finally:
+        os.environ["PATH"] = original_path
+
+
+def test_gate_mode_requires_an_identifier(repo_root: Path) -> None:
+    with pytest.raises(ValueError, match="requires gate_id"):
+        run((), mode="gate", repo_root=repo_root)
+
+
 # --------------------------------------------------------------------------- #
 # mixed python + shell catalogue through the programmatic API
 # --------------------------------------------------------------------------- #
@@ -501,6 +794,44 @@ def test_conditional_builtin_env_resolution(
     monkeypatch.delenv("MY_COVERAGE_XML", raising=False)
     verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
     assert verdict.ok  # default path resolved + exists
+
+
+def test_conditional_check_hook_declining_a_rule_falls_back_to_builtin_resolution(
+    checks_dir: Path, repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``conditional_check`` hook may return ``None`` to decline a rule.
+
+    The docstring on :data:`ConditionalCheck` promises the built-in env-var
+    resolution then applies, exactly as if no hook were installed at all —
+    this is what lets a consumer's hook narrow itself to the rules it cares
+    about and let every other ``subprocess_arg_env`` rule through unmodified.
+    """
+    report = repo_root / "coverage.xml"
+    report.write_text("<coverage/>")
+    (checks_dir / "check-cov4.sh").write_text(
+        f'#!/usr/bin/env bash\n[ "$1" = "{report}" ] && exit 0 || exit 9\n'
+    )
+    (checks_dir / "check-cov4.sh").chmod(0o755)
+    rules = (
+        RuleEntry(
+            id="COV4",
+            gate="cov4",
+            check="cov4",
+            summary="cov4",
+            script="check-cov4.sh",
+            subprocess_arg_env="MY_COVERAGE_XML_4",
+            subprocess_arg_default="coverage.xml",
+        ),
+    )
+    monkeypatch.delenv("MY_COVERAGE_XML_4", raising=False)
+
+    def declining_hook(_entry: RuleEntry) -> ConditionalResult | None:
+        return None
+
+    verdict = run(
+        rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, conditional_check=declining_hook
+    )
+    assert verdict.ok  # the hook declined; the built-in default path resolved + exists
 
 
 # --------------------------------------------------------------------------- #
@@ -1243,3 +1574,14 @@ def test_write_skip_report_is_written_even_when_nothing_skipped(tmp_path: Path) 
 def test_write_skip_report_without_a_path_writes_nothing(tmp_path: Path) -> None:
     write_skip_report(None, Verdicts(ran=1, skipped=1, skips={"B1": "why"}))
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_bounded_process_that_outruns_its_deadline_reports_the_timeout_code(tmp_path: Path) -> None:
+    """A deadline must kill the whole group and be distinguishable from a test failure."""
+    result = run_bounded_process(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+        timeout=0.5,
+    )
+
+    assert result.returncode == 124

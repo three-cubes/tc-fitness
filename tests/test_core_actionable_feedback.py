@@ -69,6 +69,37 @@ def test_syntax_error_is_not_a_violation(tmp_path: Path) -> None:
     assert module_has_unactionable_error(p, markers=("fix:",)) is False
 
 
+def test_broken_utf8_source_is_not_a_violation(tmp_path: Path) -> None:
+    path = tmp_path / "broken-encoding.py"
+    path.write_bytes(b"errors.append('bad')\n\xff")
+
+    assert module_has_unactionable_error(path, markers=("fix:",)) is False
+
+
+def test_extend_checks_each_literal_in_a_container(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "extended.py",
+        'def check(errors, detail):\n    errors.extend(["fix: repaired", f"still broken: {detail}"])\n',
+    )
+
+    assert module_has_unactionable_error(path, markers=("fix:", "next:", "run:")) is True
+
+
+def test_non_literal_arguments_and_other_receivers_are_ignored(tmp_path: Path) -> None:
+    path = _seed(
+        tmp_path,
+        "dynamic.py",
+        "def check(errors, error_results, render):\n"
+        "    errors.append(42)\n"
+        "    errors.append(render())\n"
+        "    errors.extend([])\n"
+        "    error_results.messages.append('validation failed')\n",
+    )
+
+    assert module_has_unactionable_error(path, markers=("fix:",)) is False
+
+
 def test_markers_are_config_driven(tmp_path: Path) -> None:
     body = 'def c(errors):\n    errors.append("do: thing")\n'
     p = _seed(tmp_path, "m.py", body)
