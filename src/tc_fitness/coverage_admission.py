@@ -301,6 +301,22 @@ def receipt_failures(root: Path, config: dict[str, Any]) -> dict[str, str]:
     return {".": "; ".join(messages)} if messages else {}
 
 
+#: Wall-clock backstop for one instrumented measurement run.
+#:
+#: This is a hang detector, not a budget. A mutation campaign trades time for
+#: assurance — stop it early and you simply evaluate fewer mutants — so its
+#: bound is derived from measurement and tuned close to the work. A coverage
+#: measurement has no such trade: the suite either completes and yields
+#: evidence, or it is killed and yields none. A bound set near a legitimate
+#: run therefore buys nothing and costs false failures, so this one sits far
+#: above any real run and only a genuinely stuck process reaches it.
+#:
+#: The transaction measures base and candidate concurrently on one machine, so
+#: a legitimate run already carries the cost of two instrumented suites
+#: competing for the same cores.
+MEASUREMENT_BACKSTOP_SECONDS = 3600
+
+
 class CoverageExecutionError(ValueError):
     """A terminal native measurement failure with retained structured diagnostics."""
 
@@ -391,7 +407,7 @@ def produce_coverage(
             [str(interpreter), "-I", "-m", "coverage", args[0], "--rcfile", str(settings), *args[1:]],
             cwd=root,
             env=environment,
-            timeout=600,
+            timeout=MEASUREMENT_BACKSTOP_SECONDS,
             stdout_path=output / (args[0] + ".stdout.log"),
             stderr_path=output / (args[0] + ".stderr.log"),
         )

@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tc_fitness import coverage_admission
+
 REPOSITORY = Path(__file__).resolve().parents[1]
 
 pytestmark = pytest.mark.integration
@@ -109,3 +111,30 @@ def test_pull_request_ci_has_one_exact_commit_coverage_transaction() -> None:
         "distribution-qualification",
         "changed-mutation",
     }
+
+
+def test_the_coverage_job_outlasts_the_measurement_backstop() -> None:
+    """The measurement must fail with evidence, never be cancelled without it.
+
+    A run killed by the runner leaves the operator a cancelled job; a run
+    stopped by the producer leaves a transaction receipt naming the side and
+    phase that stalled. Whichever bound is smaller decides which of those the
+    operator gets, so the producer's must be the one that fires first.
+    """
+    workflow = yaml.safe_load((REPOSITORY / ".github/workflows/ci.yml").read_text())
+    declared = workflow["jobs"]["coverage-assurance"].get("timeout-minutes")
+    if declared is None:
+        # No declaration means GitHub's six-hour default, far above the backstop.
+        return
+
+    assert int(declared) * 60 > coverage_admission.MEASUREMENT_BACKSTOP_SECONDS
+
+
+def test_the_measurement_backstop_is_not_a_budget() -> None:
+    """A backstop tuned near a real run turns slow into failed.
+
+    Both sides of the transaction are measured concurrently on one machine, so
+    a legitimate run already pays for two instrumented suites sharing cores.
+    The backstop must leave room for that rather than assume a quiet runner.
+    """
+    assert coverage_admission.MEASUREMENT_BACKSTOP_SECONDS >= 3600
