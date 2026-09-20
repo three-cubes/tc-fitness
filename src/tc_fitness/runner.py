@@ -64,9 +64,11 @@ import contextlib
 import importlib
 import inspect
 import io
+import json
 import os
 import subprocess
 import sys
+import threading
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -264,6 +266,76 @@ def make_env_path_conditional_check(
     return _hook
 
 
+#: Exit code a detector uses to declare "I did not run" rather than "I passed".
+#: 77 is the long-standing Automake convention for a skipped test, so a detector
+#: that already speaks it needs no change. This is the signal that works on EVERY
+#: dispatch path, including the non-capturing one where the parent never sees the
+#: child's output.
+SKIP_EXIT_CODE = 77
+
+
+def declared_skip_reason(entry: RuleEntry, captured: str) -> str | None:
+    """Return the reason a detector gave for skipping itself, or ``None``.
+
+    A detector that cannot run — its tool is absent, its input has not been
+    produced, its env gate is unset — conventionally prints ``SKIP <name>: why``
+    and exits 0. Exiting 0 makes that indistinguishable from a real pass, so the
+    gate reports green while the check examined nothing. This recovers the
+    detector's own words from its captured output.
+
+    The marker must name the rule it belongs to. A bare ``SKIP`` substring is not
+    enough: a check whose *subject* is skipping (taz's ``test_skip_rationale``
+    reports on skipped tests) would otherwise classify itself as skipped and
+    disappear from the ledger — turning a reporting fix into a new blind spot.
+
+    Only the capturing dispatch paths can use this; :data:`SKIP_EXIT_CODE` is the
+    universal signal.
+    """
+    names = [n for n in (entry.id, entry.check) if n]
+    for raw in captured.splitlines():
+        line = raw.strip()
+        if not line.startswith("SKIP"):
+            continue
+        rest = line[len("SKIP") :].lstrip(" :\t")
+        for name in names:
+            if not rest.startswith(name):
+                continue
+            reason = rest[len(name) :].strip().lstrip(":").strip()
+            reason = reason[1:-1].strip() if reason.startswith("(") and reason.endswith(")") else reason
+            return reason or "no reason given"
+    return None
+
+
+#: Reasons collected during one :func:`run`, keyed by rule id. The verdict sites
+#: return ``int | None`` and the parallel path hands results back across threads,
+#: so the reason has no return channel of its own; this is the run-scoped
+#: collector, reset at the top of every dispatch and drained into the Verdicts.
+_SKIP_REASONS: dict[str, str] = {}
+_SKIP_REASONS_LOCK = threading.Lock()
+
+
+def _record_skip(entry_id: str, reason: str) -> None:
+    with _SKIP_REASONS_LOCK:
+        _SKIP_REASONS[entry_id] = reason
+
+
+def _reset_skips() -> None:
+    with _SKIP_REASONS_LOCK:
+        _SKIP_REASONS.clear()
+
+
+def _drain_skips() -> dict[str, str]:
+    with _SKIP_REASONS_LOCK:
+        return dict(_SKIP_REASONS)
+
+
+def _skip_verdict(entry: RuleEntry, reason: str) -> None:
+    """Print one skip verdict and record its reason. Returns ``None`` — the
+    value every dispatch path already treats as "skipped, do not count as ran"."""
+    _record_skip(entry.id, reason)
+    print(f"{_YELLOW}SKIP [{entry.id}]{_RESET} {entry.summary[:64]} — {reason}")
+
+
 @dataclass
 class Verdicts:
     """The aggregate result of a run — the programmatic return of :func:`run`.
@@ -273,11 +345,15 @@ class Verdicts:
         skipped: how many rules were intentionally skipped (out of staged
             scope, or a conditional check whose input was absent).
         failures: the ids of the rules that failed, in dispatch order.
+        skips: reason per rule that declared itself skipped, keyed by rule id.
+            A rule counted here did NOT examine its subject, so its green is the
+            absence of a verdict rather than a passing one.
     """
 
     ran: int = 0
     skipped: int = 0
     failures: list[str] = field(default_factory=list)
+    skips: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -495,7 +571,7 @@ def _print_paved_road(entry: RuleEntry, cfg: RunnerConfig) -> None:
         print(footer)
 
 
-def _run_one_inprocess(entry: RuleEntry, cfg: RunnerConfig) -> int:
+def _run_one_inprocess(entry: RuleEntry, cfg: RunnerConfig) -> int | None:
     """Dispatch ``entry``'s pure-python check IN-PROCESS, sharing the context.
 
     Prints the ``run`` / ``PASS`` / ``FAIL`` framing the subprocess path prints,
@@ -504,6 +580,10 @@ def _run_one_inprocess(entry: RuleEntry, cfg: RunnerConfig) -> int:
     ``BaseException``; a raised exception OR a ``SystemExit`` is converted to a
     FAIL with the traceback, exactly as a non-zero subprocess exit would have
     been — one crashing check never aborts the ledger.
+
+    Returns ``None`` when the check declared itself skipped, matching the
+    subprocess paths: the caller already reads ``None`` as "did not run" and
+    keeps it out of the passed count.
     """
     script = resolve_script(entry)
     print(f"{_YELLOW}run [{entry.id}]{_RESET} {script}")
@@ -540,7 +620,14 @@ def _run_one_inprocess(entry: RuleEntry, cfg: RunnerConfig) -> int:
     if captured_err:
         sys.stderr.write(captured_err)
 
+    if rc == SKIP_EXIT_CODE:
+        _skip_verdict(entry, declared_skip_reason(entry, captured_out) or "declared skipped")
+        return None
     if rc == 0:
+        reason = declared_skip_reason(entry, captured_out)
+        if reason is not None:
+            _skip_verdict(entry, reason)
+            return None
         print(f"{_GREEN}PASS [{entry.id}]{_RESET} {entry.summary[:88]}")
         return 0
     suffix = "" if crashed else f" (exit {rc})"
@@ -647,6 +734,13 @@ def _run_one_subprocess(entry: RuleEntry, cfg: RunnerConfig) -> int | None:
         print(f"{_RED}FAIL [{entry.id}]{_RESET} — could not launch {script}: {exc}")
         return 1
 
+    if rc == SKIP_EXIT_CODE:
+        # This path streams the child's output straight to the inherited fd to
+        # keep interleaving byte-identical, so the parent never sees it and the
+        # printed SKIP marker is unreadable here. The exit code is the whole
+        # signal, which is why the contract has one.
+        _skip_verdict(entry, "declared skipped (exit 77)")
+        return None
     if rc == 0:
         print(f"{_GREEN}PASS [{entry.id}]{_RESET} {entry.summary[:88]}")
         return 0
@@ -710,7 +804,14 @@ def _replay_subprocess_verdict(
         sys.stdout.write(out if out.endswith("\n") else out + "\n")
     if err:
         sys.stderr.write(err if err.endswith("\n") else err + "\n")
+    if rc == SKIP_EXIT_CODE:
+        _skip_verdict(entry, declared_skip_reason(entry, out) or "declared skipped")
+        return None
     if rc == 0:
+        reason = declared_skip_reason(entry, out)
+        if reason is not None:
+            _skip_verdict(entry, reason)
+            return None
         print(f"{_GREEN}PASS [{entry.id}]{_RESET} {entry.summary[:88]}")
         return 0
     print(f"{_RED}FAIL [{entry.id}]{_RESET} {entry.summary[:88]} (exit {rc})")
@@ -824,6 +925,7 @@ def _dispatch(entries: list[RuleEntry], cfg: RunnerConfig) -> Verdicts:
         seen_scripts.add(script)
         deduped.append(entry)
 
+    _reset_skips()
     verdict = Verdicts()
     parallel_verdicts: dict[str, int | None] = {}
     if cfg.parallel_subprocess:
@@ -847,6 +949,7 @@ def _dispatch(entries: list[RuleEntry], cfg: RunnerConfig) -> Verdicts:
             if result != 0:
                 verdict.failures.append(entry.id)
 
+    verdict.skips = _drain_skips()
     _print_aggregate(verdict)
     return verdict
 
@@ -890,6 +993,7 @@ def _dispatch_staged(
     ``skip [id] — <reason>`` line (auditable, never silent); RUN rules dispatch
     exactly as ``--all`` does."""
     decisions = _staged_decisions(rules, staged, cfg)
+    _reset_skips()
     verdict = Verdicts()
     ctx = CheckContext(repo_root=cfg.repo_root)
     with ctx.install():
@@ -906,11 +1010,13 @@ def _dispatch_staged(
             if result != 0:
                 verdict.failures.append(entry.id)
 
+    verdict.skips = _drain_skips()
     print()
     print(
         f"{_YELLOW}staged selection:{_RESET} {verdict.ran} ran, {verdict.skipped} skipped "
         "(not in staged scope or report absent)"
     )
+    _print_declared_skips(verdict)
     if verdict.failures:
         print(
             f"{_RED}=== Architecture fitness functions FAILED ==={_RESET} "
@@ -919,6 +1025,24 @@ def _dispatch_staged(
     else:
         print(f"{_GREEN}=== All {verdict.ran} staged architecture fitness functions passed ==={_RESET}")
     return verdict
+
+
+def _print_declared_skips(verdict: Verdicts) -> None:
+    """Name every rule that declared itself skipped, under the aggregate banner.
+
+    Without this the banner counts only the rules that ran, so a catalogue where
+    a dozen detectors found no tool and no input reads exactly like one where
+    every detector examined its subject and approved it.
+    """
+    if not verdict.skips:
+        return
+    print()
+    print(
+        f"{Colours.YELLOW}=== {len(verdict.skips)} rule(s) declared themselves skipped "
+        f"— they did NOT examine their subject ==={Colours.RESET}"
+    )
+    for rule_id, reason in sorted(verdict.skips.items()):
+        print(f"  {rule_id}: {reason}")
 
 
 def print_aggregate(verdict: Verdicts) -> None:
@@ -938,6 +1062,7 @@ def print_aggregate(verdict: Verdicts) -> None:
         print(
             f"{Colours.GREEN}=== All {verdict.ran} architecture fitness functions passed ==={Colours.RESET}"
         )
+    _print_declared_skips(verdict)
 
 
 # Back-compat private alias (kept until taz migrates off the private import).
@@ -1045,6 +1170,30 @@ def run(
     return _dispatch(_select_all(rules), cfg)
 
 
+def write_skip_report(path: Path | None, verdict: Verdicts) -> None:
+    """Write the rules that declared themselves skipped, and why, as JSON.
+
+    A run's skips are the gap between what the catalogue promises and what it
+    actually measured, and that gap moves with the environment — a tool absent
+    from one runner, a report not yet produced on another. Writing it to a file
+    lets the gap be published with the run and reviewed, instead of living in
+    scrollback nobody reads.
+
+    The file is written even when nothing skipped, so a consumer can tell "no
+    rule skipped" from "the report was never produced" — the same distinction
+    this whole contract exists to restore. ``None`` writes nothing.
+    """
+    if path is None:
+        return
+    payload = {
+        "ran": verdict.ran,
+        "skipped": verdict.skipped,
+        "declared_skips": [{"rule": rid, "reason": reason} for rid, reason in sorted(verdict.skips.items())],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main_cli(
     rules: tuple[RuleEntry, ...],
     argv: list[str] | None = None,
@@ -1098,6 +1247,11 @@ def main_cli(
     )
     group.add_argument("--gate", metavar="ID", help="run one rule by catalogue id (e.g. F26)")
     parser.add_argument(
+        "--skip-report",
+        metavar="PATH",
+        help="write the rules that declared themselves skipped, and why, as JSON",
+    )
+    parser.add_argument(
         "--establish-baseline",
         action="store_true",
         help="run dispatched core: entries in baseline-adoption mode (freeze today's offenders)",
@@ -1122,10 +1276,13 @@ def main_cli(
     if post_parse is not None:
         common.update(cast(_RunKwargs, post_parse(args)))
 
+    report_path = Path(args.skip_report) if args.skip_report else None
+
     if args.gate:
         verdict = run(rules, mode="gate", gate_id=args.gate, **common)
         if verdict.failures == ["<no-such-gate>"]:
             return 2
+        write_skip_report(report_path, verdict)
         return verdict.exit_code
 
     if args.staged or args.changed_files_from:
@@ -1139,18 +1296,25 @@ def main_cli(
                 file=sys.stderr,
             )
             return 2
-        return run(
+        staged_verdict = run(
             rules,
             mode="staged",
             staged_files=selected_staged_files,
             **common,
-        ).exit_code
+        )
+        write_skip_report(report_path, staged_verdict)
+        return staged_verdict.exit_code
 
-    return run(rules, mode="all", **common).exit_code
+    all_verdict = run(rules, mode="all", **common)
+    write_skip_report(report_path, all_verdict)
+    return all_verdict.exit_code
 
 
 __all__ = [
     "Colours",
+    "SKIP_EXIT_CODE",
+    "declared_skip_reason",
+    "write_skip_report",
     "Verdicts",
     "RunnerConfig",
     "PavedRoadFooter",
