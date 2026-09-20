@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -36,11 +37,20 @@ def payload_digest(value: object) -> str:
 
 
 def tree_digest(root: Path, *, ignore_caches: bool = False) -> str:
-    """Bind names, bytes, file permissions and empty directory presence."""
+    """Bind names, bytes, object kind, permissions and empty directory presence.
+
+    The kind is bound as well as the permissions because everything that is not
+    a regular file digests its content as ``None``. Without it a directory and a
+    FIFO sharing a permission bit pattern produce identical entries, so a
+    fixture could be swapped for the other at the same path mid-execution and
+    the immutability check would still agree. ``lstat`` reads the object at the
+    path rather than what a symlink points at.
+    """
     files = {
         path.relative_to(root).as_posix(): {
             "content": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
-            "mode": path.stat().st_mode & 0o777,
+            "kind": stat.S_IFMT(path.lstat().st_mode),
+            "mode": path.lstat().st_mode & 0o777,
         }
         for path in sorted(root.rglob("*"))
         if not (ignore_caches and "__pycache__" in path.relative_to(root).parts)
@@ -174,6 +184,16 @@ def _fixture_path(manifest: Path, name: str) -> Path:
     ]
     if any(path.is_symlink() for path in ancestors) or any(path.is_symlink() for path in fixture.rglob("*")):
         raise CheckContractError("contract fixtures cannot contain symlinks")
+    # A `.git` FILE is a pointer, not a repository: `gitdir: /elsewhere` sends
+    # every Git-backed check off to read commits and diffs from a mutable
+    # repository outside the fixture, while both fixture digests only ever see
+    # the unchanged pointer text. Rejecting symlinks does not cover it, because
+    # the pointer is an ordinary regular file.
+    for pointer in (path for path in fixture.rglob(".git") if path.is_file()):
+        raise CheckContractError(
+            "contract fixtures cannot contain a Git directory pointer: "
+            + pointer.relative_to(fixture).as_posix()
+        )
     if (fixture / ".architecture" / "baseline").exists():
         raise CheckContractError("contract fixtures cannot contain a suppression baseline")
     return fixture
