@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from tc_fitness.baseline import establish_baseline as _establish_baseline
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -268,12 +269,17 @@ class UntrustedAutomationBoundary(FitnessRule):
         workflow. This check therefore evaluates the current workflow state on
         every run and deliberately does not consult a baseline.
         """
-        violations = sorted(str(path) for path in self.collect_violations())
+        violations = sorted(self.collect_violations(), key=lambda path: str(path))
         if not violations:
             print(f"ok [arch:{self._name}] — autonomous workflows are isolated from credentials.")
             return 0
         print(f"FAIL [arch:{self._name}] — autonomous workflow crosses a credential boundary:")
         for path in violations:
+            report_finding(
+                self.name,
+                self._repo_relative(path).as_posix(),
+                "autonomous workflow crosses a credential boundary",
+            )
             print(f"  {path}")
         print()
         print(self.remediation)

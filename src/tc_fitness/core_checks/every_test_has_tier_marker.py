@@ -15,7 +15,9 @@ Detection (AST walk per file):
   2. Otherwise every ``test_*`` function must carry a matching
      ``@pytest.mark.<tier>`` decorator.
   3. A file with no ``test_*`` functions (a fixtures/support module) passes.
-  4. With ``require_module_marker``, every test module must declare exactly one
+  4. Files below a directory carrying ``contract.yaml`` are public-contract
+       fixture data, so are not independently classified as repository tests.
+  5. With ``require_module_marker``, every test module must declare exactly one
      module-level tier; function-level markers alone do not satisfy the rule.
 
 Canonical mode checks a deliberately small source grammar, not Python's
@@ -37,7 +39,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from tc_fitness.core_checks import run_core_check
+from tc_fitness.check_contracts import registered_contract_directory
+from tc_fitness.core_checks import CORE_CHECKS, run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
 
@@ -326,11 +329,30 @@ class EveryTestHasTierMarker(FitnessRule):
         return Path(rel).name.startswith("test_")
 
     def file_has_violation(self, path: Path) -> bool:
+        if self._is_registered_contract_fixture(path):
+            return False
         return file_missing_tier_marker(
             path,
             tiers=frozenset(self.tier_markers),
             require_module_marker=self.require_module_marker,
         )
+
+    def _is_registered_contract_fixture(self, path: Path) -> bool:
+        """Treat a manifest-bound case tree as test data, never test code.
+
+        A directory name alone cannot hide a test. The nearest contract must
+        parse under the public schema, bind its directory/check identity, and
+        explicitly name the case fixture containing ``path``.
+        """
+        resolved = path.resolve()
+        for parent in resolved.parents:
+            if parent == self._repo_root.parent:
+                break
+            contract = registered_contract_directory(parent, CORE_CHECKS)
+            if contract is None:
+                continue
+            return any(resolved.is_relative_to((parent / case.fixture).resolve()) for case in contract.cases)
+        return False
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> EveryTestHasTierMarker:

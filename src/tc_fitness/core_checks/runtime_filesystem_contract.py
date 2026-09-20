@@ -10,6 +10,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, cast
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks._runtime_contracts import (
     ContractDocuments,
     ContractFinding,
@@ -20,6 +21,7 @@ from tc_fitness.core_checks._runtime_contracts import (
     is_component_pattern_prefix,
     is_integer_identity,
     is_path_identity_segment,
+    render_findings,
     sort_findings,
 )
 from tc_fitness.core_checks.runtime_evidence_contract import (
@@ -1667,6 +1669,20 @@ class RuntimeFilesystemContract(RuntimeContractRule):
             max_age_seconds=self._evidence_contract.max_age_seconds,
         )
         return sort_findings((*filesystem_findings, *evidence_findings))
+
+    def run(self) -> int:
+        """Emit each declaration defect into the structured contract ledger."""
+        findings = self.collect_findings()
+        for finding in findings:
+            report_finding(
+                finding.code,
+                str(finding.source.relative_to(self._repo_root)),
+                finding.message,
+            )
+        if not findings:
+            return 0
+        render_findings(findings)
+        return 1
 
 
 def build(

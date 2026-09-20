@@ -264,6 +264,8 @@ class OsvScannerSca:
             )
             return 1
         if not passed:
+            for finding in findings:
+                report_finding("vulnerability", ".", f"OSV advisory {finding}")
             print(
                 f"FAIL osv_scanner_sca ({len(findings)} vulnerable advisory id(s)): "
                 f"{', '.join(findings)}. fix: update affected dependencies; "

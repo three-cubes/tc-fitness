@@ -1,0 +1,8 @@
+name: CI
+on: push
+jobs:
+  advisory:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo inspect
+        continue-on-error: true # non-blocking: advisory inspection only

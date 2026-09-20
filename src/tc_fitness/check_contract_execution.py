@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -21,7 +22,12 @@ from uuid import UUID, uuid4
 from tc_fitness.baseline import baseline_free_execution
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.check_contract_policy import validate_contract_configuration
-from tc_fitness.check_contracts import CheckContractError, FindingExpectation, load_check_contract
+from tc_fitness.check_contracts import (
+    CheckContractError,
+    FindingExpectation,
+    GitCaseEnvironment,
+    load_check_contract,
+)
 from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks import CORE_CHECKS
 from tc_fitness.runner import run
@@ -90,6 +96,7 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
         shutil.copytree(fixture, repo)
         if tree_digest(repo) != fixture_digest:
             raise CheckContractError("fixture changed while copying the execution snapshot")
+        _materialize_git_fixture(repo, case.environment)
         with (
             _case_environment(case.environment.path, Path(temporary)),
             capture_check_evidence() as evidence,
@@ -120,6 +127,9 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
             "contract_digest": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(),
             "case_digest": payload_digest(asdict(case)),
             "fixture_digest": fixture_digest,
+            "evidence_class": contract.evidence_class,
+            "live_qualification": contract.live_qualification,
+            "release_admission": contract.release_admission,
             "candidate": candidate,
             "execution_id": str(uuid4()),
             "started_at": started,
@@ -153,6 +163,113 @@ def _portable_configuration(value: object) -> None:
             _portable_configuration(item)
     elif isinstance(value, str) and (Path(value).is_absolute() or ".." in Path(value).parts):
         raise CheckContractError("contract configuration paths must be portable and fixture-relative")
+
+
+_GIT_FIXTURE_TIMEOUT_SECONDS = 30
+_GIT_FIXTURE_MAX_BYTES = 1024 * 1024
+
+
+#: Repository-control variables Git itself enumerates via
+#: ``git rev-parse --local-env-vars``. Inherited from the caller, any one of
+#: them redirects a fixture command at an external repository —
+#: ``GIT_DIR=/path/to/repo/.git`` reroutes the fixture's own ``init`` and
+#: ``fast-import`` into the caller's objects and refs. Listed literally rather
+#: than queried so materialisation does not depend on the Git being shelled to.
+_GIT_LOCAL_ENV_VARS = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+)
+
+
+def _fixture_git_environment() -> dict[str, str]:
+    """Inherit the caller's environment minus anything that relocates a repository."""
+    environment = {key: value for key, value in os.environ.items() if key not in _GIT_LOCAL_ENV_VARS}
+    environment.update(
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+        GCM_INTERACTIVE="Never",
+    )
+    return environment
+
+
+def _run_fixture_git(
+    repo: Path,
+    arguments: list[str],
+    *,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one bounded, non-interactive Git fixture operation."""
+    try:
+        # argv0 and every subcommand are internal constants; the only manifest
+        # value reaching argv is the strictly validated refs/heads checkout.
+        result = subprocess.run(  # noqa: S603
+            ["git", *arguments],  # noqa: S607
+            cwd=repo,
+            input=input_bytes,
+            capture_output=True,
+            check=False,
+            timeout=_GIT_FIXTURE_TIMEOUT_SECONDS,
+            env=_fixture_git_environment(),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise CheckContractError(f"cannot materialise Git contract fixture: {type(exc).__name__}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        reason = detail[-1] if detail else f"git exited {result.returncode}"
+        raise CheckContractError(f"cannot materialise Git contract fixture: {reason}")
+    return result
+
+
+def _materialize_git_fixture(
+    repo: Path,
+    environment: object,
+) -> None:
+    """Replace a bound ``.contract`` input with its deterministic Git tree."""
+    if not isinstance(environment, GitCaseEnvironment):
+        return
+    history = repo / environment.git.history
+    try:
+        if not history.is_file() or history.is_symlink():
+            raise CheckContractError("Git contract history must be a regular file")
+        if history.stat().st_size > _GIT_FIXTURE_MAX_BYTES:
+            raise CheckContractError("Git contract history exceeds the 1 MiB limit")
+        stream = history.read_bytes()
+    except OSError as exc:
+        raise CheckContractError(f"cannot read Git contract history: {exc}") from exc
+    contract_root = repo / ".contract"
+    shutil.rmtree(contract_root)
+    if any(repo.iterdir()):
+        raise CheckContractError("Git contract fixture may contain only its .contract history input")
+
+    _run_fixture_git(repo, ["init", "--quiet", "--object-format=sha1"])
+    _run_fixture_git(repo, ["fast-import", "--quiet"], input_bytes=stream)
+    _run_fixture_git(repo, ["rev-parse", "--verify", f"{environment.git.checkout}^{{commit}}"])
+    _run_fixture_git(repo, ["checkout", "--quiet", "--force", "--detach", environment.git.checkout])
+    modes = _run_fixture_git(repo, ["ls-files", "--stage", "-z"]).stdout.split(b"\x00")
+    invalid_modes = sorted(
+        entry.split(maxsplit=1)[0].decode("ascii", "replace")
+        for entry in modes
+        if entry and entry.split(maxsplit=1)[0] not in {b"100644", b"100755"}
+    )
+    if invalid_modes:
+        raise CheckContractError(f"Git contract tree contains unsupported modes: {', '.join(invalid_modes)}")
+    status = _run_fixture_git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]).stdout
+    if status:
+        raise CheckContractError("materialised Git contract fixture is not clean")
 
 
 @contextmanager
@@ -263,6 +380,9 @@ def validate_contract_ledger(
             "case_digest": payload_digest(asdict(case)),
             "contract_digest": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(),
             "fixture_digest": tree_digest(_fixture_path(manifest, case.fixture)),
+            "evidence_class": contract.evidence_class,
+            "live_qualification": contract.live_qualification,
+            "release_admission": contract.release_admission,
             "candidate": candidate_identity(),
             "expected": json.loads(json.dumps(asdict(case.expected))),
             "environment": asdict(case.environment),

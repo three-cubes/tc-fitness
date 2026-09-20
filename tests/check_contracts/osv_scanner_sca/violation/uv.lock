@@ -1,0 +1,5 @@
+version = 1
+
+[[package]]
+name = "fixture-vulnerable"
+version = "1.0.0"

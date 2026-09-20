@@ -13,12 +13,36 @@ a sandbox against a plugin that disables assurance or changes markers later.
 from __future__ import annotations
 
 from collections.abc import Generator, Iterable, Sequence
+from pathlib import Path
 
 import pytest
 
+from tc_fitness.check_contracts import registered_contract_directory
+from tc_fitness.core_checks import CORE_CHECKS
 from tc_fitness.core_checks.every_test_has_tier_marker import DEFAULT_TIER_MARKERS
 
 _COLLECTED_ITEMS = pytest.StashKey[list[pytest.Item]]()
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Exclude only the fixture directories a manifest actually declares.
+
+    The registry directory is not itself the boundary. Ignoring it would also
+    hide any real ``test_*.py`` authored beside the declared fixtures, since
+    ``registered_contract_directory`` verifies that each declared fixture
+    exists without binding or rejecting the other files in the directory. The
+    ignore therefore applies to the declared fixture subdirectories, which is
+    the same scope the static tier check exempts.
+    """
+    del config
+    resolved = collection_path.resolve()
+    for registry in (resolved, *resolved.parents):
+        contract = registered_contract_directory(registry, CORE_CHECKS)
+        if contract is None:
+            continue
+        declared = {(registry / case.fixture).resolve() for case in contract.cases}
+        return any(resolved == fixture or fixture in resolved.parents for fixture in declared) or None
+    return None
 
 
 def effective_tier_violations(items: Iterable[pytest.Item]) -> tuple[str, ...]:

@@ -2,23 +2,150 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tc_fitness.check_contracts import (
     CheckContractError,
     load_check_contract,
     validate_contract_registry,
 )
+from tc_fitness.core_checks import CORE_CHECKS
+from tc_fitness.runner import run_contract_case
 
 pytestmark = pytest.mark.integration
+
+ROOT = Path(__file__).resolve().parents[1]
+SHIPPED_CONTRACTS = ROOT / "tests" / "check_contracts"
 
 
 def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_shipped_core_registry_has_exact_behavioural_contract_coverage() -> None:
+    contracts = validate_contract_registry(CORE_CHECKS, SHIPPED_CONTRACTS)
+
+    assert len(contracts) == len(CORE_CHECKS) == 53
+    assert {contract.check for contract in contracts} == set(CORE_CHECKS)
+
+
+def test_shipped_registry_rejects_a_sabotaged_manifest_binding(tmp_path: Path) -> None:
+    for manifest in SHIPPED_CONTRACTS.glob("*/contract.yaml"):
+        destination = tmp_path / manifest.parent.name / "contract.yaml"
+        destination.parent.mkdir()
+        destination.write_bytes(manifest.read_bytes())
+    target = tmp_path / "license_present" / "contract.yaml"
+    target.write_text(
+        target.read_text().replace("check: core:license_present", "check: core:path_naming"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CheckContractError, match=r"license_present/contract\.yaml"):
+        validate_contract_registry(CORE_CHECKS, tmp_path)
+
+
+def test_public_contract_runner_rejects_a_sabotaged_expected_result(tmp_path: Path) -> None:
+    source = SHIPPED_CONTRACTS / "license_present"
+    sabotaged = tmp_path / "license_present"
+    shutil.copytree(source, sabotaged)
+    manifest = sabotaged / "contract.yaml"
+    value = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    value["cases"][1]["expected"]["findings"][0]["message_contains"] = "impossible result"
+    manifest.write_text(yaml.safe_dump(value), encoding="utf-8")
+
+    with pytest.raises(CheckContractError, match="ledger findings do not match"):
+        run_contract_case(manifest, "violation", tmp_path / "ledger.json")
+
+
+def test_repository_collection_executes_contract_drivers_without_collecting_fixture_tests() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--strict-markers",
+            "-p",
+            "tc_fitness.pytest_tiers",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "tests/test_check_contracts_static_batch.py::" in result.stdout
+    assert "tests/test_check_contracts_repository.py::" in result.stdout
+    assert "tests/check_contracts/" not in result.stdout
+
+
+def test_invalid_contract_manifest_cannot_hide_an_unclassified_test(
+    tmp_path: Path,
+) -> None:
+    contract = tmp_path / "tests" / "check_contracts" / "example"
+    _write(
+        contract / "contract.yaml",
+        """schema: tc.fitness/check-contract/v1
+check: core:example
+config: {}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: example
+          path: test_hidden.py
+          message_contains: intended violation
+dependencies: []
+""",
+    )
+    (contract / "compliant").mkdir()
+    _write(contract / "violation" / "test_hidden.py", "def test_hidden(): pass\n")
+    _write(
+        tmp_path / "tests" / "test_control.py",
+        "import pytest\npytestmark = pytest.mark.integration\ndef test_control(): pass\n",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--strict-markers",
+            "-o",
+            "markers=integration: repository composition test",
+            "-p",
+            "tc_fitness.pytest_tiers",
+            str(tmp_path / "tests"),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert "test_hidden.py::test_hidden" in result.stdout
+    assert "items must have exactly one effective tier" in result.stderr
 
 
 def test_loads_complete_contract_with_explicit_exit_expectations(tmp_path: Path) -> None:
@@ -55,6 +182,38 @@ dependencies: []
     assert [case.id for case in contract.cases] == ["compliant", "violation"]
     assert contract.cases[1].expected.exit == "nonzero"
     assert contract.cases[1].expected.findings[0].path == "src/broken.py"
+
+
+def test_manifest_cannot_grant_its_own_release_admission(tmp_path: Path) -> None:
+    """Only protected release receipts, never fixture-authored metadata, grant admission."""
+    manifest = _write(
+        tmp_path / "example_check" / "contract.yaml",
+        """
+schema: tc.fitness/check-contract/v1
+check: core:example_check
+evidence_class: live
+live_qualification: qualified
+release_admission: true
+config: {}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: example-check
+          path: src/broken.py
+          message_contains: required behaviour is missing
+dependencies: []
+""",
+    )
+
+    with pytest.raises(CheckContractError, match="cannot grant release admission"):
+        load_check_contract(manifest)
 
 
 def test_rejects_case_without_exit_expectation(tmp_path: Path) -> None:

@@ -103,6 +103,61 @@ def invoke(
     )
 
 
+def _fast_import_single_file(path: str, content: bytes) -> bytes:
+    """One deterministic commit plus a remote base ref for a real Git fixture."""
+    return (
+        b"blob\nmark :1\ndata "
+        + str(len(content)).encode()
+        + b"\n"
+        + content
+        + b"\ncommit refs/heads/candidate\nmark :2\n"
+        + b"author Contract Fixture <fixture@example.invalid> 0 +0000\n"
+        + b"committer Contract Fixture <fixture@example.invalid> 0 +0000\n"
+        + b"data 7\ninitial\n"
+        + f"M 100644 :1 {path}\n\n".encode()
+        + b"reset refs/remotes/origin/main\nfrom :2\n\n"
+    )
+
+
+def test_public_contract_materialises_bound_git_history(tmp_path: Path) -> None:
+    manifest = make_contract(tmp_path)
+    fixture = tmp_path / "compliant"
+    for path in sorted((fixture / "src").rglob("*"), reverse=True):
+        if path.is_file():
+            path.unlink()
+        else:
+            path.rmdir()
+    (fixture / "src").rmdir()
+    history = fixture / ".contract" / "git.fast-import"
+    history.parent.mkdir()
+    history.write_bytes(
+        _fast_import_single_file("src/example.py", b"# SPDX-License-Identifier: MIT\nvalue = 1\n")
+    )
+    data = yaml.safe_load(manifest.read_text())
+    data["cases"][0]["environment"] = {
+        "schema": "tc.fitness/check-environment/v2",
+        "path": "inherit",
+        "git": {
+            "schema": "tc.fitness/git-fixture/v1",
+            "history": ".contract/git.fast-import",
+            "checkout": "refs/heads/candidate",
+        },
+    }
+    manifest.write_text(yaml.safe_dump(data))
+    ledger = tmp_path / "git-ledger.json"
+
+    result = invoke(manifest, "compliant", ledger)
+
+    assert result.returncode == 0, result.stderr
+    evidence = json.loads(ledger.read_text())
+    assert evidence["actual"] == {"exit": "zero", "exit_code": 0, "findings": [], "status": "pass"}
+    assert evidence["environment"]["git"] == {
+        "checkout": "refs/heads/candidate",
+        "history": ".contract/git.fast-import",
+        "schema": "tc.fitness/git-fixture/v1",
+    }
+
+
 @pytest.mark.parametrize(
     ("case", "status", "exit_code"),
     [("compliant", "pass", 0), ("violation", "fail", 1), ("unavailable", "error", 2)],
@@ -548,6 +603,181 @@ def test_validator_rejects_unknown_case(tmp_path: Path) -> None:
         validate(manifest, "absent", tmp_path / "absent.json", 0, datetime.now(UTC))
 
 
+def _git(repo: Path, *args: str) -> None:
+    """Create real local history for public contract-runner controls."""
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+
+def _git_violation_fixture(root: Path, check: str) -> None:
+    """Build a candidate checkout whose real Git diff violates ``check``."""
+    root.mkdir(exist_ok=True)
+    _git(root, "init", "--initial-branch=base")
+    _git(root, "config", "user.name", "Contract Test")
+    _git(root, "config", "user.email", "contract@example.invalid")
+    source = root / "src" / ("api.py" if check == "contract_change_has_test" else "example.py")
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
+    if check == "new_code_coverage":
+        report = root / "reports" / "new-lines.xml"
+        report.parent.mkdir()
+        report.write_text(
+            "<coverage><sources><source>.</source></sources><packages><package><classes>"
+            '<class filename="src/example.py"><lines><line number="1" hits="1"/>'
+            '<line number="2" hits="0"/></lines></class>'
+            "</classes></package></packages></coverage>\n"
+        )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "base")
+    _git(root, "checkout", "-b", "candidate")
+    source.write_text("value = 1\nvalue = 2\n")
+    _git(root, "add", source.relative_to(root).as_posix())
+    _git(root, "commit", "-m", "candidate contract change")
+
+
+def _custom_finding_contract(root: Path, check: str) -> tuple[Path, tuple[str, str, str]]:
+    """Write a public-runner manifest and one real violating fixture per custom check."""
+    compliant = root / "compliant"
+    violation = root / "violation"
+    compliant.mkdir()
+    violation.mkdir()
+    unavailable = root / "unavailable"
+    expected: tuple[str, str, str]
+    if check == "ci_consumes_shared_gate":
+        (violation / ".github" / "workflows").mkdir(parents=True)
+        (violation / ".github" / "workflows" / "ci.yml").write_text("jobs: {}\n")
+        config: dict[str, object] = {}
+        expected = ("ci-consumes-shared-gate", ".", "NONE consumes the shared gate")
+    elif check == "harness_canon_reference":
+        (violation / "AGENTS.md").write_text("# local harness\n")
+        config = {"repo_type": "core"}
+        expected = (
+            "harness-canon-reference",
+            ".",
+            "no harness file carries the canonical-standards reference",
+        )
+    elif check == "contract_change_has_test":
+        _git_violation_fixture(violation, check)
+        config = {
+            "contract_surface": ["src/api.py"],
+            "test_globs": ["tests/**"],
+            "base_ref": "refs/heads/base",
+        }
+        expected = ("contract-change-has-test", "src/api.py", "contract surface changed with no test change")
+    elif check == "new_code_coverage":
+        _git_violation_fixture(violation, check)
+        config = {
+            "roots": ["src"],
+            "floor_pct": 90,
+            "coverage_report": "reports/new-lines.xml",
+            "base_ref": "refs/heads/base",
+        }
+        expected = ("new-code-coverage", "src/example.py", "new code below")
+    elif check == "untrusted_automation_boundary":
+        workflow = violation / ".github" / "workflows" / "analysis.yml"
+        workflow.parent.mkdir(parents=True)
+        workflow.write_text(
+            "jobs:\n"
+            "  analyse:\n"
+            "    permissions:\n"
+            "      id-token: write\n"
+            "    steps:\n"
+            "      - uses: example/analyse@v1\n"
+            "        with:\n"
+            "          contract: runtime/contracts/analysis.yaml\n"
+        )
+        config = {
+            "workflows": [".github/workflows/analysis.yml"],
+            "untrusted_action_prefixes": ["example/analyse@"],
+            "privileged_action_prefixes": ["azure/login@"],
+            "privileged_permissions": ["id-token"],
+            "credential_env_names": ["PUBLISH_TOKEN"],
+            "credential_command_markers": ["npm publish"],
+            "runtime_contract_roots": ["runtime/contracts"],
+            "contract_keys": ["contract"],
+        }
+        expected = ("untrusted-automation-boundary", ".github/workflows/analysis.yml", "credential boundary")
+    else:  # pragma: no cover - parametrisation defines the supported custom checks.
+        raise AssertionError(f"unsupported custom check: {check}")
+    manifest = root / "contract.yaml"
+    cases: list[dict[str, object]] = [
+        {
+            "id": "compliant",
+            "fixture": "compliant",
+            "expected": {"status": "pass", "exit": "zero", "findings": []},
+        },
+        {
+            "id": "violation",
+            "fixture": "violation",
+            "expected": {
+                "status": "fail",
+                "exit": "nonzero",
+                "findings": [{"rule": expected[0], "path": expected[1], "message_contains": expected[2]}],
+            },
+        },
+    ]
+    dependencies = ["git"] if check in {"contract_change_has_test", "new_code_coverage"} else []
+    if dependencies:
+        unavailable.mkdir()
+        cases.append(
+            {
+                "id": "unavailable",
+                "fixture": "unavailable",
+                "environment": {"schema": "tc.fitness/check-environment/v1", "path": "empty"},
+                "expected": {
+                    "status": "error",
+                    "exit": "nonzero",
+                    "findings": [
+                        {
+                            "rule": "check-execution-error",
+                            "path": ".",
+                            "message_contains": "FileNotFoundError",
+                        }
+                    ],
+                },
+            }
+        )
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "tc.fitness/check-contract/v1",
+                "check": f"core:{check}",
+                "config": config,
+                "cases": cases,
+                "dependencies": dependencies,
+            }
+        )
+    )
+    return manifest, expected
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        "ci_consumes_shared_gate",
+        "harness_canon_reference",
+        "contract_change_has_test",
+        "new_code_coverage",
+        "untrusted_automation_boundary",
+    ],
+)
+def test_public_runner_captures_custom_check_violation_findings(tmp_path: Path, check: str) -> None:
+    """Each bespoke hard-gate decision emits its own structured finding."""
+    manifest, expected = _custom_finding_contract(tmp_path, check)
+    ledger = tmp_path / "ledger.json"
+
+    result = invoke(manifest, "violation", ledger)
+
+    assert result.returncode == 1, result.stderr
+    actual = json.loads(ledger.read_text())["actual"]
+    assert actual["status"] == "fail"
+    assert len(actual["findings"]) == 1
+    finding = actual["findings"][0]
+    assert finding["rule"] == expected[0]
+    assert finding["path"] == expected[1]
+    assert expected[2] in finding["message"]
+    assert finding["status"] == "fail"
+
+
 def test_swapping_a_directory_for_a_fifo_changes_the_tree_digest(tmp_path: Path) -> None:
     """Two objects that digest no content must still be told apart by kind."""
     from tc_fitness.check_contract_execution import tree_digest
@@ -576,3 +806,35 @@ def test_a_git_directory_pointer_in_a_fixture_is_rejected(tmp_path: Path) -> Non
 
     with pytest.raises(CheckContractError, match="Git directory pointer"):
         _fixture_path(manifest, "compliant")
+
+
+def test_the_fixture_environment_drops_every_repository_control_variable() -> None:
+    """An inherited GIT_DIR would reroute fixture commands into the caller's repository."""
+    from tc_fitness.check_contract_execution import _GIT_LOCAL_ENV_VARS
+
+    declared = set(
+        subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+    )
+
+    assert declared <= set(_GIT_LOCAL_ENV_VARS), declared - set(_GIT_LOCAL_ENV_VARS)
+
+
+def test_an_inherited_git_dir_never_reaches_a_fixture_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The caller's repository must stay unreachable from fixture materialisation."""
+    from tc_fitness.check_contract_execution import _fixture_git_environment
+
+    monkeypatch.setenv("GIT_DIR", "/somewhere/else/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/somewhere/else")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/somewhere/else/index")
+
+    environment = _fixture_git_environment()
+
+    assert "GIT_DIR" not in environment
+    assert "GIT_WORK_TREE" not in environment
+    assert "GIT_INDEX_FILE" not in environment
+    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"

@@ -1,0 +1,1 @@
+{"environment":"prod","filesystem":{"aliases":[],"allowed_nested_roots":[],"mounts":[],"namespaces":{},"required_executables":[],"roots":{},"symlinks":[]},"schema":"tc-fitness/runtime-contract/v1","target":"service"}

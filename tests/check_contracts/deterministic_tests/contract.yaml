@@ -1,0 +1,32 @@
+schema: tc.fitness/check-contract/v1
+check: core:deterministic_tests
+config:
+  roots: [tests]
+  repeats: 2
+  order_seeds: []
+  test_command: [pytest]
+  timeout_seconds: 30
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: non-deterministic-test
+          path: tests/test_toggle.py::test_toggle
+          message_contains: rep1
+  - id: unavailable
+    fixture: unavailable
+    environment: {schema: tc.fitness/check-environment/v1, path: empty}
+    expected:
+      status: error
+      exit: nonzero
+      findings:
+        - rule: dependency-unavailable
+          path: .
+          message_contains: pytest
+dependencies: [pytest]

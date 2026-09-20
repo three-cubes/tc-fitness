@@ -68,6 +68,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -288,6 +289,8 @@ def collect_node_ids(
         )
     except subprocess.TimeoutExpired as exc:  # pragma: no cover - defensive
         raise SuiteRunError(f"collection timed out after {timeout}s") from exc
+    except OSError as exc:
+        raise SuiteRunError(f"configured test command unavailable: {command[0]}") from exc
     return parse_collected(result.stdout)
 
 
@@ -322,6 +325,8 @@ def run_suite(
         )
     except subprocess.TimeoutExpired as exc:
         raise SuiteRunError(f"run {spec.label!r} timed out after {timeout}s") from exc
+    except OSError as exc:
+        raise SuiteRunError(f"configured test command unavailable: {command[0]}") from exc
     outcomes = parse_outcomes(result.stdout)
     if not outcomes:
         raise SuiteRunError(
@@ -461,12 +466,18 @@ class DeterministicTests(FitnessRule):
         try:
             divergences = detect_nondeterminism(plan, self._runner(test_paths, node_ids))
         except SuiteRunError as exc:
+            if str(exc).startswith("configured test command unavailable:"):
+                report_finding("dependency-unavailable", ".", str(exc), status="error")
+                print(f"ERROR [deterministic-tests] — {exc}")
+                return 2
             print(f"FAIL [deterministic-tests] — could not establish determinism: {exc}")
             print()
             print(self.remediation)
             return 1
 
         if divergences:
+            for divergence in divergences:
+                report_finding("non-deterministic-test", divergence.test_id, divergence.outcomes[0][0])
             print(format_failure(divergences))
             return 1
         print(f"ok [deterministic-tests] — stable across {len(plan)} runs (seed={self.seed}).")

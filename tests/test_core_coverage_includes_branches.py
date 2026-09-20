@@ -36,8 +36,8 @@ def test_branch_aware_report_clean(tmp_path: Path) -> None:
     assert report_lacks_branches(p) is False
 
 
-def test_missing_report_not_a_violation(tmp_path: Path) -> None:
-    assert report_lacks_branches(tmp_path / "absent.xml") is False
+def test_missing_report_is_a_violation(tmp_path: Path) -> None:
+    assert report_lacks_branches(tmp_path / "absent.xml") is True
 
 
 def test_rule_flags_lines_only(tmp_path: Path) -> None:
@@ -59,8 +59,10 @@ def test_report_path_is_config_driven(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-def test_run_passes_when_no_report(tmp_path: Path) -> None:
-    assert build({}, repo_root=tmp_path).run() == 0
+def test_run_fails_when_no_report(tmp_path: Path) -> None:
+    rule = build({}, repo_root=tmp_path)
+    assert rule.collect_violations() == {Path("coverage.xml")}
+    assert rule.run() == 1
 
 
 def test_unsafe_xml_rejected(tmp_path: Path) -> None:
@@ -94,3 +96,17 @@ def test_no_repo_strings_in_executable_code() -> None:
             lowered = node.value.lower()
             for tok in ("kairix", "tc-agent-zone", "agent-zone", "kata"):
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
+
+
+def test_an_external_coverage_report_is_refused_at_configuration(tmp_path: Path) -> None:
+    """An out-of-repository report cannot be relativised, so the gate would crash."""
+    with pytest.raises(ValueError, match="inside the repository"):
+        build({"coverage_report": "/elsewhere/coverage.xml"}, repo_root=tmp_path)
+
+
+def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
+    """A baseline adopted with no report survives the report being deleted."""
+    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
+
+    with pytest.raises(ValueError, match="cannot baseline absent coverage evidence"):
+        rule.establish_baseline()

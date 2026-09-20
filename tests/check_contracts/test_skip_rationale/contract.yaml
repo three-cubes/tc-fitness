@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:test_skip_rationale
+config: {"roots":["src"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: test-skip-rationale
+          path: src/example.py
+          message_contains: "non-empty reason"
+dependencies: []

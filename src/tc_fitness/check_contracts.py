@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,8 @@ from tc_fitness.lib import load_yaml
 SCHEMA = "tc.fitness/check-contract/v1"
 _STATUSES = frozenset({"pass", "fail", "error"})
 _EXITS = frozenset({"zero", "nonzero"})
+_EVIDENCE_CLASSES = frozenset({"unclassified", "protocol-unit", "integration", "live"})
+_LIVE_QUALIFICATIONS = frozenset({"not-required", "required-unmet", "qualified"})
 
 
 class CheckContractError(ValueError):
@@ -45,13 +48,31 @@ class CaseEnvironment:
 
 
 @dataclass(frozen=True)
+class GitFixtureEnvironment:
+    """Deterministic Git history materialised before a contract case runs."""
+
+    schema: str
+    history: str
+    checkout: str
+
+
+@dataclass(frozen=True)
+class GitCaseEnvironment:
+    """Versioned case environment with a bound Git fast-import input."""
+
+    schema: str
+    path: str
+    git: GitFixtureEnvironment
+
+
+@dataclass(frozen=True)
 class ContractCase:
     """A fixture and its expected terminal outcome."""
 
     id: str
     fixture: str
     expected: OutcomeExpectation
-    environment: CaseEnvironment = CaseEnvironment()
+    environment: CaseEnvironment | GitCaseEnvironment = CaseEnvironment()
 
 
 @dataclass(frozen=True)
@@ -62,6 +83,9 @@ class CheckContract:
     config: Mapping[str, Any]
     cases: tuple[ContractCase, ...]
     dependencies: tuple[str, ...]
+    evidence_class: str = "unclassified"
+    live_qualification: str = "not-required"
+    release_admission: bool = False
 
 
 def _mapping(value: object, location: str) -> Mapping[str, Any]:
@@ -106,21 +130,56 @@ def _parse_expected(value: object, location: str) -> OutcomeExpectation:
     return OutcomeExpectation(status=status, exit=exit_class, findings=findings)
 
 
+_GIT_CHECKOUT = re.compile(r"^refs/heads/[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$")
+
+
+def _portable_git_history(value: object, location: str) -> str:
+    history = _required_string(value, location)
+    path = Path(history)
+    if path.is_absolute() or ".." in path.parts or "\\" in history:
+        raise CheckContractError(f"{location} must be a portable path")
+    if not path.parts or path.parts[0] != ".contract":
+        raise CheckContractError(f"{location} must live beneath .contract")
+    return path.as_posix()
+
+
+def _parse_environment(value: object, location: str) -> CaseEnvironment | GitCaseEnvironment:
+    declaration = _mapping(value, location)
+    schema = declaration.get("schema")
+    path = declaration.get("path")
+    if not isinstance(path, str) or path not in {"inherit", "empty"}:
+        raise CheckContractError(f"{location} requires a known schema and inherit/empty path")
+    if schema == "tc.fitness/check-environment/v1" and set(declaration) == {"schema", "path"}:
+        return CaseEnvironment(path=path)
+    if schema != "tc.fitness/check-environment/v2" or set(declaration) != {"schema", "path", "git"}:
+        raise CheckContractError(f"{location} requires a known schema and inherit/empty path")
+    git_location = f"{location}.git"
+    git = _mapping(declaration["git"], git_location)
+    if set(git) != {"schema", "history", "checkout"} or git.get("schema") != "tc.fitness/git-fixture/v1":
+        raise CheckContractError(f"{git_location} requires the tc.fitness/git-fixture/v1 schema")
+    checkout = _required_string(git.get("checkout"), f"{git_location}.checkout")
+    if not _GIT_CHECKOUT.fullmatch(checkout) or any(
+        forbidden in checkout for forbidden in ("..", "//", "@{", ".lock")
+    ):
+        raise CheckContractError(f"{git_location}.checkout must be a safe refs/heads ref")
+    return GitCaseEnvironment(
+        schema="tc.fitness/check-environment/v2",
+        path=path,
+        git=GitFixtureEnvironment(
+            schema="tc.fitness/git-fixture/v1",
+            history=_portable_git_history(git.get("history"), f"{git_location}.history"),
+            checkout=checkout,
+        ),
+    )
+
+
 def _parse_case(value: object, index: int) -> ContractCase:
     location = f"cases[{index}]"
     raw = _mapping(value, location)
     case_id = _required_string(raw.get("id"), f"{location}.id")
-    environment = CaseEnvironment()
+    environment: CaseEnvironment | GitCaseEnvironment = CaseEnvironment()
     if "environment" in raw:
-        declaration = _mapping(raw["environment"], f"{location}.environment")
-        if (
-            set(declaration) != {"schema", "path"}
-            or declaration.get("schema") != environment.schema
-            or not isinstance(declaration.get("path"), str)
-            or declaration.get("path") not in {"inherit", "empty"}
-        ):
-            raise CheckContractError(f"{location}.environment requires a known schema and inherit/empty path")
-        environment = CaseEnvironment(path=str(declaration["path"]))
+        environment = _parse_environment(raw["environment"], f"{location}.environment")
     if environment.path == "empty" and case_id != "unavailable":
         raise CheckContractError("only an unavailable case may request an empty environment path")
     return ContractCase(
@@ -173,6 +232,24 @@ def _validate_case_set(cases: tuple[ContractCase, ...], dependencies: tuple[str,
         raise CheckContractError("unavailable case must expect at least one stable finding")
 
 
+def _parse_evidence_classification(raw: Mapping[str, Any]) -> tuple[str, str, bool]:
+    """Bind evidence labels while reserving admission authority for protected receipts."""
+    evidence_class = str(raw.get("evidence_class", "unclassified"))
+    if evidence_class not in _EVIDENCE_CLASSES:
+        raise CheckContractError(f"evidence_class must be one of {sorted(_EVIDENCE_CLASSES)}")
+    live_qualification = str(raw.get("live_qualification", "not-required"))
+    if live_qualification not in _LIVE_QUALIFICATIONS:
+        raise CheckContractError(f"live_qualification must be one of {sorted(_LIVE_QUALIFICATIONS)}")
+    release_admission = raw.get("release_admission", False)
+    if type(release_admission) is not bool:
+        raise CheckContractError("release_admission must be a boolean")
+    if release_admission:
+        raise CheckContractError("contract manifests cannot grant release admission")
+    if evidence_class == "protocol-unit" and live_qualification != "required-unmet":
+        raise CheckContractError("protocol-unit evidence requires an explicitly unmet live qualification")
+    return evidence_class, live_qualification, False
+
+
 def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckContract:
     """Load and validate one check-contract manifest."""
     if source is None and not path.is_file():
@@ -193,7 +270,40 @@ def load_check_contract(path: Path, *, source: bytes | None = None) -> CheckCont
         for index, item in enumerate(_list(raw.get("dependencies"), "dependencies"))
     )
     _validate_case_set(cases, dependencies)
-    return CheckContract(check=check, config=config, cases=cases, dependencies=dependencies)
+    evidence_class, live_qualification, release_admission = _parse_evidence_classification(raw)
+    return CheckContract(
+        check=check,
+        config=config,
+        cases=cases,
+        dependencies=dependencies,
+        evidence_class=evidence_class,
+        live_qualification=live_qualification,
+        release_admission=release_admission,
+    )
+
+
+def registered_contract_directory(path: Path, registered_checks: tuple[str, ...]) -> CheckContract | None:
+    """Return the manifest only when ``path`` is a complete bound fixture registry.
+
+    Test discovery uses this as an authority boundary. A directory name, an
+    invalid manifest, a copied manifest, or a missing/escaping fixture cannot
+    hide authored tests from pytest or the tier gate.
+    """
+    if not path.is_dir() or path.is_symlink():
+        return None
+    manifest = path / "contract.yaml"
+    try:
+        contract = load_check_contract(manifest)
+    except (CheckContractError, OSError):
+        return None
+    if contract.check != f"core:{path.name}" or contract.check not in registered_checks:
+        return None
+    for case in contract.cases:
+        relative = Path(case.fixture)
+        fixture = path / relative
+        if relative.is_absolute() or ".." in relative.parts or not fixture.is_dir() or fixture.is_symlink():
+            return None
+    return contract
 
 
 def validate_contract_registry(
@@ -236,11 +346,14 @@ def validate_contract_registry(
 
 __all__ = [
     "CaseEnvironment",
+    "GitCaseEnvironment",
+    "GitFixtureEnvironment",
     "CheckContract",
     "CheckContractError",
     "ContractCase",
     "FindingExpectation",
     "OutcomeExpectation",
     "load_check_contract",
+    "registered_contract_directory",
     "validate_contract_registry",
 ]

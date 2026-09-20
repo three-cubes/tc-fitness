@@ -198,6 +198,7 @@ class ScriptHelpSmoke(FitnessRule):
         )
 
     def run(self) -> int:
+        """Reject an unavailable configured interpreter as structured evidence."""
         if shutil.which(self.python_executable) is None:
             report_finding(
                 "dependency-unavailable",

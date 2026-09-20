@@ -1,0 +1,29 @@
+schema: tc.fitness/check-contract/v1
+check: core:runtime_evidence_contract
+config:
+  contract_file: contract.json
+  evidence_file: evidence.json
+  expected_source_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  expected_image_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  expected_host_id: fixture-host
+  expected_runtime_user: fixture-user
+  expected_deployment_id: fixture-deployment
+  expected_configuration_identity: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  expected_run_id: 1
+  expected_attempt_id: 1
+  required_checks: [fixture-probe]
+  max_age_seconds: 315360000
+cases:
+  - id: compliant
+    fixture: compliant
+    expected: {status: pass, exit: zero, findings: []}
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: source-sha-mismatch
+          path: evidence.json
+          message_contains: independently expected value
+dependencies: []

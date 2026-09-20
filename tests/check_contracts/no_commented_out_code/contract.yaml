@@ -1,0 +1,20 @@
+schema: tc.fitness/check-contract/v1
+check: core:no_commented_out_code
+config: {"roots":["src"]}
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: no-commented-out-code
+          path: src/example.py
+          message_contains: "consecutive commented-out Python lines"
+dependencies: []

@@ -1,0 +1,56 @@
+schema: tc.fitness/check-contract/v1
+check: core:contract_change_has_test
+config:
+  contract_surface:
+  - src/api.py
+  test_globs:
+  - tests/**
+  base_ref: refs/heads/base
+cases:
+- id: compliant
+  fixture: compliant
+  environment:
+    schema: tc.fitness/check-environment/v2
+    path: inherit
+    git:
+      schema: tc.fitness/git-fixture/v1
+      history: .contract/git.fast-import
+      checkout: refs/heads/candidate
+  expected:
+    status: pass
+    exit: zero
+    findings: []
+- id: violation
+  fixture: violation
+  environment:
+    schema: tc.fitness/check-environment/v2
+    path: inherit
+    git:
+      schema: tc.fitness/git-fixture/v1
+      history: .contract/git.fast-import
+      checkout: refs/heads/candidate
+  expected:
+    status: fail
+    exit: nonzero
+    findings:
+    - rule: contract-change-has-test
+      path: src/api.py
+      message_contains: no test change
+- id: unavailable
+  fixture: unavailable
+  environment:
+    schema: tc.fitness/check-environment/v2
+    path: empty
+    git:
+      schema: tc.fitness/git-fixture/v1
+      history: .contract/git.fast-import
+      checkout: refs/heads/candidate
+  expected:
+    status: error
+    exit: nonzero
+    findings:
+    - rule: check-execution-error
+      path: .
+      message_contains: FileNotFoundError
+dependencies:
+- git
