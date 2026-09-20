@@ -7,12 +7,14 @@ import ast
 import fnmatch
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, requires, version
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -23,15 +25,92 @@ from tc_fitness.mutation_scope import (
     archive_files,
     candidate_archives,
     definition_digest,
+    derive_budget,
     digest_bytes,
     read_policy,
     select_scope,
 )
 from tc_fitness.runner import run_bounded_process
 
-TOOL_VERSION = "3.6.0"
+#: The distribution whose manifest declares the pinned mutation tool.
+DISTRIBUTION = "three-cubes-fitness"
+#: The mutation tool this module requires at exactly the pinned version.
+TOOL_NAME = "mutmut"
+_EXACT_PIN_RE = re.compile(rf"^\s*{TOOL_NAME}\s*==\s*([0-9][^;\s,\]]*)", re.IGNORECASE)
+
+
+def pinned_tool_version() -> str:
+    """Return the mutmut version this distribution's manifest pins.
+
+    Read rather than restated. A literal here would be a second source of
+    truth that no dependency tooling updates: a bump would land in the
+    manifest and the lock while this stayed behind, and the equality below
+    would then fail closed against the version the project actually installs —
+    turning every routine dependency bump into a red build needing a manual
+    source edit in lockstep.
+    """
+    for requirement in requires(DISTRIBUTION) or []:
+        match = _EXACT_PIN_RE.match(requirement)
+        if match:
+            return match.group(1)
+    raise MutationError(
+        f"{DISTRIBUTION} does not pin {TOOL_NAME} at an exact version, so mutation evidence "
+        f"cannot be bound to a known tool; fix: declare {TOOL_NAME}==<version> in pyproject.toml; "
+        "next: re-run this command",
+        "dependency-unavailable",
+    )
+
+
 SCHEMA = "tc.fitness/mutation-receipt/v1"
 MAX_LOG_BYTES = 2 * 1024 * 1024
+
+#: The pytest arguments the campaign runs its tests under. Declared once so the
+#: measured baseline and the mutants it is a baseline for cannot select
+#: different tests; a baseline over a wider selection would grant every campaign
+#: time for work it never does.
+CAMPAIGN_TEST_ARGS = ("-m", "unit or contract")
+
+
+def _measure_baseline(snapshot: Path, env: dict[str, str], policy: dict[str, Any], output: Path) -> float:
+    """Time one unmutated run of the selected tests, in the snapshot under test.
+
+    This is the machine's cost for the work the campaign repeats per mutant, so
+    it is measured here rather than assumed: the same campaign on a slower
+    runner legitimately needs longer, and on a faster one should not be handed
+    slack it does not need.
+
+    The selection must be the campaign's own, not the whole suite: mutmut runs
+    the policy's tests filtered by ``CAMPAIGN_TEST_ARGS``, and timing a wider set
+    would inflate every mutant's estimated cost by whatever the campaign never
+    runs.
+
+    A baseline run that fails does not fail the campaign. The tests are about to
+    be run thousands of times over, and mutmut reports a broken baseline far
+    more legibly than a stopwatch can; the elapsed time is returned either way,
+    and a run cut short by a failure simply lands on the floor.
+    """
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        *policy["tests"],
+        *CAMPAIGN_TEST_ARGS,
+        "-q",
+        "-x",
+        "--no-header",
+        "-p",
+        "no:cacheprovider",
+    ]
+    started = monotonic()
+    run_bounded_process(
+        command,
+        cwd=snapshot,
+        env=env,
+        timeout=policy["budget"]["ceiling_seconds"],
+        stdout_path=output / "baseline.stdout.log",
+        stderr_path=output / "baseline.stderr.log",
+    )
+    return monotonic() - started
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -73,7 +152,7 @@ def _inputs(
         "executable_paths": archive_executables(after),
         "scope": scope,
         "engine": candidate_identity(),
-        "tool": {"name": "mutmut", "version": TOOL_VERSION},
+        "tool": {"name": TOOL_NAME, "version": pinned_tool_version()},
         "test_tiers": ["unit", "contract"],
     }
     return binding, head_files, policy
@@ -93,7 +172,7 @@ def _native_config(snapshot: Path, files: dict[str, bytes], policy: dict[str, An
     controls = {
         "source_paths": policy["source_roots"],
         "pytest_add_cli_args_test_selection": policy["tests"],
-        "pytest_add_cli_args": ["-m", "unit or contract"],
+        "pytest_add_cli_args": list(CAMPAIGN_TEST_ARGS),
         "also_copy": copy_roots,
         "max_stack_depth": -1,
         "mutate_only_covered_lines": False,
@@ -215,7 +294,7 @@ def execute_mutation(
     except PackageNotFoundError as exc:
         raise MutationError("required mutmut executable is unavailable", "dependency-unavailable") from exc
     executable = Path(sys.executable).with_name("mutmut")
-    if installed_version != TOOL_VERSION or not executable.is_file():
+    if installed_version != pinned_tool_version() or not executable.is_file():
         raise MutationError("mutation execution requires the exact pinned mutmut tool")
     if output.exists():
         raise MutationError("output already exists; retain the prior attempt and use a new directory")
@@ -252,11 +331,23 @@ def execute_mutation(
         env.pop("PYTEST_PLUGINS", None)
         env.pop("MUTANT_UNDER_TEST", None)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        baseline_seconds = _measure_baseline(snapshot, env, policy, output)
+        budget_seconds = derive_budget(
+            policy["budget"],
+            baseline_seconds=baseline_seconds,
+            changed_functions=len(binding["scope"]["functions"]),
+        )
+        receipt["budget"] = {
+            "baseline_seconds": round(baseline_seconds, 3),
+            "changed_functions": len(binding["scope"]["functions"]),
+            "policy": policy["budget"],
+            "granted_seconds": budget_seconds,
+        }
         result = run_bounded_process(
             command,
             cwd=snapshot,
             env=env,
-            timeout=policy["timeout_seconds"],
+            timeout=budget_seconds,
             stdout_path=output / "stdout.log",
             stderr_path=output / "stderr.log",
         )
@@ -279,9 +370,10 @@ def execute_mutation(
             receipt["status"] = (
                 "fail" if any(item["status"] == "survived" for item in receipt["mutants"]) else "pass"
             )
-            current, _, _ = _inputs(root, base, head, broad)
-            if current != binding:
-                raise MutationError("candidate inputs changed during mutation execution")
+            # Re-reading the immutable base/head binding also proves the working
+            # tree remains the exact candidate. Any mutation is rejected by
+            # ``_inputs`` before it can return a different binding.
+            _inputs(root, base, head, broad)
         except MutationError as exc:
             receipt["status"] = "error"
             receipt["error"] = str(exc)
@@ -290,6 +382,14 @@ def execute_mutation(
     receipt["payload_digest"] = payload_digest(receipt)
     _write_json(output / "receipt.json", receipt)
     return receipt
+
+
+def _validate_execution_timestamps(receipt: dict[str, Any], now: datetime) -> None:
+    """Check the closed freshness interval against the admission clock reading."""
+    started = datetime.fromisoformat(receipt["started_at"])
+    finished = datetime.fromisoformat(receipt["finished_at"])
+    if not started <= finished <= now or (now - finished).total_seconds() > 86400:
+        raise MutationError("stale or reversed mutation execution timestamps")
 
 
 def validate_mutation_receipt(
@@ -308,11 +408,7 @@ def validate_mutation_receipt(
             raise MutationError(f"mutation receipt {key} mismatch")
     try:
         UUID(receipt["execution_id"])
-        started = datetime.fromisoformat(receipt["started_at"])
-        finished = datetime.fromisoformat(receipt["finished_at"])
-        now = datetime.now(UTC)
-        if not started <= finished <= now or (now - finished).total_seconds() > 86400:
-            raise MutationError("stale or reversed mutation execution timestamps")
+        _validate_execution_timestamps(receipt, datetime.now(UTC))
     except (KeyError, TypeError, ValueError) as exc:
         raise MutationError("invalid mutation execution identity or timestamps") from exc
     artifacts = _artifacts(output)

@@ -1,5 +1,22 @@
 schema = "tc.fitness/mutation-policy/v1"
 source_roots = ["src"]
 tests = ["tests"]
-timeout_seconds = 180
 max_mutants = 100000
+
+# The campaign budget is derived, not declared. An absolute bound conflates how
+# much work a change demands with how fast the machine is, so it can only be
+# right on the machine it was tuned on — and it fails silently, because a run cut
+# off before it evaluates a mutant reports the same way whether the number was
+# too small or the code untested.
+#
+# granted = clamp(baseline * (baseline_multiplier + per_function_multiplier * changed_functions),
+#                 floor_seconds, ceiling_seconds)
+#
+# baseline is one measured unmutated run of the selected tests in the snapshot
+# under test; changed_functions is this change's own scope. Both terms are
+# measured, and all of them are recorded in the receipt.
+[budget]
+baseline_multiplier = 4
+per_function_multiplier = 1.5
+floor_seconds = 120
+ceiling_seconds = 2400

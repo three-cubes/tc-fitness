@@ -2,15 +2,30 @@
 
 from __future__ import annotations
 
+import ast
+import copy
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from datetime import UTC, datetime, timedelta
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+
+from tc_fitness import mutation_assurance
+from tc_fitness.mutation_assurance import (
+    _native_mutants,
+    execute_mutation,
+    main,
+    validate_mutation_receipt,
+)
+from tc_fitness.mutation_scope import MutationError
 
 pytestmark = pytest.mark.integration
 
@@ -45,7 +60,10 @@ def _consumer(root: Path, *, weak: bool = False) -> tuple[str, str]:
     (root / "mutation.toml").write_text(
         'schema = "tc.fitness/mutation-policy/v1"\n'
         'source_roots = ["src"]\ntests = ["tests"]\n'
-        "timeout_seconds = 60\nmax_mutants = 100\n"
+        "max_mutants = 100\n"
+        "[budget]\n"
+        "baseline_multiplier = 4\nper_function_multiplier = 1.5\n"
+        "floor_seconds = 60\nceiling_seconds = 600\n"
     )
     _git(root, "init", "-q")
     _git(root, "config", "user.name", "three-cubes-agent[bot]")
@@ -125,6 +143,85 @@ def test_missing_receipt_cannot_satisfy_admission(tmp_path: Path) -> None:
     assert json.loads(result.stdout)["code"] == "missing-receipt"
 
 
+def test_missing_mutation_distribution_is_a_dependency_error(tmp_path: Path) -> None:
+    from importlib.metadata import distribution
+
+    root = tmp_path / "consumer"
+    base, head = _consumer(root)
+    metadata = Path(str(distribution("mutmut")._path))
+    hidden = metadata.with_name(metadata.name + ".hidden-for-test")
+    metadata.rename(hidden)
+    try:
+        with pytest.raises(MutationError, match="required mutmut executable is unavailable"):
+            execute_mutation(root, base, head, tmp_path / "evidence", run_id="test", attempt=1)
+    finally:
+        hidden.rename(metadata)
+
+
+def test_wrong_installed_mutation_version_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, head = _consumer(root)
+    fake_distribution = tmp_path / "fake-distribution"
+    metadata = fake_distribution / "mutmut-0.0.0.dist-info"
+    metadata.mkdir(parents=True)
+    (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: mutmut\nVersion: 0.0.0\n")
+    sys.path.insert(0, str(fake_distribution))
+    try:
+        with pytest.raises(MutationError, match="exact pinned mutmut tool"):
+            execute_mutation(root, base, head, tmp_path / "evidence", run_id="test", attempt=1)
+    finally:
+        sys.path.remove(str(fake_distribution))
+
+
+def test_candidate_change_during_real_mutation_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, head = _consumer(root)
+    barrier = tmp_path / "mutation-started.fifo"
+    signalled = tmp_path / "mutation-signalled"
+    os.mkfifo(barrier)
+    test_file = root / "tests/test_admission.py"
+    test_file.write_text(
+        test_file.read_text()
+        + "\ndef test_signal_mutation_started():\n"
+        + f"    marker = __import__('pathlib').Path({str(signalled)!r})\n"
+        + "    if not marker.exists():\n"
+        + "        marker.write_text('sent')\n"
+        + f"        open({str(barrier)!r}, 'w').close()\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: deterministic mutation barrier")
+    head = _git(root, "rev-parse", "HEAD")
+
+    changed = threading.Event()
+
+    def alter_candidate() -> None:
+        with barrier.open("rb"):
+            pass
+        source = root / "src/admission.py"
+        source.write_text(source.read_text() + "\n# changed during execution\n")
+        changed.set()
+
+    thread = threading.Thread(target=alter_candidate, daemon=True)
+    thread.start()
+    receipt = execute_mutation(root, base, head, tmp_path / "evidence", run_id="test", attempt=1)
+    thread.join(timeout=2)
+
+    assert changed.is_set()
+    assert receipt["status"] == "error"
+    assert receipt["error"] == "candidate checkout has tracked modifications"
+
+
+def test_duplicate_native_mutant_identity_is_rejected(
+    killed_evidence: tuple[Path, str, str, Path],
+) -> None:
+    _root, _base, _head, output = killed_evidence
+    receipt = json.loads((output / "receipt.json").read_text())
+    scope = copy.deepcopy(receipt["scope"])
+    scope["functions"].append(copy.deepcopy(scope["functions"][0]))
+    with pytest.raises(MutationError, match="duplicate native mutant identity"):
+        _native_mutants(output / "native", scope)
+
+
 def _seal(output: Path, receipt: dict[str, object]) -> None:
     """An attacker can recompute an outer digest; admission must still disagree."""
     receipt.pop("payload_digest", None)
@@ -139,8 +236,8 @@ def killed_evidence(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, str
     root = temporary / "consumer"
     base, head = _consumer(root)
     output = temporary / "evidence"
-    result = _command(root, base, head, output)
-    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = execute_mutation(root, base, head, output, run_id="local-test", attempt=1)
+    assert receipt["status"] == "pass", receipt
     return root, base, head, output
 
 
@@ -328,7 +425,13 @@ def test_native_deadline_retains_error_instead_of_a_killed_mutant(tmp_path: Path
         "import time\nimport pytest\nfrom admission import accepts\n\npytestmark = pytest.mark.unit\n\ndef test_admission():\n    time.sleep(10)\n    assert accepts(18)\n"
     )
     policy = root / "mutation.toml"
-    policy.write_text(policy.read_text().replace("timeout_seconds = 60", "timeout_seconds = 1"))
+    # squeeze the derived budget to its smallest legal value so the sleeping
+    # test overruns it: floor and ceiling together pin the grant at 1s.
+    policy.write_text(
+        policy.read_text().replace(
+            "floor_seconds = 60\nceiling_seconds = 600", "floor_seconds = 1\nceiling_seconds = 1"
+        )
+    )
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "test: native deadline")
     head = _git(root, "rev-parse", "HEAD")
@@ -451,3 +554,463 @@ def test_e2e_only_tests_cannot_claim_unit_contract_mutation_proof(tmp_path: Path
     result = _command(root, base, head, tmp_path / "evidence")
     assert result.returncode == 2, result.stdout + result.stderr
     assert _command(root, base, head, tmp_path / "evidence", "verify").returncode == 2
+
+
+def _reseal_artifacts(output: Path, receipt: dict[str, object]) -> None:
+    receipt["artifacts"] = [
+        {
+            "path": path.relative_to(output).as_posix(),
+            "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+        for path in sorted(output.rglob("*"))
+        if path.is_file() and path != output / "receipt.json"
+    ]
+    _seal(output, receipt)
+
+
+def test_native_admission_returns_the_complete_bound_receipt(
+    killed_evidence: tuple[Path, str, str, Path],
+) -> None:
+    root, base, head, output = killed_evidence
+    original = (output / "receipt.json").read_bytes()
+    result = validate_mutation_receipt(root, base, head, output, run_id="local-test", attempt=1)
+    assert result == json.loads(original)
+    assert (output / "receipt.json").read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("sabotage", "message"),
+    [
+        ("duplicate-json", "missing or malformed mutation output"),
+        ("malformed-json", "missing or malformed mutation output"),
+        ("array-json", "must be an object"),
+        ("digest", "^mutation receipt digest mismatch$"),
+        ("missing-digest", "^mutation receipt digest mismatch$"),
+        ("uuid", "invalid mutation execution identity"),
+        ("naive-time", "invalid mutation execution identity"),
+        ("missing-time", "invalid mutation execution identity"),
+        ("reversed-time", "invalid mutation execution identity"),
+        ("future-time", "invalid mutation execution identity"),
+        ("boolean-attempt", "attempt mismatch"),
+        ("missing-required-log", "^missing required native mutation outputs$"),
+        ("symlink-log", "must not be symlinks"),
+        ("missing-status-map", "no terminal status map"),
+        ("missing-source", "missing or invalid generated mutant source"),
+        ("invalid-source", "missing or invalid generated mutant source"),
+        ("missing-original", "exact candidate definition"),
+        ("changed-original", "exact candidate definition"),
+        ("unchanged-mutant", "unchanged, no-op mutant"),
+        ("missing-association", "no real native test association"),
+        ("nonlist-association", "no real native test association"),
+        ("unknown-test", "no real native test association"),
+        ("nonstring-test", "no real native test association"),
+        ("boolean-duration", "no real native test association"),
+        ("negative-duration", "no real native test association"),
+        ("nonnumeric-duration", "no real native test association"),
+        ("nonterminal-code", "terminal killed results"),
+        ("error-code", "terminal killed results"),
+        ("empty-inventory", "empty or zero-scope native mutation evidence"),
+        (
+            "tool-exit",
+            "^mutation admission requires terminal killed results for every selected mutant$",
+        ),
+    ],
+)
+def test_native_admission_rejects_resealed_protocol_corruption(
+    tmp_path: Path, killed_evidence: tuple[Path, str, str, Path], sabotage: str, message: str
+) -> None:
+    root, base, head, original = killed_evidence
+    output = tmp_path / "evidence"
+    shutil.copytree(original, output)
+    receipt_path = output / "receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    meta_path = output / "native/src/admission.py.meta"
+    stats_path = output / "native/mutmut-stats.json"
+    source_path = output / "native/src/admission.py"
+    meta = json.loads(meta_path.read_text())
+    stats = json.loads(stats_path.read_text())
+    function = "admission.x_accepts"
+    test = stats["tests_by_mangled_function_name"][function][0]
+    if sabotage == "uuid":
+        receipt["execution_id"] = "not-a-uuid"
+    elif sabotage == "naive-time":
+        receipt["started_at"] = "2026-01-01T00:00:00"
+    elif sabotage == "missing-time":
+        del receipt["started_at"]
+    elif sabotage == "reversed-time":
+        receipt["started_at"], receipt["finished_at"] = receipt["finished_at"], receipt["started_at"]
+    elif sabotage == "future-time":
+        receipt["finished_at"] = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    elif sabotage == "boolean-attempt":
+        receipt["attempt"] = True
+    elif sabotage == "missing-required-log":
+        (output / "stdout.log").unlink()
+    elif sabotage == "symlink-log":
+        (output / "stdout.log").unlink()
+        (output / "stdout.log").symlink_to(original / "stdout.log")
+    elif sabotage == "missing-status-map":
+        meta["exit_code_by_key"] = []
+    elif sabotage == "missing-source":
+        source_path.unlink()
+    elif sabotage == "invalid-source":
+        source_path.write_text("def invalid(:\n")
+    elif sabotage == "missing-original":
+        source_path.write_text(
+            source_path.read_text().replace("def x_accepts__mutmut_orig(", "def removed_original(")
+        )
+    elif sabotage == "changed-original":
+        source_path.write_text(source_path.read_text().replace("return age >= 18", "return age >= 21"))
+    elif sabotage == "unchanged-mutant":
+        source = ast.parse(source_path.read_text())
+        definitions = {node.name: node for node in ast.walk(source) if isinstance(node, ast.FunctionDef)}
+        name = next(iter(meta["exit_code_by_key"])).rsplit(".", 1)[1]
+        definitions[name].body = copy.deepcopy(definitions["x_accepts__mutmut_orig"].body)
+        source_path.write_text(ast.unparse(source))
+    elif sabotage == "missing-association":
+        stats["tests_by_mangled_function_name"][function] = []
+    elif sabotage == "nonlist-association":
+        stats["tests_by_mangled_function_name"][function] = test
+    elif sabotage == "unknown-test":
+        stats["tests_by_mangled_function_name"][function] = ["test_unknown.py::test_unrun"]
+    elif sabotage == "nonstring-test":
+        stats["tests_by_mangled_function_name"][function] = [42]
+    elif sabotage == "boolean-duration":
+        stats["duration_by_test"][test] = True
+    elif sabotage == "negative-duration":
+        stats["duration_by_test"][test] = -1
+    elif sabotage == "nonnumeric-duration":
+        stats["duration_by_test"][test] = "fast"
+    elif sabotage in {"nonterminal-code", "error-code"}:
+        code = None if sabotage == "nonterminal-code" else 2
+        for name in meta["exit_code_by_key"]:
+            meta["exit_code_by_key"][name] = code
+        for mutant in receipt["mutants"]:
+            mutant.update(exit_code=code, status="error")
+    elif sabotage == "empty-inventory":
+        source_path.write_text("def x_accepts__mutmut_orig(age):\n    return age >= 18\n")
+        meta["exit_code_by_key"] = {}
+        receipt["mutants"] = []
+    elif sabotage == "tool-exit":
+        receipt["tool_exit_code"] = 1
+    meta_path.write_text(json.dumps(meta))
+    stats_path.write_text(json.dumps(stats))
+    _reseal_artifacts(output, receipt)
+    if sabotage == "duplicate-json":
+        receipt_path.write_text('{"status":"pass","status":"fail"}')
+    elif sabotage == "malformed-json":
+        receipt_path.write_text("{")
+    elif sabotage == "array-json":
+        receipt_path.write_text("[]")
+    elif sabotage == "digest":
+        receipt["payload_digest"] = "sha256:" + "0" * 64
+        receipt_path.write_text(json.dumps(receipt))
+    elif sabotage == "missing-digest":
+        del receipt["payload_digest"]
+        receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(MutationError, match=message):
+        validate_mutation_receipt(root, base, head, output, run_id="local-test", attempt=1)
+
+
+@pytest.mark.parametrize("run_id,attempt", [("", 1), ("  ", 1), ("local-test", 0), ("local-test", -1)])
+def test_public_main_requires_attempt_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], run_id: str, attempt: int
+) -> None:
+    output = tmp_path / "must-not-exist"
+    result = main(
+        [
+            "plan",
+            "--base",
+            "0" * 40,
+            "--head",
+            "1" * 40,
+            "--output",
+            str(output),
+            "--run-id",
+            run_id,
+            "--attempt",
+            str(attempt),
+        ]
+    )
+    assert result == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "error",
+        "code": "invalid-evidence",
+        "message": "run-id and positive attempt are required",
+    }
+    assert not output.exists()
+
+
+def test_existing_output_preserves_prior_attempt(killed_evidence: tuple[Path, str, str, Path]) -> None:
+    root, base, head, output = killed_evidence
+    before = (output / "receipt.json").read_bytes()
+    result = _command(root, base, head, output)
+    assert result.returncode == 2
+    assert "output already exists" in json.loads(result.stdout)["message"]
+    assert (output / "receipt.json").read_bytes() == before
+
+
+def test_native_configuration_cannot_override_reviewed_mutation_controls(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    (root / "pyproject.toml").write_text('[tool.mutmut]\nsource_paths = ["irrelevant"]\n')
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: conflicting native controls")
+    result = _command(root, base, _git(root, "rev-parse", "HEAD"), tmp_path / "evidence")
+    assert result.returncode == 2
+    assert "second configuration is forbidden" in json.loads(result.stdout)["message"]
+    assert not (tmp_path / "evidence/receipt.json").exists()
+
+
+def test_real_mutant_inventory_cannot_exceed_declared_budget(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    policy = root / "mutation.toml"
+    policy.write_text(policy.read_text().replace("max_mutants = 100", "max_mutants = 1"))
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: bounded native inventory")
+    head = _git(root, "rev-parse", "HEAD")
+    output = tmp_path / "evidence"
+    result = _command(root, base, head, output)
+    assert result.returncode == 2, result.stdout + result.stderr
+    receipt = json.loads((output / "receipt.json").read_text())
+    assert receipt["status"] == "error"
+    assert receipt["error"] == "mutation scope exceeds the reviewed mutant budget"
+    assert len(receipt["mutants"]) > 1
+    assert _command(root, base, head, output, "verify").returncode == 2
+
+
+def test_native_test_process_error_is_not_a_killed_mutant(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    (root / "tests/test_admission.py").write_text(
+        "import os\nimport pytest\nfrom admission import accepts\n"
+        "pytestmark = pytest.mark.unit\n"
+        "def test_admission():\n"
+        "    if not accepts(18):\n        os._exit(2)\n"
+        "    assert accepts(17) is False\n    assert accepts(19) is True\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: native process failure")
+    output = tmp_path / "evidence"
+    result = _command(root, base, _git(root, "rev-parse", "HEAD"), output)
+    assert result.returncode == 2, result.stdout + result.stderr
+    receipt = json.loads((output / "receipt.json").read_text())
+    assert receipt["tool_exit_code"] == 0
+    assert receipt["status"] == "error"
+    assert (
+        receipt["error"]
+        == "native mutation results include missing, untested, interrupted or errored mutants"
+    )
+    assert any(item["exit_code"] == 2 and item["status"] == "error" for item in receipt["mutants"])
+
+
+def test_native_diagnostics_budget_retains_failure_evidence(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    (root / "pyproject.toml").write_text('[tool.pytest.ini_options]\naddopts = "-s"\n')
+    test = root / "tests/test_admission.py"
+    test.write_text(
+        "import os\n"
+        + test.read_text().replace(
+            "def test_admission():\n", "def test_admission():\n    os.write(1, b'diagnostic ' * 220000)\n"
+        )
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: bounded native diagnostics")
+    output = tmp_path / "evidence"
+    result = _command(root, base, _git(root, "rev-parse", "HEAD"), output)
+    assert result.returncode == 2, result.stdout + result.stderr
+    receipt = json.loads((output / "receipt.json").read_text())
+    assert receipt["status"] == "error"
+    assert receipt["error"] == "native mutation diagnostics exceeded the bounded output budget"
+    assert (output / "stdout.log").stat().st_size > 2 * 1024 * 1024
+    assert receipt["mutants"] == []
+
+
+def test_native_results_keep_distinct_functions_in_one_module(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    source = root / "src/admission.py"
+    source.write_text(source.read_text() + "\ndef next_age(age):\n    return age + 1\n")
+    test = root / "tests/test_admission.py"
+    test.write_text(
+        test.read_text()
+        + "\ndef test_next_age():\n    from admission import next_age\n"
+        + "    assert next_age(0) == 1\n    assert next_age(1) == 2\n    assert next_age(-1) == 0\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: multiple native function results")
+    head = _git(root, "rev-parse", "HEAD")
+    output = tmp_path / "evidence"
+    result = _command(root, base, head, output)
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = json.loads((output / "receipt.json").read_text())
+    assert {item["function"] for item in receipt["mutants"]} == {"admission.accepts", "admission.next_age"}
+    assert all(item["status"] == "killed" for item in receipt["mutants"])
+    assert _command(root, base, head, output, "verify").returncode == 0
+
+
+def test_public_admission_reports_exact_missing_receipt_error(
+    tmp_path: Path, killed_evidence: tuple[Path, str, str, Path]
+) -> None:
+    root, base, head, _ = killed_evidence
+    with pytest.raises(MutationError) as failure:
+        validate_mutation_receipt(root, base, head, tmp_path / "missing", run_id="local-test", attempt=1)
+    assert failure.value.code == "missing-receipt"
+    assert str(failure.value) == "missing mutation receipt"
+
+
+@pytest.mark.parametrize(
+    "sabotage,message",
+    [
+        ("artifact", "missing, extra or altered native mutation artifacts"),
+        ("mutants", "native mutant set does not match the claimed evidence"),
+    ],
+)
+def test_public_admission_distinguishes_artifact_corruption_from_claimed_inventory(
+    tmp_path: Path, killed_evidence: tuple[Path, str, str, Path], sabotage: str, message: str
+) -> None:
+    root, base, head, original = killed_evidence
+    output = tmp_path / "evidence"
+    shutil.copytree(original, output)
+    receipt = json.loads((output / "receipt.json").read_text())
+    if sabotage == "artifact":
+        (output / "stdout.log").write_text("replacement diagnostics")
+    else:
+        receipt["mutants"] = []
+    _seal(output, receipt)
+    with pytest.raises(MutationError) as failure:
+        validate_mutation_receipt(root, base, head, output, run_id="local-test", attempt=1)
+    assert failure.value.code == "invalid-evidence"
+    assert str(failure.value) == message
+
+
+def test_public_admission_accepts_equal_fresh_start_finish_timestamps(
+    tmp_path: Path, killed_evidence: tuple[Path, str, str, Path]
+) -> None:
+    root, base, head, original = killed_evidence
+    output = tmp_path / "evidence"
+    shutil.copytree(original, output)
+    receipt = json.loads((output / "receipt.json").read_text())
+    stamp = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    receipt["started_at"] = receipt["finished_at"] = stamp
+    _seal(output, receipt)
+    admitted = validate_mutation_receipt(root, base, head, output, run_id="local-test", attempt=1)
+    assert admitted == json.loads((output / "receipt.json").read_text())
+    assert admitted["started_at"] == admitted["finished_at"] == stamp
+
+
+def test_public_admission_rejects_just_over_twenty_four_hours_using_the_real_clock(
+    tmp_path: Path, killed_evidence: tuple[Path, str, str, Path]
+) -> None:
+    root, base, head, original = killed_evidence
+    output = tmp_path / "evidence"
+    shutil.copytree(original, output)
+    receipt = json.loads((output / "receipt.json").read_text())
+    for _ in range(5):
+        stamp = (datetime.now(UTC) - timedelta(seconds=86400.1)).isoformat()
+        receipt["started_at"] = receipt["finished_at"] = stamp
+        _seal(output, receipt)
+        started = time.monotonic()
+        failure = None
+        try:
+            validate_mutation_receipt(root, base, head, output, run_id="local-test", attempt=1)
+        except MutationError as error:
+            failure = error
+        if time.monotonic() - started < 0.8:
+            assert failure is not None, "evidence older than 24 hours was admitted"
+            assert str(failure) == "invalid mutation execution identity or timestamps"
+            assert isinstance(failure.__cause__, MutationError)
+            assert str(failure.__cause__) == "stale or reversed mutation execution timestamps"
+            return
+    pytest.fail("could not exercise the real one-second age boundary within its measurement window")
+
+
+def test_public_admission_accepts_broad_execution_at_the_exact_native_budget(
+    tmp_path: Path, killed_evidence: tuple[Path, str, str, Path]
+) -> None:
+    _, _, _, original = killed_evidence
+    budget = len(json.loads((original / "receipt.json").read_text())["mutants"])
+    root = tmp_path / "consumer"
+    base, _ = _consumer(root)
+    policy = root / "mutation.toml"
+    policy.write_text(policy.read_text().replace("max_mutants = 100", f"max_mutants = {budget}"))
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "test: exact native result budget")
+    head = _git(root, "rev-parse", "HEAD")
+    output = tmp_path / "evidence"
+    receipt = execute_mutation(root, base, head, output, run_id="broad-boundary", attempt=1, broad=True)
+    assert receipt["status"] == "pass", receipt
+    assert len(receipt["mutants"]) == budget
+    assert receipt["scope"]["mode"] == "broad"
+    admitted = validate_mutation_receipt(
+        root, base, head, output, run_id="broad-boundary", attempt=1, broad=True
+    )
+    assert admitted == receipt
+
+
+def test_public_admission_distinguishes_complete_logs_from_missing_native_inventory(
+    tmp_path: Path, killed_evidence: tuple[Path, str, str, Path]
+) -> None:
+    root, base, head, original = killed_evidence
+    output = tmp_path / "evidence"
+    output.mkdir()
+    for name in ("native-config.toml", "stdout.log", "stderr.log", "native/mutmut-stats.json"):
+        target = output / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(original / name, target)
+    receipt = json.loads((original / "receipt.json").read_text())
+    _reseal_artifacts(output, receipt)
+    with pytest.raises(MutationError, match=r"^missing or malformed mutation output: admission\.py\.meta$"):
+        validate_mutation_receipt(root, base, head, output, run_id="local-test", attempt=1)
+
+
+# -- the mutmut pin is read from the manifest, never restated ----------------
+
+
+def test_pinned_tool_version_reads_the_declared_pin() -> None:
+    """The enforced version comes from the manifest, so a bump is one edit.
+
+    A literal here would be a second source of truth no dependency tooling
+    updates: the bump would land in the manifest and the lock while this stayed
+    behind, and the equality check would fail closed against the version the
+    project actually installs.
+    """
+    assert mutation_assurance.pinned_tool_version() == version(mutation_assurance.TOOL_NAME)
+
+
+def test_pinned_tool_version_prefers_the_exact_pin_among_requirements(monkeypatch) -> None:
+    monkeypatch.setattr(
+        mutation_assurance,
+        "requires",
+        lambda _d: ["ruff>=0.15,<0.16", "mutmut==3.6.0", "pytest>=8"],
+    )
+    assert mutation_assurance.pinned_tool_version() == "3.6.0"
+
+
+def test_pinned_tool_version_reads_an_extra_scoped_pin(monkeypatch) -> None:
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: ['mutmut==3.6.0; extra == "dev"'])
+    assert mutation_assurance.pinned_tool_version() == "3.6.0"
+
+
+def test_pinned_tool_version_rejects_a_range_and_names_the_repair(monkeypatch) -> None:
+    """Evidence cannot be bound to a tool the manifest does not pin exactly."""
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: ["mutmut>=3.6"])
+    with pytest.raises(mutation_assurance.MutationError) as excinfo:
+        mutation_assurance.pinned_tool_version()
+    message = str(excinfo.value)
+    assert "does not pin" in message
+    assert "fix:" in message and "next:" in message
+
+
+def test_pinned_tool_version_rejects_an_absent_requirement(monkeypatch) -> None:
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: ["ruff>=0.15"])
+    with pytest.raises(mutation_assurance.MutationError):
+        mutation_assurance.pinned_tool_version()
+
+
+def test_pinned_tool_version_tolerates_a_distribution_with_no_requirements(monkeypatch) -> None:
+    """`requires` returns None for a distribution declaring nothing."""
+    monkeypatch.setattr(mutation_assurance, "requires", lambda _d: None)
+    with pytest.raises(mutation_assurance.MutationError):
+        mutation_assurance.pinned_tool_version()

@@ -102,12 +102,58 @@ def archive_executables(archive: bytes) -> list[str]:
         )
 
 
+#: Bounds on the derived campaign budget. The floor keeps a fast machine with a
+#: small change from being handed an unusable budget; the ceiling is what still
+#: catches a genuine hang, which is the one thing an absolute bound was good at.
+BUDGET_FIELDS = ("baseline_multiplier", "per_function_multiplier", "floor_seconds", "ceiling_seconds")
+BUDGET_CEILING = 3600
+
+
+def _validate_budget(value: Any) -> None:
+    """Reject a budget that is not a complete, ordered, positive specification."""
+    if not isinstance(value, dict) or set(value) != set(BUDGET_FIELDS):
+        raise MutationError(
+            "budget requires exactly " + ", ".join(BUDGET_FIELDS) + "; "
+            "fix: declare each field in mutation.toml; next: re-run the mutation check"
+        )
+    for field in BUDGET_FIELDS:
+        entry = value[field]
+        if type(entry) not in (int, float) or entry <= 0:
+            raise MutationError(f"budget.{field} must be a positive number")
+    if value["floor_seconds"] > value["ceiling_seconds"]:
+        raise MutationError("budget.floor_seconds cannot exceed budget.ceiling_seconds")
+    if value["ceiling_seconds"] > BUDGET_CEILING:
+        raise MutationError(f"budget.ceiling_seconds must not exceed {BUDGET_CEILING}")
+
+
+def derive_budget(budget: dict[str, Any], *, baseline_seconds: float, changed_functions: int) -> int:
+    """Return the campaign budget for this machine and this change.
+
+    An absolute bound conflates two independent things: how much work a campaign
+    is, and how fast the machine running it is. A single number can only ever be
+    right on the machine it was tuned on, and it goes wrong silently — a campaign
+    cut off before it evaluates a mutant reports the same way whether the budget
+    was too small or the code untested.
+
+    The campaign costs roughly one unmutated run per mutant, and the mutants come
+    from the changed functions, so both terms are measured rather than guessed:
+    ``baseline_seconds`` is this machine's cost for one scoped run, and
+    ``changed_functions`` is how much this particular change demands. The result
+    is clamped, and the caller records all of it in the receipt — a derived bound
+    that is not recorded is less accountable than the constant it replaced.
+    """
+    per_function = float(budget["per_function_multiplier"])
+    raw = baseline_seconds * (float(budget["baseline_multiplier"]) + per_function * changed_functions)
+    clamped = min(max(raw, float(budget["floor_seconds"])), float(budget["ceiling_seconds"]))
+    return round(clamped)
+
+
 def read_policy(files: dict[str, bytes]) -> dict[str, Any]:
     try:
         value = tomllib.loads(files["mutation.toml"].decode("utf-8"))
     except (KeyError, ValueError) as exc:
         raise MutationError("tracked mutation.toml policy is required") from exc
-    if set(value) != {"schema", "source_roots", "tests", "timeout_seconds", "max_mutants"}:
+    if set(value) != {"schema", "source_roots", "tests", "budget", "max_mutants"}:
         raise MutationError("mutation policy requires exact fields; exemptions are not supported")
     if value["schema"] != "tc.fitness/mutation-policy/v1":
         raise MutationError("unknown mutation policy schema")
@@ -128,9 +174,9 @@ def read_policy(files: dict[str, bytes]) -> dict[str, Any]:
                 raise MutationError(f"{key} must contain literal repository-relative paths")
             if not any(name == path or name.startswith(path.rstrip("/") + "/") for name in files):
                 raise MutationError(f"policy path has no tracked inputs: {path}")
-    for key, ceiling in (("timeout_seconds", 900), ("max_mutants", 100000)):
-        if type(value[key]) is not int or not 1 <= value[key] <= ceiling:
-            raise MutationError(f"{key} must be bounded between 1 and {ceiling}")
+    if type(value["max_mutants"]) is not int or not 1 <= value["max_mutants"] <= 100000:
+        raise MutationError("max_mutants must be bounded between 1 and 100000")
+    _validate_budget(value["budget"])
     if any(
         root == test or root.startswith(test + "/") or test.startswith(root + "/")
         for root in value["source_roots"]
