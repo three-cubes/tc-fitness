@@ -23,6 +23,28 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
   findings. The public process helper rejects missing, stale, mismatched or
   unexpected evidence; unavailable declared executables are explicit errors.
 
+- **A detector can declare itself skipped, and the runner reports it** — a check
+  that cannot run (its tool is absent, its input has not been produced, its env
+  gate is unset) conventionally prints `SKIP <name>: why` and exits 0. Exiting 0
+  made that indistinguishable from a real pass, so a catalogue reported green
+  while some of its rules examined nothing. The runner now classifies such a rule
+  as skipped rather than passed, on every dispatch path:
+  - `SKIP_EXIT_CODE` (77, the Automake convention for a skipped test) is the
+    universal signal — it works on the non-capturing dispatch, where the parent
+    never sees the child's output.
+  - On the capturing paths, a `SKIP <rule>` marker on the check's own stdout is
+    recognised with no detector change at all. The marker must name its own rule,
+    so a check whose *subject* is skipping does not classify itself as skipped.
+  - `Verdicts.skips` carries the reason per rule, and the aggregate banner names
+    every rule that did not examine its subject.
+  - `--skip-report PATH` writes the run's skips as JSON. The file is written even
+    when nothing skipped, so "no rule skipped" stays distinguishable from "the
+    report never ran".
+
+  Repinning consumers should expect their `ran` count to fall and `skipped` to
+  rise by the number of rules that were already skipping silently. No exit code
+  changes: a skip is not a failure.
+
 ### Changed
 
 - **Contract assurance rejects mutable or suppressed proof** — snapshot inputs

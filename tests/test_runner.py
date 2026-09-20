@@ -19,6 +19,7 @@ repo's rules. The fixtures prove:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -30,13 +31,18 @@ import pytest
 
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.runner import (
+    SKIP_EXIT_CODE,
     ConditionalResult,
     RunnerConfig,
+    Verdicts,
+    declared_skip_reason,
     dispatches_in_process,
     main_cli,
     make_env_path_conditional_check,
+    resolve_script,
     run,
     staged_paths,
+    write_skip_report,
 )
 
 pytestmark = pytest.mark.integration
@@ -771,6 +777,11 @@ def test_main_cli_returns_1_on_failure(checks_dir: Path, repo_root: Path) -> Non
     assert rc == 1
 
 
+def test_resolve_script_default_and_override() -> None:
+    assert resolve_script(RuleEntry(id="X", gate="x", check="foo_bar")) == "check_foo_bar.py"
+    assert resolve_script(RuleEntry(id="X", gate="x", check="foo", script="check-foo.sh")) == "check-foo.sh"
+
+
 def test_runner_config_puts_checks_dir_on_sys_path(checks_dir: Path, repo_root: Path) -> None:
     before = list(sys.path)
     try:
@@ -1348,3 +1359,126 @@ def test_core_entry_in_process_even_under_subprocess_dispatch(
     assert not verdict.ok
     assert "FAIL [no-duplicate-string]" in out
     assert "check script not found" not in out
+
+
+def test_declared_skip_reason_reads_a_colon_form() -> None:
+    entry = RuleEntry(id="S1", gate="s1", check="osv_scanner_sca", summary="sca")
+    assert declared_skip_reason(entry, "SKIP osv_scanner_sca: binary not on PATH\n") == "binary not on PATH"
+
+
+def test_declared_skip_reason_reads_a_parenthesised_form() -> None:
+    entry = RuleEntry(id="S2", gate="s2", check="coverage_includes_branches", summary="cov")
+    out = "SKIP coverage_includes_branches (coverage.xml not present)\n"
+    assert declared_skip_reason(entry, out) == "coverage.xml not present"
+
+
+def test_declared_skip_reason_matches_the_rule_id_too() -> None:
+    entry = RuleEntry(id="branch_naming", gate="bn", check="branch_naming", summary="bn")
+    assert declared_skip_reason(entry, "SKIP branch_naming: detached HEAD") == "detached HEAD"
+
+
+def test_declared_skip_reason_ignores_a_rule_reporting_about_other_skips() -> None:
+    """A check whose SUBJECT is skipping must not classify itself as skipped.
+
+    taz ships ``test_skip_rationale``, which reports on skipped tests. Matching a
+    bare ``SKIP`` substring would delete it from the ledger — turning a fix for
+    invisible skips into a new invisible skip.
+    """
+    entry = RuleEntry(id="TSR", gate="tsr", check="test_skip_rationale", summary="skip rationale")
+    out = "SKIP without rationale: tests/test_a.py::test_b\nFound 1 offender\n"
+    assert declared_skip_reason(entry, out) is None
+
+
+def test_declared_skip_reason_returns_none_for_ordinary_output() -> None:
+    entry = RuleEntry(id="S3", gate="s3", check="alpha", summary="alpha")
+    assert declared_skip_reason(entry, "checked 12 files\n") is None
+
+
+def test_inprocess_detector_printing_skip_is_not_counted_as_passed(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_py_check(checks_dir, "alpha", "print('SKIP alpha: tool not installed')\nreturn 0")
+    rules = (RuleEntry(id="A1", gate="a1", check="alpha", summary="alpha rule"),)
+
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
+    out = _plain(capsys.readouterr().out)
+
+    assert verdict.ran == 0, "a rule that examined nothing must not count as having run"
+    assert verdict.skipped == 1
+    assert verdict.skips == {"A1": "tool not installed"}
+    assert "PASS [A1]" not in out
+    assert "SKIP [A1]" in out
+    assert "tool not installed" in out
+
+
+def test_inprocess_skip_exit_code_is_classified_without_any_marker(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_py_check(checks_dir, "alpha", f"return {SKIP_EXIT_CODE}")
+    rules = (RuleEntry(id="A1", gate="a1", check="alpha", summary="alpha rule"),)
+
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
+
+    assert verdict.ran == 0
+    assert verdict.skipped == 1
+    assert "A1" in verdict.skips
+    assert "PASS [A1]" not in _plain(capsys.readouterr().out)
+
+
+def test_subprocess_skip_exit_code_is_classified_on_the_noncapturing_path(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The default dispatch streams child output straight to fd1, so the exit
+    code is the only signal available there."""
+    _write_sh_check(checks_dir, "beta.sh", SKIP_EXIT_CODE, echo="SKIP beta: no input")
+    rules = (RuleEntry(id="B1", gate="b1", check="beta", script="beta.sh", summary="beta rule"),)
+
+    verdict = run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir, dispatch="subprocess")
+
+    assert verdict.ran == 0
+    assert verdict.skipped == 1
+    assert "PASS [B1]" not in _plain(capsys.readouterr().out)
+
+
+def test_aggregate_banner_names_the_rules_that_did_not_run(
+    checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_py_check(checks_dir, "alpha", "return 0")
+    _write_py_check(checks_dir, "beta", "print('SKIP beta: no coverage.xml')\nreturn 0")
+    rules = (
+        RuleEntry(id="A1", gate="a1", check="alpha", summary="alpha rule"),
+        RuleEntry(id="B1", gate="b1", check="beta", summary="beta rule"),
+    )
+
+    run(rules, mode="all", repo_root=repo_root, checks_dir=checks_dir)
+    out = _plain(capsys.readouterr().out)
+
+    assert "=== All 1 architecture fitness functions passed ===" in out
+    assert "1 rule(s) declared themselves skipped" in out
+    assert "B1: no coverage.xml" in out
+
+
+def test_write_skip_report_records_the_gap(tmp_path: Path) -> None:
+    verdict = Verdicts(ran=3, skipped=1, skips={"B1": "no coverage.xml"})
+    target = tmp_path / "nested" / "skips.json"
+
+    write_skip_report(target, verdict)
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["ran"] == 3
+    assert payload["declared_skips"] == [{"rule": "B1", "reason": "no coverage.xml"}]
+
+
+def test_write_skip_report_is_written_even_when_nothing_skipped(tmp_path: Path) -> None:
+    """ "No rule skipped" and "the report never ran" must not look identical —
+    that conflation is the defect this contract exists to remove."""
+    target = tmp_path / "skips.json"
+
+    write_skip_report(target, Verdicts(ran=2))
+
+    assert json.loads(target.read_text(encoding="utf-8"))["declared_skips"] == []
+
+
+def test_write_skip_report_without_a_path_writes_nothing(tmp_path: Path) -> None:
+    write_skip_report(None, Verdicts(ran=1, skipped=1, skips={"B1": "why"}))
+    assert list(tmp_path.iterdir()) == []
