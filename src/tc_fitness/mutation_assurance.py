@@ -71,6 +71,26 @@ MAX_LOG_BYTES = 2 * 1024 * 1024
 CAMPAIGN_TEST_ARGS = ("-m", "unit or contract")
 
 
+def campaign_workers() -> int:
+    """Return how many mutants this machine evaluates at once.
+
+    A fixed worker count is the same mistake as a fixed timeout: it describes
+    the machine it was written on. Two workers on a four-core runner leave half
+    the machine idle and double the wall-clock the campaign then has to be
+    granted, so the count comes from the machine and the budget is derived
+    against it.
+
+    The affinity mask is what a container actually gets, which is not always
+    what the host reports. One worker is the floor, because a campaign with
+    none evaluates nothing.
+    """
+    try:
+        available = len(os.sched_getaffinity(0))
+    except AttributeError:  # pragma: no cover - platform without affinity masks
+        available = os.cpu_count() or 1
+    return max(1, available)
+
+
 def _measure_baseline(snapshot: Path, env: dict[str, str], policy: dict[str, Any], output: Path) -> float:
     """Time one unmutated run of the selected tests, in the snapshot under test.
 
@@ -318,11 +338,12 @@ def execute_mutation(
             destination.chmod(0o755 if path in binding["executable_paths"] else 0o644)
         _native_config(snapshot, files, policy)
         (output / "native-config.toml").write_bytes((snapshot / "pyproject.toml").read_bytes())
+        workers = campaign_workers()
         command = [
             str(executable),
             "run",
             "--max-children",
-            "2",
+            str(workers),
             *[item["selector"] for item in binding["scope"]["functions"]],
         ]
         receipt["command"] = command
@@ -336,10 +357,12 @@ def execute_mutation(
             policy["budget"],
             baseline_seconds=baseline_seconds,
             changed_functions=len(binding["scope"]["functions"]),
+            workers=workers,
         )
         receipt["budget"] = {
             "baseline_seconds": round(baseline_seconds, 3),
             "changed_functions": len(binding["scope"]["functions"]),
+            "workers": workers,
             "policy": policy["budget"],
             "granted_seconds": budget_seconds,
         }

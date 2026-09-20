@@ -9,6 +9,7 @@ small or the code untested.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
@@ -29,31 +30,33 @@ _BUDGET = {
 
 def test_budget_scales_with_the_machine() -> None:
     """The same change on a slower runner legitimately needs longer."""
-    fast = mutation_scope.derive_budget(_BUDGET, baseline_seconds=10, changed_functions=40)
-    slow = mutation_scope.derive_budget(_BUDGET, baseline_seconds=30, changed_functions=40)
+    fast = mutation_scope.derive_budget(_BUDGET, baseline_seconds=10, changed_functions=40, workers=1)
+    slow = mutation_scope.derive_budget(_BUDGET, baseline_seconds=30, changed_functions=40, workers=1)
     assert slow > fast
 
 
 def test_budget_scales_with_the_change() -> None:
     """A campaign's cost comes from the mutants, and those come from the scope."""
-    small = mutation_scope.derive_budget(_BUDGET, baseline_seconds=20, changed_functions=5)
-    large = mutation_scope.derive_budget(_BUDGET, baseline_seconds=20, changed_functions=200)
+    small = mutation_scope.derive_budget(_BUDGET, baseline_seconds=20, changed_functions=5, workers=1)
+    large = mutation_scope.derive_budget(_BUDGET, baseline_seconds=20, changed_functions=200, workers=1)
     assert large > small
 
 
 def test_budget_never_falls_below_the_floor() -> None:
     """A fast machine and a tiny change must still get a usable budget."""
-    assert mutation_scope.derive_budget(_BUDGET, baseline_seconds=0.1, changed_functions=1) == 120
+    assert mutation_scope.derive_budget(_BUDGET, baseline_seconds=0.1, changed_functions=1, workers=1) == 120
 
 
 def test_budget_never_exceeds_the_ceiling() -> None:
     """The ceiling is what still catches a hang; scope cannot argue past it."""
-    assert mutation_scope.derive_budget(_BUDGET, baseline_seconds=60, changed_functions=5000) == 2400
+    assert (
+        mutation_scope.derive_budget(_BUDGET, baseline_seconds=60, changed_functions=5000, workers=1) == 2400
+    )
 
 
 def test_a_failed_baseline_measurement_falls_back_to_the_floor() -> None:
     """A zero baseline must not grant a zero budget."""
-    assert mutation_scope.derive_budget(_BUDGET, baseline_seconds=0, changed_functions=10) == 120
+    assert mutation_scope.derive_budget(_BUDGET, baseline_seconds=0, changed_functions=10, workers=1) == 120
 
 
 def test_policy_requires_every_budget_field() -> None:
@@ -155,3 +158,34 @@ def test_the_policy_ceiling_cannot_exceed_the_schema_ceiling() -> None:
     policy = tomllib.loads((REPO_ROOT / "mutation.toml").read_text())
 
     assert policy["budget"]["ceiling_seconds"] <= mutation_scope.BUDGET_CEILING
+
+
+def test_budget_scales_down_with_parallelism() -> None:
+    """Four times the mutants at once is a quarter of the wall clock.
+
+    Both grants sit inside the clamp by construction, so this tests the division
+    rather than the floor and ceiling either side of it.
+    """
+    serial = mutation_scope.derive_budget(_BUDGET, baseline_seconds=10, changed_functions=50, workers=1)
+    parallel = mutation_scope.derive_budget(_BUDGET, baseline_seconds=10, changed_functions=50, workers=4)
+
+    assert _BUDGET["floor_seconds"] < parallel < serial < _BUDGET["ceiling_seconds"]
+    assert parallel * 4 == pytest.approx(serial, abs=4)
+
+
+def test_budget_refuses_a_campaign_with_no_workers() -> None:
+    """Dividing work across no workers is not a budget, it is a crash."""
+    with pytest.raises(mutation_scope.MutationError):
+        mutation_scope.derive_budget(_BUDGET, baseline_seconds=20, changed_functions=10, workers=0)
+
+
+def test_workers_come_from_the_machine_not_a_constant() -> None:
+    """A fixed worker count describes the machine it was written on."""
+    assert mutation_assurance.campaign_workers() == len(os.sched_getaffinity(0))
+
+
+def test_workers_never_fall_below_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A campaign evaluating nothing in parallel still evaluates something."""
+    monkeypatch.setattr(mutation_assurance.os, "sched_getaffinity", lambda _pid: set())
+
+    assert mutation_assurance.campaign_workers() == 1

@@ -9,12 +9,15 @@ max_mutants = 100000
 # off before it evaluates a mutant reports the same way whether the number was
 # too small or the code untested.
 #
-# granted = clamp(baseline * (baseline_multiplier + per_function_multiplier * changed_functions),
-#                 floor_seconds, ceiling_seconds)
+# work    = baseline * (baseline_multiplier + per_function_multiplier * changed_functions)
+# granted = clamp(work / workers, floor_seconds, ceiling_seconds)
 #
 # baseline is one measured unmutated run of the selected tests in the snapshot
-# under test; changed_functions is this change's own scope. Both terms are
-# measured, and all of them are recorded in the receipt.
+# under test; changed_functions is this change's own scope; workers is how many
+# mutants the machine evaluates at once. The multipliers estimate total work, so
+# dividing by workers keeps them independent of how parallel the machine is —
+# the same campaign on twice the cores needs half the wall clock and is granted
+# half. Every term is recorded in the receipt.
 #
 # ceiling_seconds must stay below the CI job's own timeout, with room for
 # checkout and install. A campaign that outruns this ceiling fails inside
@@ -23,7 +26,7 @@ max_mutants = 100000
 # is the failure mode this policy exists to remove. Both ends of that
 # ordering are asserted by tests/test_mutation_budget.py.
 [budget]
-baseline_multiplier = 4
-per_function_multiplier = 1.5
+baseline_multiplier = 8
+per_function_multiplier = 3
 floor_seconds = 120
 ceiling_seconds = 1800

@@ -126,25 +126,35 @@ def _validate_budget(value: Any) -> None:
         raise MutationError(f"budget.ceiling_seconds must not exceed {BUDGET_CEILING}")
 
 
-def derive_budget(budget: dict[str, Any], *, baseline_seconds: float, changed_functions: int) -> int:
-    """Return the campaign budget for this machine and this change.
+def derive_budget(
+    budget: dict[str, Any], *, baseline_seconds: float, changed_functions: int, workers: int
+) -> int:
+    """Return the wall-clock budget for this machine, this change and this parallelism.
 
-    An absolute bound conflates two independent things: how much work a campaign
-    is, and how fast the machine running it is. A single number can only ever be
-    right on the machine it was tuned on, and it goes wrong silently — a campaign
-    cut off before it evaluates a mutant reports the same way whether the budget
-    was too small or the code untested.
+    An absolute bound conflates independent things: how much work a campaign is,
+    how fast the machine running it is, and how much of that machine it gets. A
+    single number can only ever be right on the machine it was tuned on, and it
+    goes wrong silently — a campaign cut off before it evaluates a mutant reports
+    the same way whether the budget was too small or the code untested.
 
-    The campaign costs roughly one unmutated run per mutant, and the mutants come
-    from the changed functions, so both terms are measured rather than guessed:
-    ``baseline_seconds`` is this machine's cost for one scoped run, and
-    ``changed_functions`` is how much this particular change demands. The result
-    is clamped, and the caller records all of it in the receipt — a derived bound
-    that is not recorded is less accountable than the constant it replaced.
+    So each term is measured rather than guessed. The campaign costs roughly one
+    unmutated run per mutant and the mutants come from the changed functions, so
+    the multipliers estimate total *work*: ``baseline_seconds`` is this machine's
+    cost for one scoped run and ``changed_functions`` is what this change demands.
+    Wall-clock is that work divided by the mutants evaluated at once, which keeps
+    the multipliers independent of how parallel the machine happens to be — the
+    same campaign on twice the cores is granted half the time because it needs
+    half the time, not because anyone retuned a constant.
+
+    The result is clamped, and the caller records every term in the receipt. A
+    derived bound that is not recorded is less accountable than the constant it
+    replaced.
     """
+    if workers < 1:
+        raise MutationError("a campaign evaluating no mutants cannot be budgeted")
     per_function = float(budget["per_function_multiplier"])
-    raw = baseline_seconds * (float(budget["baseline_multiplier"]) + per_function * changed_functions)
-    clamped = min(max(raw, float(budget["floor_seconds"])), float(budget["ceiling_seconds"]))
+    work = baseline_seconds * (float(budget["baseline_multiplier"]) + per_function * changed_functions)
+    clamped = min(max(work / workers, float(budget["floor_seconds"])), float(budget["ceiling_seconds"]))
     return round(clamped)
 
 
