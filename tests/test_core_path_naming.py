@@ -67,12 +67,11 @@ def test_cli_executes_with_repo_root(tmp_path: Path) -> None:
 
 
 def test_allowed_name_under_a_kebab_root_is_never_flagged_even_if_not_kebab_case() -> None:
-    """A README does not need to be kebab-case itself to sit under a kebab root."""
+    """A README is exempt by the rule itself now, not by a configurable allow-list."""
     assert not name_violates_convention(
         "docs/README.md",
         kebab_roots=("docs/",),
         snake_roots=(),
-        allowed_names=frozenset({"README.md"}),
     )
 
 
@@ -82,32 +81,12 @@ def test_extension_with_no_matching_root_convention_is_clean() -> None:
         "docs/Weird.py",
         kebab_roots=("docs/",),
         snake_roots=(),
-        allowed_names=frozenset(),
     )
     assert not name_violates_convention(
         "scripts/Weird.md",
         kebab_roots=(),
         snake_roots=("scripts/",),
-        allowed_names=frozenset(),
     )
-
-
-def test_configured_allowed_names_replaces_the_default_list(tmp_path: Path) -> None:
-    """A custom allow-list REPLACES the default, so README.md is no longer exempt on its own."""
-    _seed(tmp_path, "docs/README.md")
-    _seed(tmp_path, "docs/MyCustom.md")
-    rule = build({"kebab_roots": ["docs/"], "allowed_names": ["MyCustom.md"]}, repo_root=tmp_path)
-    assert {str(p) for p in rule.collect_violations()} == {"docs/README.md"}
-
-
-def test_configured_exempt_segments_replaces_the_default_cache_dirs(tmp_path: Path) -> None:
-    """A custom exempt-segment list replaces the default, so __pycache__ falls back into scope."""
-    rule = build(
-        {"kebab_roots": ["docs/"], "exempt_segments": ["vendor"]},
-        repo_root=tmp_path,
-    )
-    assert rule.is_in_scope("docs/__pycache__/BadName.md")
-    assert not rule.is_in_scope("docs/vendor/BadName.md")
 
 
 def test_python_module_entrypoint_runs_the_real_check(tmp_path: Path) -> None:
