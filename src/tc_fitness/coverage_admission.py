@@ -93,6 +93,33 @@ def exact_checkout(root: Path, base: str, candidate: str) -> None:
         raise ValueError("coverage candidate contains uncommitted files")
 
 
+def exclusive_checkout(root: Path) -> None:
+    """Require a tree holding the candidate and nothing else, ignored files included.
+
+    A receipt states that these counts belong to one commit. An ignored
+    conftest, test module or fixture is still importable and still changes
+    which lines execute, so producing beside one attributes coverage to a
+    commit that does not contain it. Only the producer needs this: the callers
+    that merely check a report against a commit run in a working checkout,
+    where ignored build output is ordinary and influences nothing.
+
+    The transaction satisfies this by measuring in a fresh detached worktree
+    and keeping the environment, the measurement output and every cache
+    outside the tree.
+    """
+    untracked = [name for name in git(root, "ls-files", "--others", "-z", "--").split("\0") if name]
+    if untracked:
+        raise ValueError(
+            "coverage producer requires a tree holding only the candidate; "
+            "found "
+            + str(len(untracked))
+            + " file(s) absent from it, starting with "
+            + untracked[0]
+            + " — produce the receipt in a fresh worktree with the environment, "
+            "output and caches outside it"
+        )
+
+
 def source_files(root: Path, roots: list[str]) -> dict[str, Path]:
     """Enumerate the complete Python scope, including untracked source."""
     files: dict[str, Path] = {}
@@ -316,6 +343,23 @@ def receipt_failures(root: Path, config: dict[str, Any]) -> dict[str, str]:
 #: competing for the same cores.
 MEASUREMENT_BACKSTOP_SECONDS = 3600
 
+#: Coverage.py refuses a configuration option it does not recognise, so every
+#: option named here binds the declared Coverage.py floor to the release that
+#: introduced it.
+RUN_SECTION = "[run]\nbranch = true\nparallel = true\npatch = subprocess\n"
+
+#: The producer runs whatever test command the caller supplies, so no runner
+#: distribution is mandatory. Recording every installed distribution binds the
+#: whole environment to the receipt instead of a hand-picked pair of names, and
+#: makes a dependency that differs between base and candidate visible.
+#: Coverage.py alone is resolved by name: the producer cannot run without it.
+_IDENTITY_PROBE = (
+    "import sys,json,importlib.metadata as m;"
+    "d={x.metadata['Name']:x.version for x in m.distributions() if x.metadata['Name']};"
+    "print(json.dumps({'python':sys.version,'python_executable':sys.executable,"
+    "'coverage':m.version('coverage'),'distributions':sorted(d.items())}))"
+)
+
 
 class CoverageExecutionError(ValueError):
     """A terminal native measurement failure with retained structured diagnostics."""
@@ -352,6 +396,7 @@ def produce_coverage(
     base, candidate = identity(base), identity(candidate)
     run_id, attempt_id = configured(run_id), configured(attempt_id)
     exact_checkout(root, base, candidate)
+    exclusive_checkout(root)
     files = source_files(root, roots)
     config_path = root / config
     if Path(config).is_absolute() or ".." in Path(config).parts:
@@ -371,8 +416,7 @@ def produce_coverage(
             str(interpreter),
             "-I",
             "-c",
-            "import sys,json,importlib.metadata as m; print(json.dumps({'python':sys.version,"
-            "'python_executable':sys.executable,'coverage':m.version('coverage'),'pytest':m.version('pytest')}))",
+            _IDENTITY_PROBE,
         ],
         cwd=root,
         env=environment,
@@ -391,7 +435,8 @@ def produce_coverage(
         raise ValueError("coverage digest output must be a new external handoff file")
     settings = output / "coverage.ini"
     settings.write_text(
-        "[run]\nbranch = true\nparallel = true\npatch = subprocess\nsource =\n"
+        RUN_SECTION
+        + "source =\n"
         + "".join(f"    {root / name}\n" for name in roots)
         + f"data_file = {output / 'coverage.data'}\n[report]\nexclude_lines =\npartial_branches =\n"
     )
@@ -437,7 +482,7 @@ def produce_coverage(
             "command": command,
             "coverage_version": versions["coverage"],
             "python_version": versions["python"],
-            "pytest_version": versions["pytest"],
+            "distributions": versions["distributions"],
             "python_executable": versions["python_executable"],
         },
         **measure(root, output / "coverage.xml", files),

@@ -38,6 +38,11 @@ def git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _distributions(toolchain: dict[str, object]) -> dict[str, str]:
+    """The receipt records the environment as ordered name/version pairs."""
+    return {name: version for name, version in toolchain["distributions"]}
+
+
 def commit(root: Path) -> str:
     git(root, "add", ".")
     git(
@@ -140,7 +145,7 @@ def test_public_transaction_freshly_measures_both_commits_with_fixed_profile(tmp
             assert (retained / label / "measurement" / report).is_file()
         toolchain = result[label]["toolchain"]
         assert toolchain["coverage"] == "7.14.2"
-        assert toolchain["pytest"] == "9.1.0"
+        assert _distributions(toolchain)["pytest"] == "9.1.0"
         assert toolchain["python_executable"] != sys.executable
         assert toolchain["uv"].startswith("uv ")
         assert (
@@ -571,8 +576,8 @@ def test_each_commit_uses_its_own_locked_pytest_version(tmp_path: Path) -> None:
     candidate = commit(root)
     code, result = invoke(root, base, candidate, tmp_path / "result.json")
     assert code == 0, result
-    assert result["base"]["toolchain"]["pytest"] == "9.1.0"
-    assert result["candidate"]["toolchain"]["pytest"] == "9.0.2"
+    assert _distributions(result["base"]["toolchain"])["pytest"] == "9.1.0"
+    assert _distributions(result["candidate"]["toolchain"])["pytest"] == "9.0.2"
     assert result["base"]["toolchain"]["lock_digest"] != result["candidate"]["toolchain"]["lock_digest"]
 
 

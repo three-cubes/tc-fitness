@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 from tc_fitness import coverage_admission
 
@@ -151,3 +153,25 @@ def test_the_suite_runs_on_every_supported_interpreter() -> None:
     legs = set(workflow["jobs"]["tests"]["strategy"]["matrix"]["python-version"])
 
     assert supported <= legs | transaction, supported - (legs | transaction)
+
+
+def test_the_coverage_floor_supports_every_option_the_producer_emits() -> None:
+    """A configuration option is only honoured by the release that introduced it.
+
+    Coverage.py ignores nothing it does not recognise — it refuses the run — and
+    a floor below the introducing release lets a consumer resolve a Coverage.py
+    that cannot honour the producer's own generated configuration.
+    """
+    introduced = {"patch": Version("7.10"), "branch": Version("7.5"), "parallel": Version("7.5")}
+    manifest = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+    declared = next(r for r in manifest["project"]["dependencies"] if r.startswith("coverage"))
+    floor = Version(next(s.version for s in Requirement(declared).specifier if s.operator == ">="))
+
+    emitted = {
+        line.split("=", 1)[0].strip()
+        for line in coverage_admission.RUN_SECTION.splitlines()
+        if "=" in line and not line.startswith("[")
+    }
+    unsupported = {name for name in emitted if introduced.get(name, floor) > floor}
+
+    assert not unsupported, unsupported

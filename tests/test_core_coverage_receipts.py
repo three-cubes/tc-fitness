@@ -48,7 +48,20 @@ def commit(root: Path) -> str:
     return command(root, "git", "rev-parse", "HEAD")
 
 
-def repository(root: Path, *, covered: bool = True, name: str = "subject.py") -> dict[str, object]:
+def repository(
+    root: Path,
+    *,
+    covered: bool = True,
+    name: str = "subject.py",
+    measure: bool = True,
+) -> dict[str, object]:
+    """Build a two-commit fixture, optionally with a report already measured in it.
+
+    ``measure=False`` leaves the tree holding nothing but the candidate, which
+    is what the producer requires: it brings its own configuration and writes
+    its output outside the tree, so an in-tree report would only be an
+    execution input absent from the commit the receipt names.
+    """
     command(root, "git", "init", "-q")
     write(root, ".gitignore", ".coverage*\ncoverage.xml\nreceipt*\n__pycache__/\n")
     write(root, "src/" + name, "def choose(flag):\n    return 1\n")
@@ -63,13 +76,14 @@ def repository(root: Path, *, covered: bool = True, name: str = "subject.py") ->
     write(root, "src/" + name, "def choose(flag):\n    if flag:\n        return 2\n    return 1\n")
     write(root, "test_subject.py", test + ("assert subject['choose'](True) == 2\n" if covered else ""))
     head = commit(root)
-    write(
-        root,
-        ".coveragerc",
-        "[run]\nbranch = true\nsource = src\n[report]\nexclude_lines =\npartial_branches =\n",
-    )
-    command(root, sys.executable, "-m", "coverage", "run", "test_subject.py")
-    command(root, sys.executable, "-m", "coverage", "xml")
+    if measure:
+        write(
+            root,
+            ".coveragerc",
+            "[run]\nbranch = true\nsource = src\n[report]\nexclude_lines =\npartial_branches =\n",
+        )
+        command(root, sys.executable, "-m", "coverage", "run", "test_subject.py")
+        command(root, sys.executable, "-m", "coverage", "xml")
     return {"roots": ["src"], "floor_pct": 100, "exact_base_commit": base, "candidate_commit": head}
 
 
@@ -195,7 +209,7 @@ def produce(
 
 
 def receipt_pair(root: Path, output: Path) -> tuple[dict[str, object], Path, Path]:
-    config = repository(root)
+    config = repository(root, measure=False)
     base, candidate = str(config["exact_base_commit"]), str(config["candidate_commit"])
     command(root, "git", "checkout", "-q", base)
     accepted_dir = output / "accepted"
@@ -500,7 +514,7 @@ def test_public_producer_rejects_unbound_execution_inputs(tmp_path: Path, damage
 
     root = tmp_path / "repo"
     root.mkdir()
-    config = repository(root)
+    config = repository(root, measure=False)
     base = str(config["exact_base_commit"])
     candidate = str(config["candidate_commit"])
     config_name = "coverage-policy.toml"
@@ -538,12 +552,49 @@ def test_public_producer_rejects_unbound_execution_inputs(tmp_path: Path, damage
         )
 
 
+def test_public_producer_refuses_a_tree_carrying_an_ignored_execution_input(tmp_path: Path) -> None:
+    """An ignored conftest is importable, so a receipt beside one names the wrong commit."""
+    from tc_fitness.coverage_admission import produce_coverage
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    config = repository(root, measure=False)
+    write(root, ".gitignore", ".coverage*\ncoverage.xml\nreceipt*\n__pycache__/\nconftest.py\n")
+    command(root, "git", "add", ".gitignore")
+    command(
+        root,
+        "git",
+        "-c",
+        "user.name=Contract",
+        "-c",
+        "user.email=contract@example.invalid",
+        "commit",
+        "-qm",
+        "ignore conftest",
+    )
+    candidate = command(root, "git", "rev-parse", "HEAD")
+    write(root, "conftest.py", "import runpy\n")
+
+    with pytest.raises(ValueError, match="tree holding only the candidate"):
+        produce_coverage(
+            root=root,
+            base=str(config["exact_base_commit"]),
+            candidate=candidate,
+            roots=["src"],
+            config="coverage-policy.toml",
+            run_id="run",
+            attempt_id="attempt",
+            output=tmp_path / "measurement",
+            command=["test_subject.py"],
+        )
+
+
 def test_public_producer_writes_independent_digest_handoff(tmp_path: Path) -> None:
     from tc_fitness.coverage_admission import produce_coverage
 
     root = tmp_path / "repo"
     root.mkdir()
-    config = repository(root)
+    config = repository(root, measure=False)
     candidate = str(config["candidate_commit"])
     handoff = tmp_path / "measurement.sha256"
     payload = produce_coverage(
@@ -604,7 +655,7 @@ def test_public_producer_detects_configuration_changed_by_test_execution(tmp_pat
 
     root = tmp_path / "repo"
     root.mkdir()
-    config = repository(root)
+    config = repository(root, measure=False)
     write(
         root,
         "change_config.py",
@@ -637,7 +688,7 @@ def test_public_producer_main_returns_digest_for_completed_measurement(
 
     root = tmp_path / "repo"
     root.mkdir()
-    config = repository(root)
+    config = repository(root, measure=False)
     output = tmp_path / "measurement"
     candidate = str(config["candidate_commit"])
     environment_name = "TC_FITNESS_TEST_COVERAGE_RUN_ID"

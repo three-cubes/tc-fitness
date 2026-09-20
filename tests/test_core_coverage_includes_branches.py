@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.coverage_includes_branches import (
+    _resolve_element_tree,
     build,
     main,
     report_lacks_branches,
@@ -178,6 +179,28 @@ def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Pa
     rule = build({"coverage_report": str(external)}, repo_root=repo)
 
     assert rule.enumerate_files() == [repo / "coverage.xml"]
+
+
+def test_the_parser_falls_back_to_the_standard_library_without_defusedxml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumer installing the package alone still parses reports."""
+    monkeypatch.setitem(sys.modules, "defusedxml", None)
+
+    assert _resolve_element_tree() is ElementTree
+
+
+def test_measured_branch_evidence_can_be_baselined(tmp_path: Path) -> None:
+    """Debt that was measured is ratchetable; only absent evidence is refused."""
+    (tmp_path / "coverage.xml").write_text(
+        '<coverage branch-rate="0" branches-valid="0"><sources><source>.</source></sources></coverage>'
+    )
+    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
+
+    baseline = rule.establish_baseline()
+
+    entries = [line for line in baseline.read_text().splitlines() if line and not line.startswith("#")]
+    assert entries == ["coverage.xml"]
 
 
 def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
