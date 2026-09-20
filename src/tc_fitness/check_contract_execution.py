@@ -27,7 +27,7 @@ from tc_fitness.check_contracts import (
     GitCaseEnvironment,
     load_check_contract,
 )
-from tc_fitness.check_evidence import capture_check_evidence
+from tc_fitness.check_evidence import CheckEvidence, CheckResult, capture_check_evidence
 from tc_fitness.core_checks import CORE_CHECKS
 from tc_fitness.runner import run
 from tc_fitness.runner import run_contract_case as run_contract_case
@@ -69,6 +69,20 @@ def candidate_identity() -> dict[str, str]:
     }
 
 
+def copy_verified_fixture(fixture: Path, destination: Path, expected_digest: str) -> None:
+    """Copy a fixture and reject a snapshot that differs from its bound digest."""
+    shutil.copytree(fixture, destination)
+    if tree_digest(destination) != expected_digest:
+        raise CheckContractError("fixture changed while copying the execution snapshot")
+
+
+def terminal_check_result(evidence: CheckEvidence) -> CheckResult:
+    """Return the one terminal result required by a contract execution."""
+    if len(evidence.results) != 1:
+        raise CheckContractError("missing or multiple terminal check results")
+    return evidence.results[0]
+
+
 def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
     """Run one case and retain its terminal evidence; return its actual exit."""
     manifest_bytes = manifest.read_bytes()
@@ -90,9 +104,7 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
     started = datetime.now(UTC).isoformat()
     with TemporaryDirectory(prefix="tc-fitness-contract-") as temporary:
         repo = Path(temporary) / "repo"
-        shutil.copytree(fixture, repo)
-        if tree_digest(repo) != fixture_digest:
-            raise CheckContractError("fixture changed while copying the execution snapshot")
+        copy_verified_fixture(fixture, repo, fixture_digest)
         _materialize_git_fixture(repo, case.environment)
         with (
             _case_environment(case.environment.path, Path(temporary)),
@@ -113,9 +125,7 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
             raise CheckContractError("candidate source changed during execution")
         if (repo / ".architecture" / "baseline").exists():
             raise CheckContractError("execution created a suppression baseline")
-        if len(evidence.results) != 1:
-            raise CheckContractError("missing or multiple terminal check results")
-        result = evidence.results[0]
+        result = terminal_check_result(evidence)
         exit_code = 2 if result.status == "error" else result.exit_code
         payload: dict[str, Any] = {
             "schema": LEDGER_SCHEMA,

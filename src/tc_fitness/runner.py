@@ -66,6 +66,7 @@ import inspect
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -118,6 +119,40 @@ _SHELL_SUFFIX = ".sh"
 #: ``core:`` row are unaffected.
 _CORE_PREFIX = "core:"
 _CORE_PACKAGE = "tc_fitness.core_checks"
+
+
+def run_bounded_process(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+    timeout: float = 30,
+    stdout_path: Path | None = None,
+    stderr_path: Path | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a native tool in its own process group and retain terminal output.
+
+    A deadline stops the entire group, including mutation workers. Exit 124
+    denotes deadline exhaustion, never a successful test or killed mutant.
+    """
+    with contextlib.ExitStack() as stack:
+        stdout = stack.enter_context(stdout_path.open("wb")) if stdout_path else subprocess.PIPE
+        stderr = stack.enter_context(stderr_path.open("wb")) if stderr_path else subprocess.PIPE
+        process = subprocess.Popen(
+            list(argv),
+            cwd=cwd,
+            env=dict(env) if env is not None else None,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+        )
+        try:
+            out, err = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(list(argv), process.returncode, out or b"", err or b"")
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            out, err = process.communicate()
+            return subprocess.CompletedProcess(list(argv), 124, out or b"", err or b"")
 
 
 def is_core_check(entry: RuleEntry) -> bool:
