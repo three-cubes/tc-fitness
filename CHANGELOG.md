@@ -15,6 +15,8 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-21
+
 ### Removed
 
 - **Python 3.12 support.** `requires-python` is now `>=3.13`. This is the one
