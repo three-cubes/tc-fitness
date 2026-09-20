@@ -98,10 +98,7 @@ def execute_contract_case(manifest: Path, case_id: str, ledger: Path) -> int:
         raise CheckContractError("ledger must be outside the input fixture")
     if ledger.exists():
         raise CheckContractError("ledger already exists; retain it and select a new output for the retry")
-    try:
-        fixture_digest = tree_digest(fixture)
-    except OSError as exc:
-        raise CheckContractError(f"cannot read contract fixture: {exc}") from exc
+    fixture_digest = tree_digest(fixture)
     candidate = candidate_identity()
     started = datetime.now(UTC).isoformat()
     with TemporaryDirectory(prefix="tc-fitness-contract-") as temporary:

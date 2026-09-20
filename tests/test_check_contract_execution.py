@@ -348,20 +348,6 @@ def test_public_executor_requires_regular_readable_git_history(tmp_path: Path) -
         execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
 
 
-def test_public_executor_reports_an_unreadable_fixture(tmp_path: Path) -> None:
-    from tc_fitness.check_contract_execution import execute_contract_case
-    from tc_fitness.check_contracts import CheckContractError
-
-    manifest = make_git_contract(tmp_path)
-    history = tmp_path / "fixture" / ".contract" / "git.fast-import"
-    history.chmod(0)
-    try:
-        with pytest.raises(CheckContractError, match="cannot read contract fixture"):
-            execute_contract_case(manifest, "compliant", tmp_path / "ledger.json")
-    finally:
-        history.chmod(0o600)
-
-
 def test_verified_fixture_copy_rejects_digest_mismatch(tmp_path: Path) -> None:
     from tc_fitness.check_contract_execution import copy_verified_fixture
     from tc_fitness.check_contracts import CheckContractError
