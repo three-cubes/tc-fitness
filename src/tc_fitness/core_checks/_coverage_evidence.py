@@ -176,22 +176,3 @@ def resolve_coverage_filename(
 
 
 __all__ = ["resolve_coverage_filename"]
-
-
-def reject_external_report(report: str, repo_root: Path) -> None:
-    """Refuse a coverage report configured outside the repository.
-
-    A missing report is reported as a violation keyed on the report path, and
-    the gate relativises every violation to the repository root. An absolute
-    path outside it cannot be relativised, so the check would crash with a
-    ValueError instead of emitting the fail-closed missing-evidence verdict it
-    exists to give. Refusing the configuration keeps the failure at the point
-    someone can act on it.
-    """
-    path = Path(report)
-    if not path.is_absolute():
-        return
-    if not path.resolve().is_relative_to(repo_root.resolve()):
-        raise ValueError(
-            f"coverage_report must name a path inside the repository; {report} is outside {repo_root}"
-        )

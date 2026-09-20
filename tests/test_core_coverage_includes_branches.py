@@ -186,3 +186,10 @@ def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="cannot baseline absent coverage evidence"):
         rule.establish_baseline()
+
+
+def test_a_report_inside_the_repository_keeps_its_relative_identity(tmp_path: Path) -> None:
+    """The in-repository path is the ordinary case and must relativise unchanged."""
+    rule = build({"coverage_report": "reports/coverage.xml"}, repo_root=tmp_path)
+
+    assert rule.enumerate_files() == [tmp_path / "reports" / "coverage.xml"]

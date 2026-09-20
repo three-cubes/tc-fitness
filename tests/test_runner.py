@@ -40,6 +40,7 @@ from tc_fitness.runner import (
     main_cli,
     make_env_path_conditional_check,
     run,
+    run_bounded_process,
     staged_paths,
     write_skip_report,
 )
@@ -1573,3 +1574,14 @@ def test_write_skip_report_is_written_even_when_nothing_skipped(tmp_path: Path) 
 def test_write_skip_report_without_a_path_writes_nothing(tmp_path: Path) -> None:
     write_skip_report(None, Verdicts(ran=1, skipped=1, skips={"B1": "why"}))
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_bounded_process_that_outruns_its_deadline_reports_the_timeout_code(tmp_path: Path) -> None:
+    """A deadline must kill the whole group and be distinguishable from a test failure."""
+    result = run_bounded_process(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+        timeout=0.5,
+    )
+
+    assert result.returncode == 124
