@@ -9,8 +9,8 @@ explaining why the body is genuinely empty.
 Ported from kairix ``scripts/checks/check_empty_body_intent.py`` (F20) and
 re-expressed as a configurable, repo-agnostic rule. The intent-comment marker
 defaults to the conventional phrase but is overridable via a ``marker`` knob;
-the consumer supplies ``roots`` / ``exempt_files`` via ``[tool.tc_fitness]``.
-No repo paths or globs are baked in.
+the consumer supplies ``roots`` via ``[tool.tc_fitness]``. No repo paths or
+globs are baked in.
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> EmptyB
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(EmptyBodyIntent, argv)
 
 

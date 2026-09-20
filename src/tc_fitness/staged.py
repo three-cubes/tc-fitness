@@ -172,10 +172,10 @@ def decide(
 #
 # When a file-local rule runs in staged mode, it only needs to RE-CHECK the
 # staged files — every other in-scope file was clean at the previous commit and
-# its content is unchanged, so its baseline-diff verdict is unchanged. Narrowing
+# its content is unchanged, so its file-local verdict is unchanged. Narrowing
 # the rule's file enumeration to the staged set turns a full-tree walk into a
 # handful of files. Soundness note: this only narrows FILE-LOCAL rules, where a
-# per-file verdict is independent of the other files. Relational and always-run
+# each file's verdict is independent of the other files. Relational and always-run
 # rules are NEVER narrowed.
 #
 # WHICH enumeration surfaces to narrow is repo-specific (kairix patches its

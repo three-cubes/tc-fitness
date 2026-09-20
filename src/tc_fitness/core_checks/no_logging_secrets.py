@@ -67,9 +67,9 @@ REMEDIATION = _remediation(
     fix=(
         "rewrite each flagged log/print/raise call so the secret-named value is "
         "summarised before it reaches the sink — pass `api_key is not None` (a "
-        "bool), `len(token)` (an int), or a non-secret correlation key. If the "
-        "call legitimately handles a secret, move it inside one of the configured "
-        "redaction-boundary modules (the exempt_files)."
+        "bool), `len(token)` (an int), or a non-secret correlation key. A call "
+        "that legitimately handles a secret still summarises it at the sink; the "
+        "redaction belongs in the call, not in a list of files the gate skips."
     ),
     nxt="re-run this check to confirm the gate goes green.",
     run="python -m tc_fitness.core_checks.no_logging_secrets",
@@ -224,7 +224,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoLoggingSecrets, argv)
 
 

@@ -15,7 +15,31 @@ from pathlib import Path
 
 import pytest
 
+from tc_fitness.coverage_transaction import _fresh_measurement
+
 pytestmark = pytest.mark.integration
+
+
+def test_measurement_rejects_an_untrusted_uv_identity(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot"
+    scratch = tmp_path / "evidence"
+    tools = tmp_path / "tools"
+    snapshot.mkdir()
+    scratch.mkdir()
+    tools.mkdir()
+    uv = tools / "uv"
+    uv.write_text("#!/bin/sh\nexit 17\n")
+    uv.chmod(0o755)
+    original = os.environ.get("PATH")
+    os.environ["PATH"] = str(tools)
+    try:
+        with pytest.raises(ValueError, match="trusted uv identity is unavailable"):
+            _fresh_measurement(snapshot, "0" * 40, scratch, "test")
+    finally:
+        if original is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = original
 
 
 @pytest.mark.parametrize("binding", ["valid", "malformed", "unregistered"])

@@ -3,7 +3,6 @@ check: core:mutation_survival_ratchet
 config:
   baseline_report: reports/prior.json
   current_report: reports/current.json
-  allow_missing_current: false
 cases:
 - id: compliant
   fixture: compliant

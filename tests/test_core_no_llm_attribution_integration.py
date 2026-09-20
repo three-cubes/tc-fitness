@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from tc_fitness.core_checks.no_llm_attribution import (
-    NoLlmAttribution,
     build,
     main,
     scan_text,
@@ -51,21 +50,6 @@ def test_functional_claude_string_is_not_authorship(tmp_path: Path) -> None:
     rule = build({"roots": ["."], "extensions": [".py"]}, repo_root=tmp_path)
     p = _seed(tmp_path, "src/c.py", 'PREFIX = "Claude Code sub-agent worktrees"\n')
     assert rule.file_has_violation(p) is False
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.py", f"# {ROBOT} Generated with Claude Code\n")
-    rule = NoLlmAttribution.from_config({"roots": ["src"], "extensions": [".py"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.py", "Co-Authored-By: Claude <noreply@anthropic.com>\n")
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-llm-attribution-files.txt").exists()
 
 
 # ── message-scan / strip CLI: the seam the commit-msg hook + CI leg consume ──

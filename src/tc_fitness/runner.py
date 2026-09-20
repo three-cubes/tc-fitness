@@ -219,7 +219,6 @@ class _RunKwargs(TypedDict, total=False):
     max_workers: int
     dispatch: str
     core_check_configs: Mapping[str, Mapping[str, Any]] | None
-    establish_baseline: bool
 
 
 #: A per-entry skip-line builder: given the :class:`RuleEntry`, return the exact
@@ -429,10 +428,6 @@ class RunnerConfig:
       is dispatched in-process with its matching block injected via the module's
       ``build(config, repo_root=...)``; a module with no block runs on the
       rule's class-attribute defaults. Default empty (no CORE check is bound).
-    * ``establish_baseline`` — when ``True``, a ``core:<module>`` entry runs in
-      adoption mode (write today's offenders as the frozen baseline) instead of
-      gating. Threads the rule's ``--establish-baseline`` flag through the
-      catalogue-driven dispatch path. Default ``False``.
     """
 
     repo_root: Path = field(default_factory=Path.cwd)
@@ -444,7 +439,6 @@ class RunnerConfig:
     parallel_subprocess: bool = False
     max_workers: int = _DEFAULT_MAX_WORKERS
     core_check_configs: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    establish_baseline: bool = False
     #: Dispatch strategy for pure-python checks. ``"inprocess"`` (default,
     #: v0.3.0 behaviour) imports the module and calls ``main()`` in-process,
     #: sharing one ``CheckContext`` AST cache. ``"subprocess"`` routes EVERY
@@ -573,20 +567,13 @@ def _load_core_check(entry: RuleEntry, cfg: RunnerConfig) -> Callable[[], int]:
     Resolves the importable module (``tc_fitness.core_checks.<module>``), looks up
     the consumer's ``[tool.tc_fitness.core_checks.<module>]`` config block, and
     calls the module's ``build(config, repo_root=...)`` to get the rule with the
-    consumer's roots / extensions / thresholds applied. The returned callable runs
-    ``rule.establish_baseline()`` (adoption mode) when ``cfg.establish_baseline``
-    is set, else ``rule.run()`` (gate vs the baseline) — the SAME surfaces
-    :func:`tc_fitness.core_checks.run_core_check` drives, but with the config the
-    in-process ``main([])`` path could never inject."""
+    consumer's roots / extensions / thresholds applied. The returned callable
+    runs the hard gate with the injected config."""
     module = importlib.import_module(core_module_name(entry))
     config = _core_check_config(entry, cfg)
     rule = module.build(config, repo_root=cfg.repo_root)
 
     def _invoke() -> int:
-        if cfg.establish_baseline:
-            path = rule.establish_baseline()
-            print(f"established baseline: {path}")
-            return 0
         return int(rule.run())
 
     return _invoke
@@ -1159,7 +1146,6 @@ def run(
     max_workers: int = _DEFAULT_MAX_WORKERS,
     dispatch: str = "inprocess",
     core_check_configs: Mapping[str, Mapping[str, Any]] | None = None,
-    establish_baseline: bool = False,
 ) -> Verdicts:
     """Run ``rules`` in ``mode`` and return the :class:`Verdicts`.
 
@@ -1167,9 +1153,8 @@ def run(
     override the ``git`` call), or ``"gate"`` (with ``gate_id``). ``dispatch`` is
     ``"inprocess"`` (default, v0.3.0) or ``"subprocess"`` (route every check
     through the guarded subprocess path). ``core_check_configs`` injects each
-    ``core:<module>`` entry's ``[tool.tc_fitness.core_checks.<module>]`` block;
-    ``establish_baseline`` runs every dispatched ``core:`` entry in baseline
-    adoption mode. The injection kwargs map onto :class:`RunnerConfig`. Always
+    ``core:<module>`` entry's ``[tool.tc_fitness.core_checks.<module>]`` block.
+    The injection kwargs map onto :class:`RunnerConfig`. Always
     prints the named verdict ledger; the return value carries the structured
     outcome for embedders."""
     cfg = RunnerConfig(
@@ -1183,7 +1168,6 @@ def run(
         max_workers=max_workers,
         dispatch=dispatch,
         core_check_configs=core_check_configs if core_check_configs is not None else {},
-        establish_baseline=establish_baseline,
     )
 
     if mode == "gate":
@@ -1345,11 +1329,6 @@ def main_cli(
         metavar="PATH",
         help="write the rules that declared themselves skipped, and why, as JSON",
     )
-    parser.add_argument(
-        "--establish-baseline",
-        action="store_true",
-        help="run dispatched core: entries in baseline-adoption mode (freeze today's offenders)",
-    )
     for flag, kwargs in extra_flags:
         parser.add_argument(flag, **kwargs)  # type: ignore[arg-type]
     args = parser.parse_args(argv)
@@ -1365,7 +1344,6 @@ def main_cli(
         "max_workers": max_workers,
         "dispatch": dispatch,
         "core_check_configs": core_check_configs,
-        "establish_baseline": bool(args.establish_baseline),
     }
     if post_parse is not None:
         common.update(cast(_RunKwargs, post_parse(args)))

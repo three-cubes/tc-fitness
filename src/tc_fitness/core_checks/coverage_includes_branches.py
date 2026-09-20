@@ -6,12 +6,10 @@ half the logic. This rule asserts the coverage report carries non-zero branch
 coverage, so the floor it feeds (see :mod:`coverage_floor`) is measuring
 branches, not just lines.
 
-Shape note. This is a single-artifact assertion, not a per-file ratchet, so it
-overrides :meth:`enumerate_files` to yield the one coverage report and
-:meth:`is_in_scope` to admit it. The baseline machinery still applies (the
-report path can be grandfathered), but in practice the report is either
-branch-aware or it is not — there is nothing to grandfather, so the baseline
-stays empty and the gate FAILS the moment a real report reports zero branches.
+Shape note. This is a single-artifact assertion, so it overrides
+:meth:`enumerate_files` to yield the one coverage report and
+:meth:`is_in_scope` to admit it. The gate fails when the report records zero
+branches.
 
 Ported from tc-agent-zone ``scripts/checks/coverage_includes_branches.py``
 (FEAT-150 G4) — re-expressed as a configurable, repo-agnostic rule. The report
@@ -109,23 +107,6 @@ class CoverageIncludesBranches(FitnessRule):
         rule.coverage_report = str(config.get("coverage_report", DEFAULT_COVERAGE_REPORT))
         return rule
 
-    def establish_baseline(self) -> Path:
-        """Refuse to freeze a state in which no evidence was measured at all.
-
-        Absent evidence produces the same violation key as a measured report
-        that falls short, so adopting a baseline while the report is missing
-        would record that key and turn the check permanently green — exactly
-        during onboarding, when the report is most likely not to have been
-        produced yet. Debt that was measured can be ratcheted; evidence that
-        was never produced cannot.
-        """
-        if not self._report_path().exists():
-            raise ValueError(
-                "cannot baseline absent coverage evidence: "
-                f"{self.coverage_report} does not exist; produce the report, then adopt"
-            )
-        return super().establish_baseline()
-
     def _report_path(self) -> Path:
         if self.coverage_report.startswith("env:"):
             from tc_fitness.coverage_admission import configured
@@ -168,7 +149,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(CoverageIncludesBranches, argv)
 
 

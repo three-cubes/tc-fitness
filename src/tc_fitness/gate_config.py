@@ -173,8 +173,6 @@ class StepSpec:
     #: no named tier (it runs only in an untiered ``tc-fitness run``). Orthogonal
     #: to ``stage``: ``tags`` pick WHICH steps run; ``stage`` groups HOW they run.
     tags: tuple[str, ...] = ()
-    #: In-process assurance: no baseline suppression or adoption is permitted.
-    baseline_free: bool = False
 
     @property
     def kind(self) -> str:
@@ -411,16 +409,10 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
             "next: re-run tc-fitness run"
         )
 
-    baseline_free = raw.get("baseline_free", False)
-    if not isinstance(baseline_free, bool):
-        raise GateConfigError("baseline_free must be a boolean")
-    if baseline_free and (
-        catalogue is None
-        or dispatch != "inprocess"
-        or any(raw.get(key, False) for key in ("parallel", "allow_missing", "continue_on_error"))
-    ):
+    if "baseline_free" in raw:
         raise GateConfigError(
-            "baseline-free assurance requires a gating in-process catalogue without skips or parallel subprocesses"
+            f"step {step_id!r} declares removed option `baseline_free`; "
+            "fitness findings are always hard failures"
         )
 
     env = _coerce_env(raw["env"], step_id=step_id) if "env" in raw else {}
@@ -464,7 +456,6 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         run=run,
         shell=shell,
         catalogue=catalogue,
-        baseline_free=baseline_free,
         cwd=str(raw.get("cwd", ".")),
         env=env,
         allow_missing=bool(raw.get("allow_missing", False)),

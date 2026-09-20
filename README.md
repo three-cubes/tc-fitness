@@ -295,22 +295,18 @@ tc-fitness run --contract path/to/contract.yaml --case violation --ledger artifa
 These three arguments are required together and cannot be combined with ordinary
 gate options. The fixture is copied into a temporary repository; its declared
 config and a single catalogue entry are passed to the existing runner. Fixtures
-must be contained beneath the manifest, without symlinks or suppression baselines.
-Configuration must use fixture-relative paths and cannot select a baseline or
-an external rule name. Manifest bytes, parsed configuration, fixture digest and
+must be contained beneath the manifest and cannot contain symlinks.
+Configuration uses fixture-relative paths and cannot select an external
+rule name. Manifest bytes, parsed configuration, fixture digest and
 candidate identity are captured before dispatch. A changed manifest, original
-fixture or candidate source, or a baseline created by the executing fixture,
-invalidates the run before a ledger can be published.
-During dispatch, a context-local policy disables suppression reads in the shared
-file/key gates and custom CORE baseline loaders. Even a transient baseline
-removed before dispatch finishes cannot grandfather a detector finding. Ordinary
-consumer runs outside contract mode retain their existing baseline behaviour.
+fixture or candidate source invalidates the run before a ledger can be published.
+Every finding is a hard failure in contract and ordinary consumer execution;
+there is no baseline or adoption mode.
 Contract configuration also uses the reviewed per-CORE option inventory in
 `tc_fitness.check_contract_policy`. Unknown options fail closed: new aliases
-must be classified before assurance can use them. Adoption flags must be false,
-exclusion lists must be empty, and cutover, informational-job and test-filename
-exemption overrides are forbidden. OSV requires explicit `required: true`;
-mutation-report contracts require explicit `allow_missing_current: false`.
+must be classified before assurance can use them. Suppression and adoption
+options are rejected when present, including false or empty values. OSV
+requires explicit `required: true`.
 Tier-marker contracts require explicit `require_module_marker: true` so
 contract assurance cannot fall back to generic function-level classification.
 Mutation `baseline_report` is a bound input report, not a suppression list.
@@ -485,10 +481,8 @@ producer and validator do not implement an acceptance store, bootstrap waiver,
 signature or hostile-process sandbox. Digest binding detects changed evidence;
 it cannot authenticate an attacker who also controls the trusted handoff.
 
-Catalogue steps may declare `baseline_free = true`. They must be gating,
-in-process and non-parallel; shell dispatch, optional/missing execution and
-baseline adoption are rejected. The existing baseline API ignores suppression
-reads and rejects writes throughout catalogue import and check execution.
+Catalogue steps are hard-gating by default. The removed `baseline_free` option
+is rejected rather than silently accepted.
 
 ### Pytest tier assurance
 
@@ -517,7 +511,7 @@ tc-fitness also ships these modules (the helpers `tc-fitness run` and a repo's
 checks both build on):
 
 - **`tc_fitness.lib`** — the merged check helpers:
-  - **baseline gating** (from kairix `scripts/checks/_arch_lib.py`):
+  - **hard gating** (from kairix `scripts/checks/_arch_lib.py`):
     `gate()`, `python_files()`, `main_entry()`, `repo_relative()`, `REPO_ROOT`.
   - **agent-actionable emit / YAML** (from tc-agent-zone `scripts/checks/_lib/`):
     `actionable()`, `emit_failures()`, `emit_pass()`, `load_yaml()`, `missing_keys()`.
@@ -537,7 +531,7 @@ checks both build on):
 
 ```python
 from tc_fitness import (
-    # baseline gating (kairix surface)
+    # hard gating (kairix surface)
     gate, gate_keys, python_files, main_entry, repo_relative, REPO_ROOT,
     # agent-actionable emit / YAML (tc-agent-zone surface)
     actionable, remediation, emit_failures, emit_pass, load_yaml, missing_keys,
@@ -550,21 +544,13 @@ from tc_fitness import (
 )
 ```
 
-> **v0.2.0 is an additive, backward-compatible superset of v0.1.0.** Every
-> v0.1.0 signature and behaviour is unchanged when the new optional parameters
-> are left at their defaults. A repo pinned to `@v0.1.0` keeps working
-> unmodified; the additions (`gate_keys`, `remediation`, `actionable(..., run=)`,
-> `is_vague_reason(..., min_len=)`, `parse_overrides(..., min_len=)`) exist to
-> cover tc-agent-zone's check surface. See *What v0.2.0 adds* below.
-
-### Baseline gating
+### Hard gating
 
 ```python
 from pathlib import Path
 from tc_fitness import gate, main_entry
 
-# Low-level: gate a pre-computed violation set against
-# .architecture/baseline/<name>-files.txt
+# Low-level: fail on any current violation.
 exit_code = gate("f26-core-no-provider-imports", violations, REMEDIATION)
 
 # Convenience: scan roots, call a per-file predicate, gate the union.
@@ -639,20 +625,16 @@ print(remediation(
 # Forbidden: logger.info(f"token={token}")
 ```
 
-### `gate_keys(name, current, remediation, *, baseline_suffix="-ids.txt")` — string-keyed ratchet
+### `gate_keys(name, current, remediation)` — string-keyed hard gate
 
-13 tc-agent-zone checks ratchet a baseline whose KEY is a logical id (`-ids.txt`,
-e.g. `F30:my_tool`) or a path-glob (`-paths.txt`, e.g. `kairix/**/web/static/*`),
-NOT a working-tree file path. `gate()` keys on `Path` objects and *relativises
-absolute paths* under `repo_root` — wrong for opaque string keys. `gate_keys` is
-its string-keyed sibling: same net-new-fails / shrinks-only / grandfather
-semantics and the same exit-code contract, but keys are treated as opaque
-strings (no `Path` coercion). `baseline_suffix` selects `-ids.txt` (default) or
-`-paths.txt`.
+`gate()` keys on `Path` objects and relativises absolute paths under
+`repo_root`. `gate_keys()` is its sibling for opaque logical identifiers and
+path globs: it does not coerce them to `Path` values. Both return `1` whenever
+any current violation exists and `0` only for an empty set.
 
 ```python
-exit_code = gate_keys("f30", {"F30:my_new_tool"}, REMEDIATION)                     # → f30-ids.txt
-exit_code = gate_keys("f89", static_globs, REMEDIATION, baseline_suffix="-paths.txt")  # → f89-paths.txt
+exit_code = gate_keys("f30", {"F30:my_new_tool"}, REMEDIATION)
+exit_code = gate_keys("f89", static_globs, REMEDIATION)
 ```
 
 ### `min_len` floor override on the ratchet vagueness check

@@ -9,7 +9,6 @@ import pytest
 
 from tc_fitness.core_checks.mutation_survival_ratchet import (
     build,
-    main,
     report_is_malformed,
 )
 
@@ -71,21 +70,20 @@ def test_missing_baseline_is_violation(tmp_path: Path) -> None:
     assert rule.run() == 1
 
 
-def test_allow_missing_current_passes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("value", [True, False, []])
+def test_allow_missing_current_option_is_rejected(tmp_path: Path, value: object) -> None:
     _seed(tmp_path, "base.json", _VALID)
-    rule = build(
-        {"baseline_report": "base.json", "current_report": "cur.json", "allow_missing_current": True},
-        repo_root=tmp_path,
-    )
-    # baseline valid, current absent + tolerated → clean.
-    assert rule.collect_violations() == set()
-    assert rule.run() == 0
+    with pytest.raises(ValueError, match="allow_missing_current"):
+        build(
+            {"baseline_report": "base.json", "current_report": "cur.json", "allow_missing_current": value},
+            repo_root=tmp_path,
+        )
 
 
-def test_missing_current_when_required_is_violation(tmp_path: Path) -> None:
+def test_missing_current_is_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "base.json", _VALID)
     rule = build(
-        {"baseline_report": "base.json", "current_report": "cur.json", "allow_missing_current": False},
+        {"baseline_report": "base.json", "current_report": "cur.json"},
         repo_root=tmp_path,
     )
     assert rule.run() == 1
@@ -96,22 +94,6 @@ def test_malformed_current_is_violation(tmp_path: Path) -> None:
     _seed(tmp_path, "cur.json", _BAD_VERSION)
     rule = build({"baseline_report": "base.json", "current_report": "cur.json"}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"cur.json"}
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "base.json", _VALID)
-    _seed(tmp_path, "cur.json", _BAD_VERSION)
-    rule = build({"baseline_report": "base.json", "current_report": "cur.json"}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "base.json", _VALID)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "mutation-survival-ratchet-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

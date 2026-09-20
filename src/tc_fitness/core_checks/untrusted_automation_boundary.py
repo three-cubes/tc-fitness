@@ -20,7 +20,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from tc_fitness.baseline import establish_baseline as _establish_baseline
 from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
@@ -259,13 +258,7 @@ class UntrustedAutomationBoundary(FitnessRule):
         )
 
     def run(self) -> int:
-        """Hard gate: a credential boundary violation is never grandfathered.
-
-        A workflow may change without changing its filename, so a per-file
-        baseline would hide a fresh credential path added to a previously known
-        workflow. This check therefore evaluates the current workflow state on
-        every run and deliberately does not consult a baseline.
-        """
+        """Evaluate every configured workflow's current credential boundary."""
         violations = sorted(self.collect_violations(), key=lambda path: str(path))
         if not violations:
             print(f"ok [arch:{self._name}] — autonomous workflows are isolated from credentials.")
@@ -282,10 +275,6 @@ class UntrustedAutomationBoundary(FitnessRule):
         print(self.remediation)
         return 1
 
-    def establish_baseline(self) -> Path:
-        """Write an empty baseline; this security boundary is not grandfathered."""
-        return _establish_baseline(self._name, set(), self._repo_root)
-
 
 def build(
     config: Mapping[str, Any],
@@ -297,7 +286,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(UntrustedAutomationBoundary, argv)
 
 

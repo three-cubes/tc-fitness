@@ -13,7 +13,6 @@ import pytest
 
 from tc_fitness.core_checks.coverage_floor import (
     build,
-    main,
     parse_coverage_details,
     parse_coverage_report,
 )
@@ -214,15 +213,6 @@ def test_roots_scope_the_violation_set(tmp_path: Path) -> None:
     _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}, source="vendor"))
     rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
     assert rule.collect_violations() == set()  # vendor/a.py is out of the src root
-
-
-def test_run_fails_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.py", "a = 1\n")
-    _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}))
-    rule = build({"roots": ["src"], "floor_pct": 90.0}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
 
 
 def test_unsafe_xml_rejected(tmp_path: Path) -> None:
@@ -492,7 +482,10 @@ def test_strict_coverage_reports_source_omitted_from_real_report(tmp_path: Path)
             {"roots": ["src"], "branch_floor_pct": 95, "critical_branch_files": ["coverage.xml"]},
             "must exist within",
         ),
-        ({"roots": ["src"], "branch_floor_pct": 95, "exempt_files": ["src/a.py"]}, "no exemptions"),
+        (
+            {"roots": ["src"], "branch_floor_pct": 95, "exempt_files": ["src/a.py"]},
+            "exempt_files is not supported",
+        ),
         ({"roots": ["/tmp"], "branch_floor_pct": 95}, "repository-relative source roots"),
         ({"roots": ["../outside"], "branch_floor_pct": 95}, "repository-relative source roots"),
         ({"roots": ["missing"], "branch_floor_pct": 95}, "repository-relative source roots"),
@@ -528,13 +521,6 @@ def test_strict_coverage_rejects_report_totals_that_disagree_with_file_detail(tm
 
     with pytest.raises(ValueError, match="totals disagree"):
         parse_coverage_details(report, repo_root=source.parents[1])
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "coverage.xml", _report({"a.py": 0.1}))
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "coverage-floor-files.txt").exists()
 
 
 def test_python_module_entrypoint_accepts_a_real_coverage_report(tmp_path: Path) -> None:
@@ -582,14 +568,6 @@ def test_an_external_coverage_report_is_keyed_inside_the_repository(tmp_path: Pa
     rule = build({"coverage_report": str(external)}, repo_root=repo)
 
     assert rule.enumerate_files() == [repo / "coverage.xml"]
-
-
-def test_absent_coverage_evidence_cannot_be_baselined(tmp_path: Path) -> None:
-    """Adopting a baseline with no report would turn the check permanently green."""
-    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
-
-    with pytest.raises(ValueError, match="cannot baseline absent coverage evidence"):
-        rule.establish_baseline()
 
 
 def test_strict_mode_reads_exact_counts_not_the_rounded_summary(tmp_path: Path) -> None:

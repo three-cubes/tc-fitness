@@ -279,9 +279,6 @@ class OsvScannerSca:
         )
         return 0
 
-    def establish_baseline(self) -> Path:
-        raise RuntimeError("osv_scanner_sca has no baseline: every finding must be remediated")
-
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> OsvScannerSca:
     return OsvScannerSca.from_config(config, repo_root=repo_root)

@@ -11,7 +11,6 @@ from tc_fitness.core_checks.no_test_imports_in_prod import (
     NoTestImportsInProd,
     build,
     file_imports_test_tree,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -78,21 +77,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/test_m.py", _FROM_IMPORT)  # not under prod root
     rule = NoTestImportsInProd.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/m.py"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/m.py", _FROM_IMPORT)
-    rule = NoTestImportsInProd.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "m.py", _FROM_IMPORT)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-test-imports-in-prod-files.txt").exists()
 
 
 def test_build_returns_rule() -> None:

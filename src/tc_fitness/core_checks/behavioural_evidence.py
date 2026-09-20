@@ -7,7 +7,7 @@ This hard gate then requires a marked test to invoke that executable, check
 process success, and observe a produced artefact passed through the command.
 
 The check is deliberately opt-in and repo-neutral.  An empty configuration is
-a vacuous pass; once configured, findings cannot be baselined.
+a vacuous pass; once configured, every finding fails.
 """
 
 from __future__ import annotations
@@ -589,13 +589,6 @@ class BehaviouralEvidence(FitnessRule):
             print("next: run the declared behavioural test, then re-run this check", file=sys.stderr)
             print("run: python -m tc_fitness.core_checks.behavioural_evidence", file=sys.stderr)
         return 1
-
-    def establish_baseline(self) -> Path:
-        findings = self.collect_findings()
-        if findings:
-            self.run()
-            raise RuntimeError("behavioural evidence findings cannot establish a baseline")
-        return super().establish_baseline()
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> BehaviouralEvidence:

@@ -13,11 +13,10 @@ terminated. The compliant forms (``p.relative_to(r).as_posix()`` and the
 redundant ``str(p.relative_to(r).as_posix())``) are not flagged.
 
 Ported from tc-agent-zone ``scripts/checks/posix_path_serialisation.py`` and
-re-expressed as a configurable, repo-agnostic rule: the scan roots, in-scope
-extensions, and exempt path SEGMENTS all arrive from the consumer's
-``[tool.tc_fitness]`` config — NO repo paths or globs are baked in. Domain-
-intrinsic defaults (the ``.py`` extension, ``__pycache__``/``.venv`` cache
-segments) are the rule's own shape, overridable via config.
+re-expressed as a configurable, repo-agnostic rule: the scan roots and
+in-scope extensions arrive from the consumer's ``[tool.tc_fitness]`` config —
+NO repo paths or globs are baked in. The ``.py`` extension default is the
+rule's own shape, overridable via config.
 """
 
 from __future__ import annotations
@@ -121,10 +120,6 @@ class PosixPathSerialisation(FitnessRule):
     remediation = REMEDIATION
     extensions = (".py",)
 
-    #: Path segments that exclude a file from scope. Instance attribute so
-    #: ``from_config`` can override; class default is the rule's own shape.
-    excluded_segments: tuple[str, ...] = DEFAULT_EXCLUDED_SEGMENTS
-
     @classmethod
     def from_config(
         cls,
@@ -134,13 +129,10 @@ class PosixPathSerialisation(FitnessRule):
     ) -> PosixPathSerialisation:
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, PosixPathSerialisation)  # noqa: S101  # narrowing for mypy
-        segments = config.get("excluded_segments")
-        if segments is not None:
-            rule.excluded_segments = tuple(segments)
         return rule
 
     def is_in_scope(self, rel: str) -> bool:
-        if any(seg in self.excluded_segments for seg in rel.split("/")):
+        if any(seg in DEFAULT_EXCLUDED_SEGMENTS for seg in rel.split("/")):
             return False
         return super().is_in_scope(rel)
 
@@ -158,7 +150,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(PosixPathSerialisation, argv)
 
 

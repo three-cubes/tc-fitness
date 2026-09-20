@@ -8,7 +8,7 @@ module-level ``UPPER_SNAKE_CASE`` constant makes the coupling explicit.
 This is the COPY-PATTERN every other CORE check follows (the Port agents lift
 this shape): a :class:`tc_fitness.fitness_rule.FitnessRule` subclass that reads
 its repo-specific knobs (``min_length`` / ``min_occurrences`` and the
-inherited ``roots`` / ``extensions`` / ``exempt_files``) from the consumer's
+inherited ``roots`` / ``extensions``) from the consumer's
 config, plus a ``build()`` factory and a ``main()`` wired through
 :func:`tc_fitness.core_checks.run_core_check`.
 
@@ -112,7 +112,7 @@ class NoDuplicateString(FitnessRule):
         """Build from config, also reading the two rule-specific thresholds.
 
         Extends the base ``from_config`` (which handles ``roots`` /
-        ``extensions`` / ``exempt_files`` / ``name``) with ``min_length`` and
+        ``extensions`` / ``name``) with ``min_length`` and
         ``min_occurrences``.
         """
         rule = super().from_config(config, repo_root=repo_root)
@@ -139,7 +139,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoDuplicateString, argv)
 
 

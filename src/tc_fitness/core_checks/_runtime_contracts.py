@@ -1120,7 +1120,7 @@ def load_contract_documents(
 
 
 class RuntimeContractRule(FitnessRule):
-    """Hard-adoption base for contract checks: findings cannot be baselined."""
+    """Base for runtime contract checks backed by bound evidence documents."""
 
     name: ClassVar[str] = "runtime-contract"
     remediation: ClassVar[str] = (
@@ -1181,20 +1181,12 @@ class RuntimeContractRule(FitnessRule):
         return sort_findings((*config_findings, *self.validate_documents(documents)))
 
     def run(self) -> int:
-        """Fail on every finding; intentionally bypass per-file baselines."""
+        """Fail on every finding."""
         findings = self.collect_findings()
         if not findings:
             return 0
         render_findings(findings)
         return 1
-
-    def establish_baseline(self) -> Path:
-        """Validate active runtime documents and reject grandfathering defects."""
-        findings = self.collect_findings()
-        if findings:
-            render_findings(findings)
-            raise RuntimeError("runtime contract findings cannot establish a baseline")
-        return super().establish_baseline()
 
 
 __all__ = [

@@ -21,10 +21,8 @@ three arms:
   ``banner_path`` unset skips this arm, so a repo adopts presence + reference
   first and turns on drift enforcement once its banner is pinned.
 
-Non-grandfatherable: a harness that references the wrong canon or omits an
-entrypoint is a hard gate, not a per-file debt, so :meth:`run` drives the three
-arms directly rather than ratcheting a violation set against a baseline (the
-same posture as the deterministic-tests CORE check).
+This is a hard repo-level gate, so :meth:`run` drives the three proof arms
+directly.
 
 Repo-agnostic: every knob (the required set, the marker string, the reference
 regex, the pinned-banner path) arrives through the consumer's
@@ -138,14 +136,12 @@ class HarnessCanonReference(FitnessRule):
     """Gate that FAILS when a repo's agent harness has drifted from the canon.
 
     Drives three arms (presence, reference, drift) directly in :meth:`run`; the
-    per-file scan hooks are inert because harness drift is a hard repo-level gate,
-    not a grandfatherable per-file debt.
+    per-file scan hooks are inert because harness drift is a repo-level invariant.
     """
 
     name = "harness-canon-reference"
     remediation = REMEDIATION
-    #: Not a file-scan rule — the enumeration hooks stay empty so the base
-    #: --establish-baseline mode writes an empty baseline harmlessly.
+    #: Not a file-scan rule — the enumeration hooks stay empty.
     extensions = ()
 
     #: Rule-specific config (instance attrs; from_config overrides per consumer).
@@ -284,7 +280,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(HarnessCanonReference, argv)
 
 

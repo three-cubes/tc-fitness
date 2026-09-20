@@ -14,7 +14,6 @@ from tc_fitness.core_checks.shellcheck_disable_with_reason import (
     build,
     file_has_unjustified_disable,
     is_shell_file,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -175,21 +174,6 @@ def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
     _seed(tmp_path, "vendor/a.sh", _BARE)
     rule = ShellcheckDisableWithReason.from_config({"roots": ["src"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"src/a.sh"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.sh", _BARE)
-    rule = build({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "a.sh", _BARE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "shellcheck-disable-with-reason-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

@@ -15,7 +15,6 @@ from tc_fitness.core_checks.ci_silencers_have_rationale import (
     CiSilencersHaveRationale,
     build,
     file_has_unjustified_silencer,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -144,21 +143,6 @@ def test_scan_files_config_driven(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/check.sh", "pytest || true\n")
     rule = build({"scan_files": ["scripts/check.sh"]}, repo_root=tmp_path)
     assert {str(p) for p in rule.collect_violations()} == {"scripts/check.sh"}
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, ".github/workflows/ci.yml", _BARE)
-    rule = CiSilencersHaveRationale.from_config({}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, ".github/workflows/ci.yml", _BARE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "ci-silencers-have-rationale-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

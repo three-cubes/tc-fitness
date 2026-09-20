@@ -52,16 +52,6 @@ def test_collect_violations_respects_config_roots(tmp_path: Path) -> None:
     assert violations == {"src/bad.py"}  # 'other/' is out of configured scope
 
 
-def test_from_config_overrides_roots_and_exempt(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/a.py", "x = 'BADWORD'\n")
-    _seed(tmp_path, "src/b.py", "x = 'BADWORD'\n")
-    rule = _BadWord.from_config(
-        {"roots": ["src"], "exempt_files": ["src/b.py"]},
-        repo_root=tmp_path,
-    )
-    assert {str(p) for p in rule.collect_violations()} == {"src/a.py"}
-
-
 def test_extension_filter(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.py", "BADWORD")
     _seed(tmp_path, "src/a.txt", "BADWORD")
@@ -81,29 +71,6 @@ def test_run_fails_on_net_new_violation(tmp_path: Path, capsys: pytest.CaptureFi
     _seed(tmp_path, "src/bad.py", "BADWORD\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
     assert rule.run() == 1
-
-
-def test_establish_then_violation_is_grandfathered(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/bad.py", "BADWORD\n")
-    rule = _BadWord(repo_root=tmp_path, roots=("src",))
-    rule.establish_baseline()
-    # Same offender is now grandfathered → clean.
-    assert rule.run() == 0
-    assert rule.load_baseline() == {"src/bad.py"}
-
-
-def test_grandfathered_does_not_mask_a_new_offender(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/old.py", "BADWORD\n")
-    rule = _BadWord(repo_root=tmp_path, roots=("src",))
-    rule.establish_baseline()
-    _seed(tmp_path, "src/new.py", "BADWORD\n")
-    assert rule.run() == 1  # net-new offender still fails
-
-
-def test_name_override_via_config(tmp_path: Path) -> None:
-    rule = _BadWord.from_config({"name": "renamed"}, repo_root=tmp_path)
-    rule.establish_baseline()
-    assert (tmp_path / ".architecture" / "baseline" / "renamed-files.txt").exists()
 
 
 def test_symlinked_repo_root_still_scopes(tmp_path: Path) -> None:

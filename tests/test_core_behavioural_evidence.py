@@ -411,13 +411,6 @@ def test_empty_configuration_is_vacuous_for_additive_adoption(tmp_path: Path) ->
     assert build({}, repo_root=tmp_path).run() == 0
 
 
-def test_findings_are_hard_and_cannot_be_grandfathered(tmp_path: Path) -> None:
-    rule = build(_config(), repo_root=tmp_path)
-
-    with pytest.raises(RuntimeError, match="cannot establish a baseline"):
-        rule.establish_baseline()
-
-
 def test_build_returns_rule() -> None:
     assert isinstance(build({}), BehaviouralEvidence)
 

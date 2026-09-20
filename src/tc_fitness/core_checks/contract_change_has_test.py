@@ -16,10 +16,8 @@ The verdict is a property of the CHANGE SET, not of any file on disk:
 * a contract file changed AND a test changed → clean;
 * no contract file changed → clean (a no-op — nothing to enforce).
 
-Hard floor, by design. Like :mod:`new_code_coverage`, this rule is baseline-free:
-a contract change landed without its proving test is a FRESH defect recomputed
-against the merge-base on every branch, never inherited debt, so there is no
-stable offender to grandfather (see :meth:`ContractChangeHasTest.establish_baseline`).
+Hard floor, by design. A contract change landed without its proving test is a
+fresh defect recomputed against the merge-base on every branch and always fails.
 
 ``contract_surface`` (globs; default the shared base), ``test_globs`` (globs;
 default the test tree), and ``base_ref`` are CONFIG the consumer supplies;
@@ -39,7 +37,6 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from tc_fitness.baseline import establish_baseline as _establish_baseline
 from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
@@ -201,13 +198,9 @@ class ContractChangeHasTest(FitnessRule):
     def run(self) -> int:
         """Hard gate: a contract change with no companion test change FAILs.
 
-        Modelling note: the base ``run()`` gates the violation set against a
-        per-file baseline so a repo can freeze PRE-EXISTING offenders behind a
-        ratchet. A missing-test-for-a-contract-change is different in KIND — the
-        change set is recomputed against the merge-base on every branch, so there
-        is no stable offender to freeze, and a contract file touched on THIS
-        branch with no test is a fresh defect, never inherited debt. This
-        override consults NO baseline and gates the raw violation set. Returns
+        The change set is recomputed against the merge-base on every branch. A
+        contract file touched on this branch without a test is therefore a
+        current defect. This method gates the raw violation set and returns
         ``0`` when the change set is clean (or there is no contract change),
         ``1`` otherwise.
         """
@@ -226,18 +219,6 @@ class ContractChangeHasTest(FitnessRule):
         print()
         print(self.remediation)
         return 1
-
-    def establish_baseline(self) -> Path:
-        """Freeze an EMPTY baseline — a missing test is non-grandfatherable.
-
-        Mirrors :mod:`new_code_coverage`: the "changed" set is recomputed against
-        the merge-base on every branch, so a frozen path is meaningless on the
-        next one, and a contract change ADDED on THIS branch with no test is a
-        FRESH defect, never inherited debt. This override freezes the EMPTY set so
-        ``--establish-baseline`` writes a coherent (empty) file; the hard gate is
-        enforced by :meth:`run`, which consults no baseline at all.
-        """
-        return _establish_baseline(self._name, set(), self._repo_root)
 
 
 def build(
@@ -259,7 +240,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(ContractChangeHasTest, argv)
 
 

@@ -11,7 +11,6 @@ from tc_fitness.core_checks.no_production_suppressions import (
     NoProductionSuppressions,
     build,
     file_contains_suppression,
-    main,
 )
 
 pytestmark = pytest.mark.integration
@@ -47,14 +46,14 @@ def test_empty_patterns_and_unreadable_sources_are_clean(tmp_path: Path) -> None
     assert file_contains_suppression(binary, ("# noqa:",)) is False
 
 
-def test_exempt_prefix_skips_file(tmp_path: Path) -> None:
+def test_exempt_prefix_cannot_hide_a_suppression(tmp_path: Path) -> None:
     _seed(tmp_path, "src/app.py", _SUPPRESSED)
     _seed(tmp_path, "scripts/tool.py", _SUPPRESSED)
-    rule = NoProductionSuppressions.from_config(
-        {"roots": ["src", "scripts"], "exempt_prefixes": ["scripts/"]},
-        repo_root=tmp_path,
-    )
-    assert {str(p) for p in rule.collect_violations()} == {"src/app.py"}
+    with pytest.raises(ValueError, match="exempt_prefixes"):
+        NoProductionSuppressions.from_config(
+            {"roots": ["src", "scripts"], "exempt_prefixes": ["scripts/"]},
+            repo_root=tmp_path,
+        )
 
 
 def test_test_file_basename_is_exempt(tmp_path: Path) -> None:
@@ -78,21 +77,6 @@ def test_suppression_patterns_config_driven(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
     assert rule.file_has_violation(p) is True
-
-
-def test_run_then_establish_grandfathers(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/app.py", _SUPPRESSED)
-    rule = NoProductionSuppressions.from_config({"roots": ["src"]}, repo_root=tmp_path)
-    assert rule.run() == 1
-    rule.establish_baseline()
-    assert rule.run() == 0
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _seed(tmp_path, "app.py", _SUPPRESSED)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "no-production-suppressions-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:

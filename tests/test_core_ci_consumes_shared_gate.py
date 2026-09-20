@@ -11,7 +11,6 @@ from tc_fitness.check_evidence import capture_check_evidence
 from tc_fitness.core_checks.ci_consumes_shared_gate import (
     CiConsumesSharedGate,
     build,
-    main,
     workflow_files,
 )
 
@@ -134,20 +133,6 @@ def test_skip_on_empty_workflows_dir(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_warn_only_reports_but_passes(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
-    _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
-    assert build({"warn_only": True}, repo_root=tmp_path).run() == 0
-    out = capsys.readouterr().out
-    assert "FAIL" in out  # the fork is still reported loudly
-    assert "warn-only" in out
-
-
-def test_baseline_ok_alias_is_warn_mode(tmp_path: Path) -> None:
-    # `baseline_ok` is the accepted alias for `warn_only` — same soft-mode effect.
-    _write_workflow(tmp_path, "ci.yml", _FORKED_GATE)
-    assert build({"baseline_ok": True}, repo_root=tmp_path).run() == 0
-
-
 # --------------------------------------------------------------------------- #
 # Config knobs.
 # --------------------------------------------------------------------------- #
@@ -196,26 +181,17 @@ def test_from_config_binds_all_knobs(tmp_path: Path) -> None:
             "workflows_dir": "ci",
             "reusable_pattern": r"acme/pipe\.yml@",
             "engine_pattern": r"\bacme-gate\b",
-            "warn_only": True,
         },
         repo_root=tmp_path,
     )
     assert rule.workflows_dir == "ci"
     assert rule.reusable_pattern == r"acme/pipe\.yml@"
     assert rule.engine_pattern == r"\bacme-gate\b"
-    assert rule.warn_only is True
 
 
 # --------------------------------------------------------------------------- #
 # CLI + engine-conformance parity with the sibling CORE checks.
 # --------------------------------------------------------------------------- #
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _write_workflow(tmp_path, "ci.yml", _VIA_REUSABLE)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "ci-consumes-shared-gate-files.txt").exists()
 
 
 def test_no_repo_strings_in_executable_code() -> None:
@@ -239,19 +215,6 @@ def test_no_repo_strings_in_executable_code() -> None:
             lowered = node.value.lower()
             for tok in repo_tokens:
                 assert tok not in lowered, f"repo identity leaked in a code literal: {tok}"
-
-
-def test_warn_only_adoption_emits_no_failure_finding(tmp_path: Path) -> None:
-    """A passing result paired with a failing finding is incoherent evidence."""
-    workflows = tmp_path / ".github" / "workflows"
-    workflows.mkdir(parents=True)
-    (workflows / "ci.yml").write_text("on: push\njobs:\n  a:\n    steps: []\n", encoding="utf-8")
-    rule = build({"warn_only": True}, repo_root=tmp_path)
-
-    with capture_check_evidence() as evidence:
-        assert rule.run() == 0
-
-    assert evidence.findings == []
 
 
 def test_a_configured_name_is_the_name_the_finding_carries(tmp_path: Path) -> None:

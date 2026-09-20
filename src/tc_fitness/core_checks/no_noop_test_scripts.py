@@ -132,8 +132,6 @@ class NoNoopTestScripts(FitnessRule):
 
     #: Repo-relative path prefixes under which a package is production code.
     prod_package_prefixes: tuple[str, ...] = ()
-    #: Directory segments to skip while discovering manifests.
-    skip_parts: tuple[str, ...] = DEFAULT_SKIP_PARTS
     #: Placeholder + real-runner patterns (compiled lazily, see ``from_config``).
     placeholder_pattern: str = DEFAULT_PLACEHOLDER_PATTERN
     real_runner_pattern: str = DEFAULT_REAL_RUNNER_PATTERN
@@ -149,8 +147,6 @@ class NoNoopTestScripts(FitnessRule):
         assert isinstance(rule, NoNoopTestScripts)  # noqa: S101  # narrowing for mypy
         prefixes = config.get("prod_package_prefixes")
         rule.prod_package_prefixes = tuple(prefixes) if prefixes is not None else ()
-        skips = config.get("skip_parts")
-        rule.skip_parts = tuple(skips) if skips is not None else DEFAULT_SKIP_PARTS
         rule.placeholder_pattern = config.get("placeholder_pattern", DEFAULT_PLACEHOLDER_PATTERN)
         rule.real_runner_pattern = config.get("real_runner_pattern", DEFAULT_REAL_RUNNER_PATTERN)
         return rule
@@ -165,7 +161,7 @@ class NoNoopTestScripts(FitnessRule):
         """Discover every in-scope ``package.json`` under the repo root."""
         out: list[Path] = []
         for path in self._repo_root.rglob(_MANIFEST_NAME):
-            if any(part in self.skip_parts for part in path.parts):
+            if any(part in DEFAULT_SKIP_PARTS for part in path.parts):
                 continue
             rel = self._repo_relative(path).as_posix()
             if self._is_prod_manifest(rel):
@@ -203,7 +199,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> NoNoop
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoNoopTestScripts, argv)
 
 

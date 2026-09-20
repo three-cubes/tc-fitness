@@ -1,12 +1,11 @@
-"""Merged shared helpers for architecture-fitness checks across Three Cubes repos.
+"""Shared helpers for architecture-fitness checks across Three Cubes repos.
 
 This module unions two independently-grown libraries into one source:
 
-- **kairix** ``scripts/checks/_arch_lib.py`` — baseline-gating helpers:
+- **kairix** ``scripts/checks/_arch_lib.py`` — hard-gating helpers:
   :func:`gate`, :func:`python_files`, :func:`main_entry`, :func:`repo_relative`,
   and the :data:`REPO_ROOT` anchor. Each check reports a set of offending
-  paths and compares against ``.architecture/baseline/<name>-files.txt``; net-new
-  violations exit non-zero, baseline files are grandfathered.
+  paths and fails whenever violations exist.
 
 - **tc-agent-zone** ``scripts/checks/_lib/__init__.py`` — agent-actionable
   emit/YAML helpers: :func:`actionable`, :func:`emit_failures`, :func:`emit_pass`,
@@ -37,10 +36,8 @@ from importlib.metadata import requires as metadata_requires
 from pathlib import Path
 from typing import Any
 
-from tc_fitness.baseline import read_baseline_text
-
 # ---------------------------------------------------------------------------
-# kairix _arch_lib surface — baseline gating
+# kairix _arch_lib surface — hard gating
 # ---------------------------------------------------------------------------
 
 # Anchored to CWD so an installed package gates the *consumer* repo, not the
@@ -51,42 +48,7 @@ REPO_ROOT = Path.cwd()
 
 _RED = "\033[0;31m"
 _GREEN = "\033[0;32m"
-_YELLOW = "\033[0;33m"
 _RESET = "\033[0m"
-
-
-def _baseline_dir(repo_root: Path) -> Path:
-    return repo_root / ".architecture" / "baseline"
-
-
-def _print_stale_failure(
-    name: str,
-    stale: list[object],
-    stale_remediation: str | None,
-    *,
-    kind: str,
-) -> None:
-    """Print the canonical STALE-baseline FAIL block for ``gate`` / ``gate_keys``.
-
-    Single-sourced so both gates emit identical framing; the consumer supplies
-    the remediation text (no engine-baked wording)."""
-    print(f"{_RED}FAIL [arch:{name}]{_RESET} — stale baseline {kind}(s) no longer in the current scan:")
-    for s in stale:
-        print(f"  {s}: STALE — remove this line from the baseline.")
-    if stale_remediation:
-        print()
-        print(stale_remediation)
-
-
-def _print_pass_counts(name: str, *, new_count: int, grandfathered: int) -> None:
-    """Print the pass banner with new-vs-grandfathered counts (v0.4.0)."""
-    if grandfathered > 0:
-        print(
-            f"{_YELLOW}ok [arch:{name}]{_RESET} — {new_count} new, "
-            f"{grandfathered} grandfathered (still present in baseline)."
-        )
-    else:
-        print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean ({new_count} new, 0 grandfathered).")
 
 
 def gate(
@@ -95,79 +57,36 @@ def gate(
     remediation: str,
     *,
     repo_root: Path | None = None,
-    fail_on_stale: bool = False,
-    stale_remediation: str | None = None,
 ) -> int:
-    """Compare current violations against the baseline; print + return exit code.
+    """Fail when any current path violates the rule; print + return exit code.
 
     Args:
-        name: short rule name (used in messages and baseline filename).
+        name: short rule name used in messages.
         current: set of repo-relative (or absolute under ``repo_root``) Paths
             with the violation.
         remediation: operator-actionable remediation hint.
-        repo_root: repo root to resolve the baseline against and to relativise
+        repo_root: repo root used to relativise
             absolute paths. Defaults to :data:`REPO_ROOT` (the CWD).
-        fail_on_stale: when ``True`` (v0.4.0), a baseline entry that no longer
-            appears in ``current`` is STALE and FAILs the gate (the consumer
-            supplies ``stale_remediation``). Default ``False`` preserves the
-            v0.1.0 "shrinks are clean" exit-code contract byte-identically.
-        stale_remediation: the operator-actionable text printed under a stale
-            FAIL. Single-sourced from the consumer — no engine-baked wording.
 
     Returns:
-        ``0`` if no NEW violations (and, when ``fail_on_stale``, no stale
-        entries); ``1`` if NEW violations were introduced OR a stale baseline
-        entry was found.
+        ``0`` if there are no violations; ``1`` otherwise.
     """
     root = repo_root if repo_root is not None else REPO_ROOT
-    baseline_file = _baseline_dir(root) / f"{name}-files.txt"
-    baseline = {
-        Path(line.strip())
-        for line in read_baseline_text(baseline_file).splitlines()
-        if line.strip() and not line.startswith("#")
-    }
-
     current_rel = {p.relative_to(root) if p.is_absolute() else p for p in current}
-    new = sorted(current_rel - baseline)
+    violations = sorted(current_rel)
 
-    if new:
+    if violations:
         from tc_fitness.check_evidence import report_finding
 
-        for path in new:
+        for path in violations:
             report_finding(name, path.as_posix(), remediation)
-        print(f"{_RED}FAIL [arch:{name}]{_RESET} — new violation(s) introduced:")
-        for p in new:
+        print(f"{_RED}FAIL [arch:{name}]{_RESET} — violation(s) found:")
+        for p in violations:
             print(f"  {p}")
         print()
         print(remediation)
-        print()
-        try:
-            baseline_rel = baseline_file.relative_to(root)
-        except ValueError:
-            baseline_rel = baseline_file
-        print(
-            "If this is genuinely the only practical fix, document why in the\n"
-            f"PR description and append the file to {baseline_rel}\n"
-            "(but expect pushback at review time — adding to the baseline is rare)."
-        )
         return 1
-
-    if fail_on_stale:
-        stale = sorted(baseline - current_rel)
-        if stale:
-            _print_stale_failure(name, list(stale), stale_remediation, kind="file")
-            return 1
-        _print_pass_counts(name, new_count=0, grandfathered=len(baseline))
-        return 0
-
-    # Default path: byte-identical to v0.1.0 (no counts banner change).
-    remaining = len(baseline)
-    if remaining > 0:
-        print(
-            f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered file(s) still present in baseline."
-        )
-    else:
-        print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
+    print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
     return 0
 
 
@@ -177,88 +96,18 @@ def gate_keys(
     remediation: str,
     *,
     repo_root: Path | None = None,
-    baseline_suffix: str = "-ids.txt",
-    fail_on_stale: bool = False,
-    stale_remediation: str | None = None,
 ) -> int:
-    """Ratchet an arbitrary set of *string keys* against a baseline file.
-
-    The string-keyed sibling of :func:`gate`. Where :func:`gate` keys on
-    working-tree :class:`~pathlib.Path` objects (relativising absolute paths
-    under ``repo_root``), this keys on opaque string identifiers — logical rule
-    ids (``F30``), path-globs (``kairix/**/web/static/*``), or any other token
-    that is NOT a real file path. Net-new keys fail; baseline keys are
-    grandfathered; the set shrinking is always clean. Same exit-code contract as
-    :func:`gate`.
-
-    tc-agent-zone has 13 checks whose baseline KEY is a logical id (``-ids.txt``)
-    or a path-glob (``-paths.txt``) rather than a working-tree file path; those
-    checks ratchet through this helper.
-
-    Args:
-        name: short rule name (used in messages and baseline filename).
-        current: set of string keys currently in violation.
-        remediation: operator-actionable remediation hint.
-        repo_root: repo root to resolve the baseline against. Defaults to
-            :data:`REPO_ROOT` (the CWD).
-        baseline_suffix: filename suffix for the baseline file, so a check can
-            select ``-ids.txt`` (logical ids, the default) or ``-paths.txt``
-            (path-globs) per its key kind. The baseline is read from
-            ``.architecture/baseline/<name><baseline_suffix>``.
-        fail_on_stale: when ``True`` (v0.4.0), a baseline key no longer in
-            ``current`` is STALE and FAILs (the consumer supplies
-            ``stale_remediation``). Default ``False`` keeps the shrinks-are-clean
-            contract byte-identically.
-        stale_remediation: the text printed under a stale FAIL.
-
-    Returns:
-        ``0`` if no NEW keys (and, when ``fail_on_stale``, no stale keys);
-        ``1`` if NEW keys were introduced OR a stale baseline key was found.
-    """
-    root = repo_root if repo_root is not None else REPO_ROOT
-    baseline_file = _baseline_dir(root) / f"{name}{baseline_suffix}"
-    baseline = {
-        line.strip()
-        for line in read_baseline_text(baseline_file).splitlines()
-        if line.strip() and not line.startswith("#")
-    }
-
-    new = sorted(current - baseline)
-
-    if new:
-        print(f"{_RED}FAIL [arch:{name}]{_RESET} — new violation(s) introduced:")
-        for key in new:
+    """Fail when any current opaque key violates the rule."""
+    del repo_root
+    violations = sorted(current)
+    if violations:
+        print(f"{_RED}FAIL [arch:{name}]{_RESET} — violation(s) found:")
+        for key in violations:
             print(f"  {key}")
         print()
         print(remediation)
-        print()
-        try:
-            baseline_rel = baseline_file.relative_to(root)
-        except ValueError:
-            baseline_rel = baseline_file
-        print(
-            "If this is genuinely the only practical fix, document why in the\n"
-            f"PR description and append the key to {baseline_rel}\n"
-            "(but expect pushback at review time — adding to the baseline is rare)."
-        )
         return 1
-
-    if fail_on_stale:
-        stale = sorted(baseline - current)
-        if stale:
-            _print_stale_failure(name, list(stale), stale_remediation, kind="key")
-            return 1
-        _print_pass_counts(name, new_count=0, grandfathered=len(baseline))
-        return 0
-
-    # Default path: byte-identical to v0.2.0 (no counts banner change).
-    remaining = len(baseline)
-    if remaining > 0:
-        print(
-            f"{_YELLOW}ok [arch:{name}]{_RESET} — {remaining} grandfathered key(s) still present in baseline."
-        )
-    else:
-        print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
+    print(f"{_GREEN}ok [arch:{name}]{_RESET} — clean.")
     return 0
 
 

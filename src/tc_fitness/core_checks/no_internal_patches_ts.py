@@ -11,8 +11,7 @@ Ported from tc-agent-zone ``scripts/checks/no_internal_patches_ts.py`` and
 re-expressed as a configurable, repo-agnostic rule. The regex shapes (the mock
 / spy / import grammar) are domain-intrinsic; what was repo-specific is now
 consumer config: ``internal_packages`` (workspace package names whose mocking
-is the smell), ``exempt_specifiers`` (exact external module names), and
-``exempt_prefixes`` (external scopes like an SDK namespace). Relative-path
+is the smell). Relative-path
 specifiers (``./`` / ``../``) are always internal. The engine ships NO repo
 package names.
 """
@@ -84,12 +83,6 @@ def _is_internal_specifier(spec: str, internal_packages: frozenset[str]) -> bool
     return spec.split("/", 1)[0] in internal_packages
 
 
-def _is_exempt_specifier(spec: str, exempt_exact: frozenset[str], exempt_prefixes: tuple[str, ...]) -> bool:
-    if spec in exempt_exact:
-        return True
-    return any(spec.startswith(prefix) for prefix in exempt_prefixes)
-
-
 def _resolve_imports(text: str) -> dict[str, str]:
     """Map each imported name -> its source specifier (for spyOn resolution)."""
     out: dict[str, str] = {}
@@ -110,8 +103,6 @@ def file_mocks_internal_ts(
     path: Path,
     *,
     internal_packages: frozenset[str],
-    exempt_exact: frozenset[str],
-    exempt_prefixes: tuple[str, ...],
 ) -> bool:
     """Pure detection helper: True iff ``path`` mocks/spies an internal module.
 
@@ -125,16 +116,12 @@ def file_mocks_internal_ts(
     stripped = _strip_comments(text)
     for m in _RX_MOCK_STRING.finditer(stripped):
         spec = m.group(2)
-        if _is_exempt_specifier(spec, exempt_exact, exempt_prefixes):
-            continue
         if _is_internal_specifier(spec, internal_packages):
             return True
     imports = _resolve_imports(stripped)
     for m in _RX_SPY_ON.finditer(stripped):
         spec = imports.get(m.group(1))
         if spec is None:
-            continue
-        if _is_exempt_specifier(spec, exempt_exact, exempt_prefixes):
             continue
         if _is_internal_specifier(spec, internal_packages):
             return True
@@ -150,8 +137,6 @@ class NoInternalPatchesTs(FitnessRule):
 
     #: Rule-specific config (instance attrs; from_config overrides per consumer).
     internal_packages: frozenset[str] = frozenset()
-    exempt_specifiers: frozenset[str] = frozenset()
-    exempt_prefixes: tuple[str, ...] = ()
 
     @classmethod
     def from_config(
@@ -163,16 +148,12 @@ class NoInternalPatchesTs(FitnessRule):
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, NoInternalPatchesTs)  # noqa: S101  # narrowing for mypy
         rule.internal_packages = frozenset(config.get("internal_packages", ()))
-        rule.exempt_specifiers = frozenset(config.get("exempt_specifiers", ()))
-        rule.exempt_prefixes = tuple(config.get("exempt_prefixes", ()))
         return rule
 
     def file_has_violation(self, path: Path) -> bool:
         return file_mocks_internal_ts(
             path,
             internal_packages=self.internal_packages,
-            exempt_exact=self.exempt_specifiers,
-            exempt_prefixes=self.exempt_prefixes,
         )
 
 
@@ -186,7 +167,7 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoInternalPatchesTs, argv)
 
 

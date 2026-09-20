@@ -1432,27 +1432,6 @@ def test_core_entry_in_process_even_under_subprocess_dispatch(
     assert "check script not found" not in out
 
 
-def test_core_entry_establish_baseline_then_passes(repo_root: Path) -> None:
-    (repo_root / "src").mkdir()
-    (repo_root / "src" / "dup.py").write_text(_CORE_DUP_FIXTURE, encoding="utf-8")
-    cfg_kwargs = {
-        "repo_root": repo_root,
-        "core_check_configs": {"no_duplicate_string": {"roots": ["src"]}},
-    }
-    # Establish writes the baseline and passes…
-    assert run(_core_rule(), mode="all", establish_baseline=True, **cfg_kwargs).ok  # type: ignore[arg-type]
-    baseline = repo_root / ".architecture" / "baseline" / "no-duplicate-string-files.txt"
-    assert baseline.exists()
-    assert "src/dup.py" in baseline.read_text(encoding="utf-8")
-    # …and the subsequent gate run passes (offender grandfathered).
-    assert run(_core_rule(), mode="all", **cfg_kwargs).ok  # type: ignore[arg-type]
-
-
-# --------------------------------------------------------------------------- #
-# detector-declared skips — a rule that did not examine its subject
-# --------------------------------------------------------------------------- #
-
-
 def test_declared_skip_reason_reads_a_colon_form() -> None:
     entry = RuleEntry(id="S1", gate="s1", check="osv_scanner_sca", summary="sca")
     assert declared_skip_reason(entry, "SKIP osv_scanner_sca: binary not on PATH\n") == "binary not on PATH"

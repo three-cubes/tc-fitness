@@ -190,27 +190,6 @@ def test_the_parser_falls_back_to_the_standard_library_without_defusedxml(
     assert _resolve_element_tree() is ElementTree
 
 
-def test_measured_branch_evidence_can_be_baselined(tmp_path: Path) -> None:
-    """Debt that was measured is ratchetable; only absent evidence is refused."""
-    (tmp_path / "coverage.xml").write_text(
-        '<coverage branch-rate="0" branches-valid="0"><sources><source>.</source></sources></coverage>'
-    )
-    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
-
-    baseline = rule.establish_baseline()
-
-    entries = [line for line in baseline.read_text().splitlines() if line and not line.startswith("#")]
-    assert entries == ["coverage.xml"]
-
-
-def test_absent_branch_evidence_cannot_be_baselined(tmp_path: Path) -> None:
-    """A baseline adopted with no report survives the report being deleted."""
-    rule = build({"coverage_report": "coverage.xml"}, repo_root=tmp_path)
-
-    with pytest.raises(ValueError, match="cannot baseline absent coverage evidence"):
-        rule.establish_baseline()
-
-
 def test_a_report_inside_the_repository_keeps_its_relative_identity(tmp_path: Path) -> None:
     """The in-repository path is the ordinary case and must relativise unchanged."""
     rule = build({"coverage_report": "reports/coverage.xml"}, repo_root=tmp_path)

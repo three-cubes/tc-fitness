@@ -10,7 +10,6 @@ import pytest
 from tc_fitness.core_checks.harness_canon_reference import (
     HarnessCanonReference,
     build,
-    main,
     missing_required_groups,
 )
 
@@ -174,13 +173,6 @@ def test_drift_fail_when_pinned_banner_missing(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # CLI + engine-conformance parity with the sibling CORE checks.
 # --------------------------------------------------------------------------- #
-
-
-def test_main_establish_baseline_mode(tmp_path: Path) -> None:
-    _full_product_harness(tmp_path)
-    rc = main(["--establish-baseline", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    assert (tmp_path / ".architecture" / "baseline" / "harness-canon-reference-files.txt").exists()
 
 
 def test_from_config_binds_all_knobs(tmp_path: Path) -> None:

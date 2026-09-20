@@ -94,7 +94,6 @@ def _resolves_to_internal(
     expr: ast.expr,
     aliases: dict[str, str],
     internal_packages: tuple[str, ...],
-    exempt_roots: frozenset[str],
 ) -> bool:
     """Does ``expr`` (a Name or Attribute) resolve to an internal module?"""
     package_roots = {pkg.split(".")[0] for pkg in internal_packages}
@@ -108,8 +107,6 @@ def _resolves_to_internal(
             return False
         if root in package_roots:
             return True
-        if root in exempt_roots:
-            return False
         return root in aliases and _matches_internal(aliases[root], internal_packages)
     return False
 
@@ -167,7 +164,6 @@ def file_has_internal_patch(
     path: Path,
     *,
     internal_packages: tuple[str, ...],
-    exempt_roots: frozenset[str],
 ) -> bool:
     """True iff ``path`` contains any of the six internal-patch shapes.
 
@@ -203,7 +199,7 @@ def file_has_internal_patch(
             for target in node.targets:
                 if (
                     isinstance(target, ast.Attribute)
-                    and _resolves_to_internal(target, aliases, internal_packages, exempt_roots)
+                    and _resolves_to_internal(target, aliases, internal_packages)
                     and not _is_inside_pytest_raises(parent_map, node)
                 ):
                     return True
@@ -211,7 +207,7 @@ def file_has_internal_patch(
         if isinstance(node, ast.Call) and _is_monkeypatch_setattr(node):
             if _first_arg_is_internal_string(node, internal_packages):
                 return True
-            if node.args and _resolves_to_internal(node.args[0], aliases, internal_packages, exempt_roots):
+            if node.args and _resolves_to_internal(node.args[0], aliases, internal_packages):
                 return True
 
     return False
@@ -226,8 +222,6 @@ class NoInternalMonkeypatch(FitnessRule):
 
     #: Internal package roots to protect -- repo-supplied, no default identity.
     internal_packages: tuple[str, ...] = ()
-    #: Stdlib / external-SDK roots whose patching is a legitimate boundary fake.
-    exempt_roots: frozenset[str] = frozenset()
 
     @classmethod
     def from_config(
@@ -240,15 +234,12 @@ class NoInternalMonkeypatch(FitnessRule):
         assert isinstance(rule, NoInternalMonkeypatch)  # noqa: S101  # narrowing for mypy
         packages = config.get("internal_packages")
         rule.internal_packages = tuple(packages) if packages is not None else ()
-        exempt = config.get("exempt_roots")
-        rule.exempt_roots = frozenset(exempt) if exempt is not None else frozenset()
         return rule
 
     def file_has_violation(self, path: Path) -> bool:
         return file_has_internal_patch(
             path,
             internal_packages=self.internal_packages,
-            exempt_roots=self.exempt_roots,
         )
 
 
@@ -258,7 +249,7 @@ def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> NoInte
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry — supports ``--establish-baseline`` and ``--repo-root``."""
+    """CLI entry supporting ``--repo-root``."""
     return run_core_check(NoInternalMonkeypatch, argv)
 
 

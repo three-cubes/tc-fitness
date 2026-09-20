@@ -174,12 +174,8 @@ def changed_line_failures(root: Path, config: dict[str, Any]) -> dict[str, str]:
     """Score every exact-base changed executable line at a hard 100 percent."""
     from tc_fitness.core_checks.new_code_coverage import parse_added_lines
 
-    if (
-        config.get("floor_pct") != 100
-        or config.get("exempt_files")
-        or config.get("extensions", [".py"]) != [".py"]
-    ):
-        raise ValueError("exact-base coverage requires 100 percent Python coverage without exemptions")
+    if config.get("floor_pct") != 100 or config.get("extensions", [".py"]) != [".py"]:
+        raise ValueError("exact-base coverage requires 100 percent Python coverage")
     base, candidate = identity(config.get("exact_base_commit")), identity(config.get("candidate_commit"))
     exact_checkout(root, base, candidate)
     files = source_files(root, config.get("roots", []))

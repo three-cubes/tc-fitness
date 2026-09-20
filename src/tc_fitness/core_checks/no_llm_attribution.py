@@ -10,8 +10,7 @@ the robot emoji (U+1F916) that tools append to commit/PR metadata.
 Unlike most CORE checks, the banned set here is **intrinsic, not repo config**:
 the attribution *signatures* are provider-neutral and universal, so the engine
 ships them as sensible defaults (a consumer only supplies the scan ``roots`` /
-``extensions`` and, where a legitimate in-source use exists, an ``exempt_files``
-entry or a grandfathering baseline).
+``extensions``).
 
 Two surfaces share ONE detector, :func:`scan_text`:
 
@@ -21,8 +20,7 @@ Two surfaces share ONE detector, :func:`scan_text`:
   messages and PR title/body — so the pattern set is single-sourced and can
   never drift between the local hook, CI, and the fitness gate.
 
-Guard-forward (decision D2): pre-cutover residue is grandfathered via the
-per-file baseline (``--establish-baseline``); only NET-NEW residue fails.
+Every attribution finding is a hard failure.
 """
 
 from __future__ import annotations
@@ -86,8 +84,9 @@ REMEDIATION = _remediation(
         "remove the AI/LLM self-attribution — strip the `Co-Authored-By: <model>` / "
         "`Generated with <tool>` trailer, the robot emoji, or the `noreply@anthropic.com` "
         "identity. Agent work is authored by the canonical bot/human, never advertised as "
-        "model-generated. If an in-source string is genuinely functional (names the tool "
-        "without claiming authorship), add its path to this check's `exempt_files`."
+        "model-generated. A genuinely functional string can name the tool without the "
+        "attribution shape: write the model or vendor identifier alone, without a "
+        "`Co-Authored-By`/`Generated with` trailer or an `@anthropic.com` address."
     ),
     nxt="re-run this check to confirm it goes green.",
     run="python -m tc_fitness.core_checks.no_llm_attribution",
@@ -187,7 +186,7 @@ def _report(path: Path, hits: list[Hit]) -> None:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry.
 
-    File/repo mode (the fitness gate): ``--establish-baseline`` / ``--repo-root``.
+    File/repo mode (the fitness gate): ``--repo-root``.
 
     Message mode (the single seam the commit-msg hook and CI leg share):
 
