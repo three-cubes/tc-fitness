@@ -13,6 +13,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tc_fitness import mutation_assurance, mutation_scope
 
@@ -116,3 +117,41 @@ def test_the_baseline_command_carries_the_campaign_selection(monkeypatch: pytest
     assert isinstance(command, list)
     for argument in mutation_assurance.CAMPAIGN_TEST_ARGS:
         assert argument in command
+
+
+# -- the derived bound is only real if nothing outside it binds first ---------
+
+#: Checkout and dependency install, measured from CI runs at roughly ninety
+#: seconds. The margin is generous because being wrong the other way costs a
+#: cancelled job with no receipt, which is the exact failure this ordering
+#: exists to prevent.
+SETUP_HEADROOM_SECONDS = 300
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _mutation_job() -> dict[str, object]:
+    workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text())
+    return dict(workflow["jobs"]["changed-mutation"])
+
+
+def test_the_ci_job_outlasts_the_largest_budget_the_policy_can_grant() -> None:
+    """A job that expires first cancels the campaign and leaves no receipt.
+
+    The budget is only a budget if the campaign is what enforces it. When the
+    runner's own timeout is the smaller number the campaign is killed mid-run,
+    and the operator is told the job was cancelled rather than which bound was
+    exhausted — the silent failure the derived budget replaced.
+    """
+    policy = tomllib.loads((REPO_ROOT / "mutation.toml").read_text())
+    granted = policy["budget"]["ceiling_seconds"]
+    job_seconds = int(_mutation_job()["timeout-minutes"]) * 60
+
+    assert job_seconds >= granted + SETUP_HEADROOM_SECONDS
+
+
+def test_the_policy_ceiling_cannot_exceed_the_schema_ceiling() -> None:
+    """The schema bound is the outer limit any repository may declare."""
+    policy = tomllib.loads((REPO_ROOT / "mutation.toml").read_text())
+
+    assert policy["budget"]["ceiling_seconds"] <= mutation_scope.BUDGET_CEILING

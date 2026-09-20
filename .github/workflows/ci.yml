@@ -83,7 +83,11 @@ jobs:
   changed-mutation:
     name: Changed-code mutation
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    # A backstop against a hung runner, never the campaign's bound. It sits
+    # above mutation.toml's budget.ceiling_seconds so the campaign always
+    # reports a receipt before the runner can cancel it; the ordering is
+    # asserted by tests/test_mutation_budget.py.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

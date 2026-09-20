@@ -15,8 +15,15 @@ max_mutants = 100000
 # baseline is one measured unmutated run of the selected tests in the snapshot
 # under test; changed_functions is this change's own scope. Both terms are
 # measured, and all of them are recorded in the receipt.
+#
+# ceiling_seconds must stay below the CI job's own timeout, with room for
+# checkout and install. A campaign that outruns this ceiling fails inside
+# the run and writes a receipt naming the budget it exhausted; one that
+# outruns the job is cancelled by the runner with no receipt at all, which
+# is the failure mode this policy exists to remove. Both ends of that
+# ordering are asserted by tests/test_mutation_budget.py.
 [budget]
 baseline_multiplier = 4
 per_function_multiplier = 1.5
 floor_seconds = 120
-ceiling_seconds = 2400
+ceiling_seconds = 1800
