@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tc_fitness.coverage_transaction import _fresh_measurement
+from tc_fitness.coverage_transaction import _evidence_relative, _fresh_measurement, report_failure_logs
 
 pytestmark = pytest.mark.integration
 
@@ -40,6 +40,31 @@ def test_measurement_rejects_an_untrusted_uv_identity(tmp_path: Path) -> None:
             os.environ.pop("PATH", None)
         else:
             os.environ["PATH"] = original
+
+
+def test_failure_log_reporting_tolerates_missing_and_empty_logs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Lost or empty diagnostics must not replace the transaction's original failure."""
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "empty.log").write_text("")
+
+    report_failure_logs(
+        {"stdout_log": "missing.log", "stderr_log": "empty.log"},
+        evidence,
+    )
+
+    assert capsys.readouterr().err == ""
+
+
+def test_diagnostic_path_outside_the_evidence_root_stays_absolute(tmp_path: Path) -> None:
+    """An external log must not be mislabelled as an evidence-directory member."""
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    external_log = tmp_path / "external" / "failure.log"
+
+    assert _evidence_relative(external_log, evidence) == str(external_log.resolve())
 
 
 @pytest.mark.parametrize("binding", ["valid", "malformed", "unregistered"])

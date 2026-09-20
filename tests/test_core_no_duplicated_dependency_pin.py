@@ -280,3 +280,36 @@ def test_an_extensionless_shell_entrypoint_is_scanned(tmp_path: Path) -> None:
 
     assert script in rule.enumerate_files()
     assert rule.file_has_violation(script)
+
+
+def test_extensionless_scope_requires_a_shell_entrypoint_inside_a_configured_root(tmp_path: Path) -> None:
+    """Suffixless data, paths outside roots and missing files are not source inputs."""
+    root = _repo(tmp_path)
+    script = root / "src" / "qualify"
+    script.write_text("#!/usr/bin/env bash\nEXPECTED=3.6.0\n", encoding="utf-8")
+    rule = _rule(root)
+
+    assert not rule.is_in_scope("src/notes.txt")
+    assert not rule.is_in_scope("outside/qualify")
+    assert not rule.is_in_scope("src/missing")
+    assert rule.is_in_scope("src/qualify")
+
+
+def test_extensionless_enumeration_skips_missing_roots_and_hidden_shell_files(tmp_path: Path) -> None:
+    """A hidden helper must not become a finding merely because it has a shell shebang."""
+    root = _repo(tmp_path)
+    hidden = root / "src" / ".internal" / "qualify"
+    hidden.parent.mkdir()
+    hidden.write_text("#!/bin/sh\nEXPECTED=3.6.0\n", encoding="utf-8")
+    visible = root / "src" / "qualify"
+    visible.write_text("#!/bin/sh\nEXPECTED=3.6.0\n", encoding="utf-8")
+    rule = build({"roots": ["missing", "src"]}, repo_root=root)
+
+    assert rule.enumerate_files() == [visible]
+
+
+def test_unreadable_scan_target_is_not_reported_as_a_duplicated_pin(tmp_path: Path) -> None:
+    """A directory passed at the file boundary is unreadable source, not an offender."""
+    root = _repo(tmp_path)
+
+    assert not _rule(root).file_has_violation(root / "src")
