@@ -166,7 +166,16 @@ def workflow_has_untrusted_automation_boundary_violation(
     for job in jobs.values():
         if not isinstance(job, Mapping):
             return True
+        reusable = job.get("uses")
         steps = job.get("steps")
+        if reusable is not None:
+            # A reusable-workflow call is a complete GitHub Actions job shape
+            # in its own right. It has no inline action steps for this rule to
+            # classify, but combining it with ``steps`` or using a non-string
+            # reference is malformed and therefore incomplete evidence.
+            if not isinstance(reusable, str) or not reusable or "steps" in job:
+                return True
+            continue
         if not isinstance(steps, Sequence) or isinstance(steps, str | bytes):
             return True
         if any(not isinstance(step, Mapping) for step in steps):

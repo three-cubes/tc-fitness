@@ -35,7 +35,7 @@ jobs:
           fi
       - name: Mint three-cubes-agent token
         id: app
-        uses: three-cubes/tc-pipelines/.github/actions/github-app-token@c8369630218e674bc994e11b8d311245a51a44f3
+        uses: three-cubes/tc-pipelines/.github/actions/github-app-token@07dad612b5f409a975c8356d556b07f3a855597c # v2.2.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -55,7 +55,7 @@ jobs:
           enable-cache: false
       - name: Prepare the release ledger
         id: release
-        uses: three-cubes/tc-pipelines/actions/prepare-release-metadata@c8369630218e674bc994e11b8d311245a51a44f3
+        uses: three-cubes/tc-pipelines/actions/prepare-release-metadata@07dad612b5f409a975c8356d556b07f3a855597c # v2.2.0
         with:
           version: ${{ inputs.version }}
           bump: ${{ inputs.bump }}
