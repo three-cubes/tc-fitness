@@ -278,39 +278,6 @@ class FitnessRule(ABC):
             if path.name.endswith(self._extensions) and self.is_in_scope(self._repo_relative(path).as_posix())
         ]
 
-    def _git_tracked_files(self) -> list[str] | None:
-        """Repo-relative paths of every git-tracked file, or ``None`` off-git.
-
-        Runs ``git -C <repo_root> ls-files -z`` and returns the NUL-split,
-        repo-relative tracked paths. Returns ``None`` — the signal to fall back
-        to a working-tree walk — when the repo root is not a git working tree
-        (``git`` exits non-zero) or ``git`` is unavailable / wedged. argv0 is the
-        fixed literal ``git`` and ``shell`` is never used; the only variable is
-        the repo-root path.
-        """
-        return _git_tracked_files(self._repo_root)
-
-    def _walk_working_tree(self) -> list[Path]:
-        """Off-git fallback: rglob each configured root, skipping vendor residue.
-
-        Skips ``__pycache__`` and any ``node_modules`` segment so untracked
-        vendor residue cannot trip a scan that has no git tree to filter by.
-        Returns absolute paths.
-        """
-        out: list[Path] = []
-        for root in self._roots:
-            root_path = self._repo_root / root
-            if not root_path.exists():
-                continue
-            for path in root_path.rglob("*"):
-                if not path.is_file():
-                    continue
-                if "__pycache__" in path.parts or "node_modules" in path.parts:
-                    continue
-                if path.name.endswith(self._extensions):
-                    out.append(path)
-        return out
-
     def _repo_relative(self, path: Path) -> Path:
         """Repo-relative path; tolerates absolute or already-relative inputs."""
         if path.is_absolute():

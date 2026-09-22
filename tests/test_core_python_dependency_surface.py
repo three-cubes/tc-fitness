@@ -192,6 +192,17 @@ def test_argv_parser_requires_pip_executable_or_python_module(tmp_path: Path) ->
     ]
 
 
+def test_argv_parser_covers_nonmatching_and_dynamic_process_sequences() -> None:
+    findings = _argv_findings(
+        "subprocess.run(dynamic)\n"
+        'subprocess.run(["pip", "package", "install", "not-a-process"])\n'
+        'subprocess.run(["pip", "--isolated"])\n',
+        "tools/run.py",
+    )
+
+    assert findings == []
+
+
 def test_argv_parser_detects_private_interpreter(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "run.py"
     path.parent.mkdir(parents=True)
@@ -228,6 +239,24 @@ def test_shell_parser_requires_pip_executable_or_python_module(tmp_path: Path) -
 
     assert [(finding.rule, finding.content) for finding in findings] == [
         (RULE_RAW_PIP_INSTALL, "python -m pip install demo")
+    ]
+
+
+def test_shell_parser_covers_equals_options_and_malformed_commands(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "pip --config-settings=foo=bar install demo\n"
+        "pip package install not-a-process\n"
+        "pip --isolated\n"
+        'echo "unterminated\n',
+        encoding="utf-8",
+    )
+
+    findings = _text_findings(path, "tools/run.sh")
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "pip --config-settings=foo=bar install demo")
     ]
 
 

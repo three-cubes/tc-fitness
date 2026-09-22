@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+import tc_fitness.fitness_rule as fitness_rule
 from tc_fitness.core_checks.no_llm_attribution import NoLlmAttribution
-from tc_fitness.fitness_rule import FitnessRule
+from tc_fitness.fitness_rule import FitnessRule, enumerate_repo_files
 
 pytestmark = pytest.mark.integration
 
@@ -97,6 +98,7 @@ def test_empty_roots_enumerate_nothing(tmp_path: Path) -> None:
     _seed(tmp_path, "src/tracked.py", "x = 'BADWORD'\n")
     _git_init_and_add(tmp_path, "src/tracked.py")
     rule = _BadWord(repo_root=tmp_path)  # class-default empty roots
+    assert rule.is_in_scope("src/tracked.py") is True
     assert rule.enumerate_files() == []
     assert rule.collect_violations() == set()  # nothing enumerated → nothing flagged
 
@@ -134,6 +136,37 @@ def test_non_git_fallback_skips_node_modules(tmp_path: Path) -> None:
     _seed(tmp_path, "src/node_modules/dep.py", "BADWORD\n")
     rule = _BadWord(repo_root=tmp_path, roots=("src",))
     assert {str(p) for p in rule.collect_violations()} == {"src/real.py"}
+
+
+def test_enumerate_repo_files_normalises_roots_and_deduplicates(tmp_path: Path) -> None:
+    _seed(tmp_path, "tools/a.py", "x\n")
+    _seed(tmp_path, "tools/nested/b.py", "x\n")
+    _seed(tmp_path, "other/c.py", "x\n")
+    _git_init_and_add(tmp_path, "tools/a.py", "tools/nested/b.py", "other/c.py")
+
+    paths = enumerate_repo_files(tmp_path, (".", "./tools", "tools/nested/", "tools"))
+
+    assert [path.relative_to(tmp_path).as_posix() for path in paths] == [
+        "other/c.py",
+        "tools/a.py",
+        "tools/nested/b.py",
+    ]
+
+
+def test_enumerate_repo_files_fallback_filters_missing_vendor_and_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(tmp_path, "tools/a.py", "x\n")
+    _seed(tmp_path, "tools/__pycache__/cached.py", "x\n")
+    _seed(tmp_path, "tools/node_modules/dep.py", "x\n")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.py"
+    outside.write_text("x\n", encoding="utf-8")
+    (tmp_path / "tools" / "link.py").symlink_to(outside)
+    monkeypatch.setattr(fitness_rule, "_git_tracked_files", lambda _: None)
+
+    paths = enumerate_repo_files(tmp_path, ("missing", "tools"))
+
+    assert [path.relative_to(tmp_path).as_posix() for path in paths] == ["tools/a.py"]
 
 
 def test_run_core_check_with_no_config_scans_nothing(tmp_path: Path) -> None:
