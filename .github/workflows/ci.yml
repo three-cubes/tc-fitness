@@ -29,15 +29,15 @@ jobs:
         id: uv-version
         uses: ./.github/actions/resolve-uv-version
 
-      # Pinned + cached uv install (org standard). `--all-extras` provisions the
-      # `dev` optional-dependency group (ruff / mypy / pytest …) into the locked
+      # Pinned + cached uv install (org standard). `--group dev` provisions the
+      # locked CI tool group (ruff / mypy / pytest …) into the locked
       # .venv, so the gate step runs the CI-equivalent toolchain.
       - name: Locked uv install (org composite)
         uses: three-cubes/tc-pipelines/actions/setup-uv-cached@d0b27934d2906b8913420cd37a4134dd52cf80f3 # v1
         with:
           uv-version: ${{ steps.uv-version.outputs.version }}
           python-version: "3.13"
-          sync-args: "--all-extras"
+          sync-args: "--locked --group dev"
 
       - name: Static self gate
         run: |
@@ -62,7 +62,7 @@ jobs:
         with:
           uv-version: ${{ steps.uv-version.outputs.version }}
           python-version: "3.13"
-          sync-args: "--all-extras"
+          sync-args: "--locked --group dev"
 
       - name: Measure and admit the exact candidate
         env:
@@ -165,7 +165,7 @@ jobs:
           set -euo pipefail
           # tc-fitness IS the engine (self): provision the package into the venv,
           # then run its own module — never a git+ pin (single-sourced detector).
-          uv sync --all-extras
+          uv sync --locked --group dev
           module="tc_fitness.core_checks.no_llm_attribution"
           workdir="$(mktemp -d)"; trap 'rm -rf "$workdir"' EXIT; rc=0
           scan() { if ! uv run --no-sync python -m "$module" --scan-file "$2"; then echo "::error::no-attribution: residue in $1." >&2; rc=1; fi; }

@@ -1,6 +1,9 @@
-.PHONY: prepare assert-clean check-static check smoke
+.PHONY: sync prepare assert-clean check-static check smoke
 
 TC_FITNESS_BASE_REF ?= refs/remotes/origin/main
+
+sync:
+	uv sync --locked --group dev
 
 prepare:
 	uv run ruff check --fix src tests

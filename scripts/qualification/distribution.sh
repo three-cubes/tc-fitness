@@ -149,8 +149,7 @@ qualify() {
   UV_PROJECT_ENVIRONMENT="$environment" uv sync \
     --project "$repo_root" \
     --locked \
-    --all-extras \
-    --all-groups \
+    --group dev \
     --no-install-project \
     --inexact
   # Prove the override survived, reading what to expect from the manifest. A

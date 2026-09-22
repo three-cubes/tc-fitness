@@ -22,7 +22,7 @@ version: 2
 # Source: https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
 
 updates:
-  # Python dependencies — the dev extra (pytest / mypy / ruff / PyYAML);
+  # Python dependencies — the dev dependency group (pytest / mypy / ruff / PyYAML);
   # runtime deps are deliberately empty (stdlib-only engine), so this governs
   # the toolchain the self-gate runs through.
   - package-ecosystem: pip

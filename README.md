@@ -47,10 +47,12 @@ tc-fitness is the one check every repo uses instead of its own copy:
    full set of fields.
 
 3. **Run it locally.** Install your full dev environment, then run the check the
-   same way CI does:
+   same way CI does. On first setup, or after changing dependencies, generate
+   or update the lockfile first; subsequent runs use the locked consumer extra:
 
    ```bash
-   uv sync --all-extras --all-groups
+   uv lock
+   uv sync --locked --extra dev
    uv run tc-fitness run
    ```
 
@@ -70,7 +72,7 @@ tc-fitness is the one check every repo uses instead of its own copy:
    engine's own `branch_naming` gate enforces (this repo dogfoods
    `tc_fitness.checks.branch_naming`).
 2. **Run the gate before every push:** sync with
-   `uv sync --locked --all-extras --all-groups`, run
+   `uv sync --locked --group dev`, run
    `uv run tc-fitness run`, and get it green.
    Local matches CI by construction — both run this same catalogue. Run your
    repo's own pytest separately where the gate does not.
@@ -806,7 +808,7 @@ looser parse) won.**
 This repo IS the gate engine. Set up and run its own tests:
 
 ```bash
-uv sync --all-extras --all-groups
+uv sync --locked --group dev
 uv run pytest tests/ -q
 ```
 

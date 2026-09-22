@@ -2181,7 +2181,7 @@ dependencies = [
     { name = "pyyaml" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "checkov" },
     { name = "mypy" },
@@ -2192,16 +2192,19 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "checkov", marker = "extra == 'dev'", specifier = "==3.2.531" },
     { name = "coverage", specifier = ">=7.10" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "packaging", specifier = ">=23.2" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15,<0.16" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "checkov", specifier = "==3.2.531" },
+    { name = "mypy", specifier = ">=1.11" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "ruff", specifier = ">=0.15,<0.16" },
+]
 
 [[package]]
 name = "tqdm"
