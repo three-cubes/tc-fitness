@@ -122,7 +122,14 @@ def test_ratchet_must_track_current_count_and_exemptions_are_rejected(tmp_path: 
     path.write_text("pip install one\npip install two\n", encoding="utf-8")
     config = {
         "roots": ["tools"],
-        "ratchets": [{"path": "tools/run.sh", "rule": RULE_RAW_PIP_INSTALL, "max_count": 1}],
+        "ratchets": [
+            {
+                "path": "tools/run.sh",
+                "rule": RULE_RAW_PIP_INSTALL,
+                "max_count": 1,
+                "contents": ["pip install one"],
+            }
+        ],
     }
     assert build(config, repo_root=tmp_path).collect_violations() == {Path("tools/run.sh")}
     with pytest.raises(ValueError, match="exempt_paths"):
@@ -135,11 +142,26 @@ def test_stale_ratchet_is_rejected_when_its_last_finding_disappears(tmp_path: Pa
     path.write_text("pip install demo\n", encoding="utf-8")
     config = {
         "roots": ["tools"],
-        "ratchets": [{"path": "tools/run.sh", "rule": RULE_RAW_PIP_INSTALL, "max_count": 1}],
+        "ratchets": [
+            {
+                "path": "tools/run.sh",
+                "rule": RULE_RAW_PIP_INSTALL,
+                "max_count": 1,
+                "contents": ["pip install demo"],
+            }
+        ],
     }
     path.write_text("#!/bin/sh\necho clean\n", encoding="utf-8")
 
     assert build(config, repo_root=tmp_path).run() == 1
+
+
+def test_positive_ratchet_requires_nonempty_contents(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="non-empty contents"):
+        build(
+            {"ratchets": [{"path": "tools/run.sh", "rule": RULE_RAW_PIP_INSTALL, "max_count": 1}]},
+            repo_root=tmp_path,
+        )
 
 
 def test_full_argv_global_options_launch_calls_and_nested_manifests(tmp_path: Path) -> None:
@@ -323,6 +345,27 @@ def test_python_source_has_one_structural_finding_per_argv(tmp_path: Path) -> No
     ]
 
 
+def test_ast_process_detection_rejects_arbitrary_receiver_and_accepts_aliases(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.py"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "import subprocess as sp\n"
+        "from subprocess import run as launch\n"
+        'service.run(["pip", "install", "fake"])\n'
+        'run(["pip", "install", "fake2"])\n'
+        'sp.run(["pip", "install", "demo"])\n'
+        'launch(["pip", "install", "demo2"])\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [finding.content for finding in findings] == [
+        "pip install demo",
+        "pip install demo2",
+    ]
+
+
 def test_chained_uv_command_does_not_hide_second_install(tmp_path: Path) -> None:
     script = tmp_path / "tools" / "run.sh"
     script.parent.mkdir()
@@ -435,6 +478,53 @@ def test_shell_findings_and_file_enumeration_cover_policy_boundaries(tmp_path: P
     assert paths == {"scripts/tool"}
 
 
+def test_shell_logical_commands_parse_venv_private_interpreter_and_continuations(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "bootstrap.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "python " + "\\\n" + "-m venv .venv\n"
+        "echo 'python -m venv fake'\n"
+        ".venv/bin/python " + "\\\n" + "-m tool\n",
+        encoding="utf-8",
+    )
+
+    findings = _text_findings(path, "tools/bootstrap.sh")
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_VENV_BOOTSTRAP, "python  -m venv .venv"),
+        (RULE_PRIVATE_INTERPRETER, ".venv/bin/python  -m tool"),
+    ]
+
+
+def test_python_shebang_extensionless_file_uses_ast_scanner(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "bootstrap"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '#!/usr/bin/env python\nsubprocess.run(["pip", "install", "demo"])\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "pip install demo")
+    ]
+
+
+def test_shell_shebang_extensionless_file_keeps_shell_scanning(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "bootstrap"
+    path.parent.mkdir(parents=True)
+    path.write_text("#!/bin/sh\npython -m venv .venv\n", encoding="utf-8")
+    path.chmod(0o755)
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_VENV_BOOTSTRAP, "python -m venv .venv")
+    ]
+
+
 def test_invalid_ratchets_and_file_level_dispatch_are_explicit(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="array of tables"):
         build({"ratchets": "invalid"}, repo_root=tmp_path)
@@ -450,6 +540,27 @@ def test_invalid_ratchets_and_file_level_dispatch_are_explicit(tmp_path: Path) -
     assert rule.file_has_violation(path)
     assert not rule.file_has_violation(tmp_path / "other.sh")
     assert main([]) == 0
+
+
+def test_file_has_violation_matches_allowed_and_stale_findings(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text("pip install demo\n", encoding="utf-8")
+    config = {
+        "roots": ["tools"],
+        "ratchets": [
+            {
+                "path": "tools/run.sh",
+                "rule": RULE_RAW_PIP_INSTALL,
+                "max_count": 1,
+                "contents": ["pip install demo"],
+            }
+        ],
+    }
+    rule = build(config, repo_root=tmp_path)
+    assert not rule.file_has_violation(path)
+    path.write_text("echo clean\n", encoding="utf-8")
+    assert rule.file_has_violation(path)
 
 
 def test_module_main_guard_exits_cleanly() -> None:

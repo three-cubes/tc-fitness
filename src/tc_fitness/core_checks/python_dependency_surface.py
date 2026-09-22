@@ -44,7 +44,8 @@ DEFAULT_CANONICAL_MANIFESTS = ("pyproject.toml", "uv.lock")
 _PRIVATE_INTERPRETER_RE = re.compile(
     r"""(?<![\w.-])(?:[^"'\s/]+/)*(?:\.venv|venv)/bin/(?:python|python\d+(?:\.\d+)?|pip|pip\d+)(?![\w.-])"""
 )
-_SHELL_VENV_RE = re.compile(r"\bpython(?:3(?:\.\d+)?)?\s+-m\s+venv\b")
+_PROCESS_MODULES = {"os", "subprocess"}
+_PROCESS_ATTRIBUTES = {"Popen", "call", "check_call", "check_output", "popen", "run", "system"}
 _PIP_OPTIONS_WITH_VALUES = frozenset(
     {
         "--abi",
@@ -132,17 +133,57 @@ def _argv_content(sequence: tuple[str | None, ...]) -> str:
     return " ".join(item if item is not None else "<dynamic>" for item in sequence)
 
 
-def _launch_call(node: ast.Call) -> bool:
+def _split_shell_commands(line: str) -> tuple[str, ...]:
+    commands: list[str] = []
+    start = 0
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == ";" or line[index : index + 2] in {"&&", "||"}:
+            commands.append(line[start:index].strip())
+            index += 1 if char == ";" else 2
+            start = index
+            continue
+        index += 1
+    commands.append(line[start:].strip())
+    return tuple(command for command in commands if command)
+
+
+def _launch_call(node: ast.Call, module_aliases: set[str], function_aliases: set[str]) -> bool:
     function = node.func
     if isinstance(function, ast.Attribute):
-        return function.attr in {"call", "check_call", "check_output", "Popen", "run", "system"}
-    return isinstance(function, ast.Name) and function.id in {
-        "call",
-        "check_call",
-        "check_output",
-        "popen",
-        "run",
-    }
+        return (
+            function.attr in _PROCESS_ATTRIBUTES
+            and isinstance(function.value, ast.Name)
+            and function.value.id in module_aliases
+        )
+    return isinstance(function, ast.Name) and function.id in function_aliases
+
+
+def _process_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
+    module_aliases = set(_PROCESS_MODULES)
+    function_aliases: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _PROCESS_MODULES:
+                    module_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module in _PROCESS_MODULES:
+            for alias in node.names:
+                if alias.name in _PROCESS_ATTRIBUTES:
+                    function_aliases.add(alias.asname or alias.name)
+    return module_aliases, function_aliases
 
 
 def _pip_install_index(sequence: tuple[str | None, ...]) -> int | None:
@@ -185,10 +226,11 @@ def _argv_findings(text: str, relative: str) -> list[Finding]:
     except (SyntaxError, UnicodeDecodeError):
         return []
     findings: list[Finding] = []
+    module_aliases, function_aliases = _process_aliases(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if not _launch_call(node):
+        if not _launch_call(node, module_aliases, function_aliases):
             continue
         argv_nodes = list(node.args[:1])
         argv_nodes.extend(keyword.value for keyword in node.keywords if keyword.arg == "args")
@@ -216,32 +258,54 @@ def _text_findings(path: Path, relative: str) -> list[Finding]:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
-    findings = _argv_findings(text, relative) if path.suffix in {".py", ".pyi"} else []
+    first_line = text.splitlines()[:1]
+    python_source = path.suffix in {".py", ".pyi"} or (
+        first_line and first_line[0].startswith("#!") and "python" in first_line[0]
+    )
+    findings = _argv_findings(text, relative) if python_source else []
     # Python source is analysed structurally above.  Applying shell text rules
     # to the same lines would duplicate one semantic argv finding and make
     # ratchet counts unstable; dynamic string construction remains outside the
     # detector's static guarantee.
-    if path.suffix in {".py", ".pyi"}:
+    if python_source:
         return findings
+    logical_lines: list[tuple[int, str]] = []
+    pending = ""
+    start_line = 1
     for number, raw_line in enumerate(text.splitlines(), 1):
+        stripped = raw_line.rstrip()
+        if not pending:
+            start_line = number
+        if stripped.endswith("\\"):
+            pending += stripped[:-1] + " "
+            continue
+        logical_lines.append((start_line, pending + stripped))
+        pending = ""
+    if pending:
+        logical_lines.append((start_line, pending))
+    for number, raw_line in logical_lines:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if _SHELL_VENV_RE.search(line):
-            findings.append(Finding(relative, RULE_VENV_BOOTSTRAP, line, number))
-        for command in re.split(r"\s*(?:&&|\|\||;)\s*", line):
+        for command in _split_shell_commands(line):
             try:
                 tokens = tuple(shlex.split(command))
             except ValueError:
                 tokens = ()
+            if (
+                len(tokens) >= 3
+                and Path(tokens[0]).name in {"python", "python3"}
+                and tokens[1:3] == ("-m", "venv")
+            ):
+                findings.append(Finding(relative, RULE_VENV_BOOTSTRAP, command, number))
             if (
                 tokens
                 and _pip_install_index(tokens) is not None
                 and not (tokens[0] == "uv" and "pip" in tokens[:3])
             ):
                 findings.append(Finding(relative, RULE_RAW_PIP_INSTALL, command, number))
-        if _PRIVATE_INTERPRETER_RE.search(line):
-            findings.append(Finding(relative, RULE_PRIVATE_INTERPRETER, line, number))
+            if tokens and _PRIVATE_INTERPRETER_RE.search(tokens[0]):
+                findings.append(Finding(relative, RULE_PRIVATE_INTERPRETER, command, number))
     return findings
 
 
@@ -333,12 +397,15 @@ class PythonDependencySurface(FitnessRule):
             maximum = int(item.get("max_count", 0))
             if maximum < 0:
                 raise ValueError("ratchet max_count must be non-negative")
+            raw_contents = item.get("contents", ())
+            if maximum > 0 and not raw_contents:
+                raise ValueError("positive ratchets must declare non-empty contents")
             ratchets.append(
                 Ratchet(
                     path=str(item["path"]),
                     rule=str(item["rule"]),
                     max_count=maximum,
-                    contents=tuple(str(content) for content in item.get("contents", ())),
+                    contents=tuple(str(content) for content in raw_contents),
                 )
             )
         rule.ratchets = tuple(ratchets)
@@ -380,11 +447,8 @@ class PythonDependencySurface(FitnessRule):
 
     def file_has_violation(self, path: Path) -> bool:
         relative = _relative(path, self._repo_root)
-        findings = [item for item in self._raw_findings() if item.path == relative]
-        counts: Counter[tuple[str, str]] = Counter((item.path, item.rule) for item in findings)
-        return any(not self._allowed(item, counts) for item in findings) or any(
-            ratchet.path == relative and ratchet.max_count > 0 for ratchet in self.ratchets
-        )
+        violations, stale = self._violating_findings()
+        return relative in {item.path for item in violations} | {item.path for item in stale}
 
     def run(self) -> int:
         """Emit each raw policy rule as a contract-visible structured finding."""
