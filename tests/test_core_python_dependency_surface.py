@@ -129,6 +129,19 @@ def test_ratchet_must_track_current_count_and_exemptions_are_rejected(tmp_path: 
         build({"roots": ["tools"], "exempt_paths": ["tools/"]}, repo_root=tmp_path)
 
 
+def test_stale_ratchet_is_rejected_when_its_last_finding_disappears(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir()
+    path.write_text("pip install demo\n", encoding="utf-8")
+    config = {
+        "roots": ["tools"],
+        "ratchets": [{"path": "tools/run.sh", "rule": RULE_RAW_PIP_INSTALL, "max_count": 1}],
+    }
+    path.write_text("#!/bin/sh\necho clean\n", encoding="utf-8")
+
+    assert build(config, repo_root=tmp_path).run() == 1
+
+
 def test_full_argv_global_options_launch_calls_and_nested_manifests(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "run.py"
     path.parent.mkdir()
@@ -145,6 +158,57 @@ def test_full_argv_global_options_launch_calls_and_nested_manifests(tmp_path: Pa
         (RULE_RAW_PIP_INSTALL, "<dynamic> -m pip --isolated install demo"),
         (RULE_ALTERNATIVE_MANIFEST, "prod.txt"),
     }
+
+
+def test_argv_parser_skips_valued_options_and_nested_kwargs(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.py"
+    path.parent.mkdir()
+    path.write_text(
+        'subprocess.run(["pip", "--timeout", "10", "--trusted-host", "pypi.org", "install", "demo"])\n'
+        'subprocess.run(["echo"], kwargs={"args": ["pip", "install", "not-a-process"]})\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "pip --timeout 10 --trusted-host pypi.org install demo")
+    ]
+
+
+def test_shell_parser_skips_valued_options(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir()
+    path.write_text("pip --timeout 10 --trusted-host pypi.org install demo\n", encoding="utf-8")
+
+    findings = scan_findings(tmp_path, roots=("./tools/",))
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "pip --timeout 10 --trusted-host pypi.org install demo")
+    ]
+
+
+def test_tracked_enumeration_normalises_overlapping_dot_roots_and_ignores_untracked_files(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    tools = tmp_path / "tools"
+    nested = tools / "nested"
+    nested.mkdir(parents=True)
+    tracked = tools / "tracked.sh"
+    tracked.write_text("pip install demo\n", encoding="utf-8")
+    ignored = nested / "ignored.sh"
+    ignored.write_text("pip install ignored\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("tools/nested/ignored.sh\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", ".gitignore", "tools/tracked.sh"], cwd=tmp_path, check=True)
+
+    findings = scan_findings(tmp_path, roots=(".", "./tools", "tools/nested/"))
+
+    assert [(finding.path, finding.rule) for finding in findings] == [
+        ("tools/tracked.sh", RULE_RAW_PIP_INSTALL)
+    ]
 
 
 def test_python_source_has_one_structural_finding_per_argv(tmp_path: Path) -> None:

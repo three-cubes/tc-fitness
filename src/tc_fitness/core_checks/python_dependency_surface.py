@@ -11,7 +11,6 @@ from __future__ import annotations
 import ast
 import re
 import shlex
-import subprocess
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -20,7 +19,7 @@ from typing import Any
 
 from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
-from tc_fitness.fitness_rule import FitnessRule
+from tc_fitness.fitness_rule import FitnessRule, enumerate_repo_files
 from tc_fitness.lib import remediation as _remediation
 
 RULE_RAW_PIP_INSTALL = "raw-pip-install"
@@ -46,22 +45,40 @@ _PRIVATE_INTERPRETER_RE = re.compile(
     r"""(?<![\w.-])(?:[^"'\s/]+/)*(?:\.venv|venv)/bin/(?:python|python\d+(?:\.\d+)?|pip|pip\d+)(?![\w.-])"""
 )
 _SHELL_VENV_RE = re.compile(r"\bpython(?:3(?:\.\d+)?)?\s+-m\s+venv\b")
-_SHELL_PIP_RE = re.compile(
-    r"(?<![\w-])(?:(?:python(?:3(?:\.\d+)?)?|/[^ \t]+/python(?:3(?:\.\d+)?))\s+-m\s+pip|(?:/[^ \t]+/)?pip3?)\s+install\b"
-)
 _PIP_OPTIONS_WITH_VALUES = frozenset(
     {
+        "--abi",
+        "--build-constraint",
+        "--cache-dir",
         "--cert",
         "--client-cert",
+        "--config-settings",
+        "--constraint",
         "--exists-action",
+        "--extra-index-url",
+        "--find-links",
+        "--implementation",
+        "--index-url",
         "--log",
         "--log-file",
+        "--platform",
+        "--prefix",
+        "--progress-bar",
         "--proxy",
+        "--python",
+        "--report",
         "--retries",
+        "--root",
+        "--root-user-action",
+        "--src",
+        "--target",
         "--timeout",
         "--trusted-host",
+        "--use-deprecated",
+        "--use-feature",
     }
 )
+_PIP_SHORT_OPTIONS_WITH_VALUES = frozenset({"-c", "-f", "-i", "-r", "-t"})
 
 REMEDIATION = _remediation(
     fix=(
@@ -136,8 +153,13 @@ def _pip_install_index(sequence: tuple[str | None, ...]) -> int | None:
                 if sequence[index] == "install":
                     return index
                 argument = sequence[index]
-                if argument is not None and argument in _PIP_OPTIONS_WITH_VALUES:
+                if argument is not None and (
+                    argument in _PIP_OPTIONS_WITH_VALUES or argument in _PIP_SHORT_OPTIONS_WITH_VALUES
+                ):
                     index += 2
+                    continue
+                if argument is not None and argument.startswith("--") and "=" in argument:
+                    index += 1
                     continue
                 if argument is not None and not argument.startswith("-"):
                     break
@@ -215,49 +237,17 @@ def _iter_files(
 ) -> Iterable[Path]:
     import fnmatch
 
-    tracked: set[str] | None = None
-    try:
-        result = subprocess.run(  # noqa: S603
-            ["git", "-C", str(root), "ls-files", "-z"],  # noqa: S607
-            check=True,
-            capture_output=True,
-            timeout=30,
-        )
-        tracked = {item.decode("utf-8", "surrogateescape") for item in result.stdout.split(b"\0") if item}
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        pass
-    for configured in roots:
-        configured = configured.removeprefix("./").rstrip("/") or "."
-        base = (root / configured).resolve()
-        if not base.is_dir():
-            continue
-        candidates: Iterable[Path] = (
-            (
-                (root / relative)
-                for relative in sorted(tracked)
-                if configured == "." or relative == configured or relative.startswith(configured + "/")
+    for path in enumerate_repo_files(root, roots):
+        relative = path.relative_to(root.resolve()).as_posix()
+        if (
+            path.suffix in extensions
+            or bool(path.stat().st_mode & 0o111)
+            or any(
+                fnmatch.fnmatch(relative, pattern) or fnmatch.fnmatch(path.name, pattern)
+                for pattern in manifest_patterns
             )
-            if tracked is not None
-            else sorted(base.rglob("*"))
-        )
-        for path in candidates:
-            if not path.is_file() or path.is_symlink():
-                continue
-            relative_parts = path.relative_to(root).parts
-            if any(
-                part in {".git", ".venv", "venv", "__pycache__", "node_modules"} for part in relative_parts
-            ):
-                continue
-            if (
-                path.suffix in extensions
-                or bool(path.stat().st_mode & 0o111)
-                or any(
-                    fnmatch.fnmatch(path.relative_to(root).as_posix(), pattern)
-                    or fnmatch.fnmatch(path.name, pattern)
-                    for pattern in manifest_patterns
-                )
-            ):
-                yield path
+        ):
+            yield path
 
 
 def scan_findings(
@@ -359,33 +349,43 @@ class PythonDependencySurface(FitnessRule):
             return False
         return not ratchet.contents or finding.content in ratchet.contents
 
-    def collect_violations(self) -> set[Path]:
+    def _violating_findings(self) -> tuple[tuple[Finding, ...], tuple[Ratchet, ...]]:
         findings = self._raw_findings()
         counts: Counter[tuple[str, str]] = Counter((item.path, item.rule) for item in findings)
-        violations = {Path(item.path) for item in findings if not self._allowed(item, counts)}
+        violations = tuple(item for item in findings if not self._allowed(item, counts))
         observed = {(item.path, item.rule) for item in findings}
-        for ratchet in self.ratchets:
-            if ratchet.max_count > 0 and (ratchet.path, ratchet.rule) not in observed:
-                violations.add(Path(ratchet.path))
-        return violations
+        stale = tuple(
+            ratchet
+            for ratchet in self.ratchets
+            if ratchet.max_count > 0 and (ratchet.path, ratchet.rule) not in observed
+        )
+        return violations, stale
+
+    def collect_violations(self) -> set[Path]:
+        violations, stale = self._violating_findings()
+        return {Path(item.path) for item in violations} | {Path(item.path) for item in stale}
 
     def file_has_violation(self, path: Path) -> bool:
         relative = _relative(path, self._repo_root)
         findings = [item for item in self._raw_findings() if item.path == relative]
         counts: Counter[tuple[str, str]] = Counter((item.path, item.rule) for item in findings)
-        return any(not self._allowed(item, counts) for item in findings)
+        return any(not self._allowed(item, counts) for item in findings) or any(
+            ratchet.path == relative and ratchet.max_count > 0 for ratchet in self.ratchets
+        )
 
     def run(self) -> int:
         """Emit each raw policy rule as a contract-visible structured finding."""
-        findings = self._raw_findings()
-        counts: Counter[tuple[str, str]] = Counter((item.path, item.rule) for item in findings)
-        violations = [item for item in findings if not self._allowed(item, counts)]
+        violations, stale = self._violating_findings()
         for finding in violations:
             report_finding(finding.rule, finding.path, finding.content)
             print(f"FAIL [{self.name}] {finding.path}: {finding.content}")
-        if violations:
+        for ratchet in stale:
+            message = "ratchet has no matching current finding; remove stale migration debt"
+            report_finding(ratchet.rule, ratchet.path, message)
+            print(f"FAIL [{self.name}] {ratchet.path}: {message}")
+        if violations or stale:
             print(self.remediation)
-        return int(bool(violations))
+        return int(bool(violations or stale))
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> PythonDependencySurface:
