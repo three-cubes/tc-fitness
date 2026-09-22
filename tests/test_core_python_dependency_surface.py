@@ -176,6 +176,22 @@ def test_argv_parser_skips_valued_options_and_nested_kwargs(tmp_path: Path) -> N
     ]
 
 
+def test_argv_parser_requires_pip_executable_or_python_module(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.py"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        'subprocess.run(["echo", "pip", "install", "not-a-process"] )\n'
+        'subprocess.run(["python", "-m", "pip", "install", "demo"])\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "python -m pip install demo")
+    ]
+
+
 def test_shell_parser_skips_valued_options(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "run.sh"
     path.parent.mkdir()
@@ -185,6 +201,18 @@ def test_shell_parser_skips_valued_options(tmp_path: Path) -> None:
 
     assert [(finding.rule, finding.content) for finding in findings] == [
         (RULE_RAW_PIP_INSTALL, "pip --timeout 10 --trusted-host pypi.org install demo")
+    ]
+
+
+def test_shell_parser_requires_pip_executable_or_python_module(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text("echo pip install not-a-process\npython -m pip install demo\n", encoding="utf-8")
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "python -m pip install demo")
     ]
 
 

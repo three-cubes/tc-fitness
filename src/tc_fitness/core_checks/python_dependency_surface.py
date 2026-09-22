@@ -146,24 +146,36 @@ def _launch_call(node: ast.Call) -> bool:
 
 
 def _pip_install_index(sequence: tuple[str | None, ...]) -> int | None:
-    for start, argument in enumerate(sequence):
-        if argument == "pip" and (start == 0 or sequence[0] != "uv"):
-            index = start + 1
-            while index < len(sequence):
-                if sequence[index] == "install":
-                    return index
-                argument = sequence[index]
-                if argument is not None and (
-                    argument in _PIP_OPTIONS_WITH_VALUES or argument in _PIP_SHORT_OPTIONS_WITH_VALUES
-                ):
-                    index += 2
-                    continue
-                if argument is not None and argument.startswith("--") and "=" in argument:
-                    index += 1
-                    continue
-                if argument is not None and not argument.startswith("-"):
-                    break
-                index += 1
+    if not sequence or sequence[0] == "uv":
+        return None
+    executable = sequence[0]
+    pip_start: int | None = None
+    if executable is not None and re.fullmatch(r"pip(?:3(?:\.\d+)?)?", Path(executable).name):
+        pip_start = 1
+    elif len(sequence) >= 3 and sequence[1:3] == ("-m", "pip"):
+        interpreter = Path(executable).name if executable is not None else ""
+        if executable is None or re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter):
+            pip_start = 3
+    elif len(sequence) >= 3 and sequence[:2] == ("-m", "pip"):
+        pip_start = 2
+    if pip_start is None:
+        return None
+    index = pip_start
+    while index < len(sequence):
+        if sequence[index] == "install":
+            return index
+        argument = sequence[index]
+        if argument is not None and (
+            argument in _PIP_OPTIONS_WITH_VALUES or argument in _PIP_SHORT_OPTIONS_WITH_VALUES
+        ):
+            index += 2
+            continue
+        if argument is not None and argument.startswith("--") and "=" in argument:
+            index += 1
+            continue
+        if argument is not None and not argument.startswith("-"):
+            break
+        index += 1
     return None
 
 
