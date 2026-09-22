@@ -474,6 +474,20 @@ def test_ast_process_detection_rejects_unsupported_os_apis() -> None:
     assert _argv_findings('import os\nos.run(["pip", "install", "fake"])\n', "tools/run.py") == []
 
 
+def test_ast_process_detection_filters_unsupported_import_symbols() -> None:
+    findings = _argv_findings(
+        "from os import system\n"
+        "from subprocess import PIPE\n"
+        "from subprocess import run\n"
+        'system(["pip", "install", "os-fake"] )\n'
+        'PIPE(["pip", "install", "pipe-fake"] )\n'
+        'run(["pip", "install", "valid"] )\n',
+        "tools/run.py",
+    )
+
+    assert [finding.content for finding in findings] == ["pip install valid"]
+
+
 def test_chained_uv_command_does_not_hide_second_install(tmp_path: Path) -> None:
     script = tmp_path / "tools" / "run.sh"
     script.parent.mkdir()
