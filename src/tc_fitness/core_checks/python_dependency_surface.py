@@ -44,8 +44,10 @@ DEFAULT_CANONICAL_MANIFESTS = ("pyproject.toml", "uv.lock")
 _PRIVATE_INTERPRETER_RE = re.compile(
     r"""(?<![\w.-])(?:[^"'\s/]+/)*(?:\.venv|venv)/bin/(?:python|python\d+(?:\.\d+)?|pip|pip\d+)(?![\w.-])"""
 )
-_PROCESS_MODULES = {"os", "subprocess"}
-_PROCESS_ATTRIBUTES = {"Popen", "call", "check_call", "check_output", "popen", "run", "system"}
+_PROCESS_MODULE_APIS = {
+    "subprocess": {"Popen", "call", "check_call", "check_output", "run"},
+}
+_PYTHON_INTERPRETER_RE = re.compile(r"python(?:3(?:\.\d+)?)?")
 _PIP_OPTIONS_WITH_VALUES = frozenset(
     {
         "--abi",
@@ -150,9 +152,9 @@ def _split_shell_commands(line: str) -> tuple[str, ...]:
                 quote = None
         elif char in {"'", '"'}:
             quote = char
-        elif char == ";" or line[index : index + 2] in {"&&", "||"}:
+        elif char in ";|&" or line[index : index + 2] in {"&&", "||"}:
             commands.append(line[start:index].strip())
-            index += 1 if char == ";" else 2
+            index += 2 if line[index : index + 2] in {"&&", "||"} else 1
             start = index
             continue
         index += 1
@@ -160,30 +162,36 @@ def _split_shell_commands(line: str) -> tuple[str, ...]:
     return tuple(command for command in commands if command)
 
 
-def _launch_call(node: ast.Call, module_aliases: set[str], function_aliases: set[str]) -> bool:
+def _launch_call(node: ast.Call, module_aliases: dict[str, str], function_aliases: set[str]) -> bool:
     function = node.func
     if isinstance(function, ast.Attribute):
-        return (
-            function.attr in _PROCESS_ATTRIBUTES
-            and isinstance(function.value, ast.Name)
-            and function.value.id in module_aliases
+        return isinstance(function.value, ast.Name) and function.attr in _PROCESS_MODULE_APIS.get(
+            module_aliases.get(function.value.id, ""), set()
         )
     return isinstance(function, ast.Name) and function.id in function_aliases
 
 
-def _process_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
-    module_aliases = set(_PROCESS_MODULES)
+def _process_aliases(tree: ast.Module) -> tuple[dict[str, str], set[str]]:
+    module_aliases: dict[str, str] = {}
     function_aliases: set[str] = set()
+    rebound: set[str] = set()
     for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in _PROCESS_MODULES:
-                    module_aliases.add(alias.asname or alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module in _PROCESS_MODULES:
+                if alias.name in _PROCESS_MODULE_APIS:
+                    module_aliases[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module in _PROCESS_MODULE_APIS:
             for alias in node.names:
-                if alias.name in _PROCESS_ATTRIBUTES:
+                if alias.name in _PROCESS_MODULE_APIS[node.module]:
                     function_aliases.add(alias.asname or alias.name)
-    return module_aliases, function_aliases
+    for descendant in ast.walk(tree):
+        if isinstance(descendant, ast.Name) and isinstance(descendant.ctx, ast.Store):
+            rebound.add(descendant.id)
+        if isinstance(descendant, ast.arg):
+            rebound.add(descendant.arg)
+    return {name: module for name, module in module_aliases.items() if name not in rebound}, {
+        name for name in function_aliases if name not in rebound
+    }
 
 
 def _pip_install_index(sequence: tuple[str | None, ...]) -> int | None:
@@ -294,7 +302,7 @@ def _text_findings(path: Path, relative: str) -> list[Finding]:
                 tokens = ()
             if (
                 len(tokens) >= 3
-                and Path(tokens[0]).name in {"python", "python3"}
+                and _PYTHON_INTERPRETER_RE.fullmatch(Path(tokens[0]).name)
                 and tokens[1:3] == ("-m", "venv")
             ):
                 findings.append(Finding(relative, RULE_VENV_BOOTSTRAP, command, number))

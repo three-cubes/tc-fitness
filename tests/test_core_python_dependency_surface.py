@@ -32,6 +32,7 @@ def test_scans_argv_bootstrap_in_non_executable_python(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "bootstrap.py"
     path.parent.mkdir()
     path.write_text(
+        "import subprocess\n"
         'subprocess.run([sys.executable, "-m", "venv", ".venv"])\n'
         'subprocess.run([sys.executable, "-m", "pip", "install", "demo"])\n',
         encoding="utf-8",
@@ -169,6 +170,7 @@ def test_full_argv_global_options_launch_calls_and_nested_manifests(tmp_path: Pa
     path.parent.mkdir()
     path.write_text(
         'notify(["pip", "install", "not-a-process"])\n'
+        "import subprocess\n"
         'subprocess.run([sys.executable, "-m", "pip", "--isolated", "install", "demo"])\n',
         encoding="utf-8",
     )
@@ -186,6 +188,7 @@ def test_argv_parser_skips_valued_options_and_nested_kwargs(tmp_path: Path) -> N
     path = tmp_path / "tools" / "run.py"
     path.parent.mkdir()
     path.write_text(
+        "import subprocess\n"
         'subprocess.run(["pip", "--timeout", "10", "--trusted-host", "pypi.org", "install", "demo"])\n'
         'subprocess.run(["echo"], kwargs={"args": ["pip", "install", "not-a-process"]})\n',
         encoding="utf-8",
@@ -202,6 +205,7 @@ def test_argv_parser_requires_pip_executable_or_python_module(tmp_path: Path) ->
     path = tmp_path / "tools" / "run.py"
     path.parent.mkdir(parents=True)
     path.write_text(
+        "import subprocess\n"
         'subprocess.run(["echo", "pip", "install", "not-a-process"] )\n'
         'subprocess.run(["python", "-m", "pip", "install", "demo"])\n',
         encoding="utf-8",
@@ -216,6 +220,7 @@ def test_argv_parser_requires_pip_executable_or_python_module(tmp_path: Path) ->
 
 def test_argv_parser_covers_nonmatching_and_dynamic_process_sequences() -> None:
     findings = _argv_findings(
+        "import subprocess\n"
         "subprocess.run(dynamic)\n"
         'subprocess.run(["pip", "package", "install", "not-a-process"])\n'
         'subprocess.run(["pip", "--isolated"])\n',
@@ -228,7 +233,7 @@ def test_argv_parser_covers_nonmatching_and_dynamic_process_sequences() -> None:
 def test_argv_parser_rejects_non_python_module_interpreters() -> None:
     assert (
         _argv_findings(
-            'subprocess.run(["pypy", "-m", "pip", "install", "demo"])\n',
+            'import subprocess\nsubprocess.run(["pypy", "-m", "pip", "install", "demo"])\n',
             "tools/run.py",
         )
         == []
@@ -238,7 +243,7 @@ def test_argv_parser_rejects_non_python_module_interpreters() -> None:
 def test_argv_parser_rejects_non_python_launcher_for_module_pip() -> None:
     assert (
         _argv_findings(
-            'subprocess.run(["echo", "-m", "pip", "install", "demo"])\n',
+            'import subprocess\nsubprocess.run(["echo", "-m", "pip", "install", "demo"])\n',
             "tools/run.py",
         )
         == []
@@ -249,7 +254,7 @@ def test_argv_parser_detects_private_interpreter(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "run.py"
     path.parent.mkdir(parents=True)
     path.write_text(
-        'subprocess.run([".venv/bin/python", "-m", "tool"])\n',
+        'import subprocess\nsubprocess.run([".venv/bin/python", "-m", "tool"])\n',
         encoding="utf-8",
     )
 
@@ -338,7 +343,7 @@ def test_tracked_enumeration_normalises_overlapping_dot_roots_and_ignores_untrac
 def test_python_source_has_one_structural_finding_per_argv(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "run.py"
     path.parent.mkdir()
-    path.write_text('subprocess.run(["pip", "install", "demo"])\n', encoding="utf-8")
+    path.write_text('import subprocess\nsubprocess.run(["pip", "install", "demo"])\n', encoding="utf-8")
     findings = scan_findings(tmp_path, roots=("tools",))
     assert [(finding.rule, finding.content) for finding in findings] == [
         (RULE_RAW_PIP_INSTALL, "pip install demo")
@@ -364,6 +369,25 @@ def test_ast_process_detection_rejects_arbitrary_receiver_and_accepts_aliases(tm
         "pip install demo",
         "pip install demo2",
     ]
+
+
+def test_ast_process_detection_requires_import_and_rejects_rebound_aliases() -> None:
+    assert _argv_findings('subprocess.run(["pip", "install", "no-import"] )\n', "tools/run.py") == []
+    findings = _argv_findings(
+        "import subprocess as sp\n"
+        "sp = service\n"
+        'sp.run(["pip", "install", "rebound"])\n'
+        "import subprocess\n"
+        "def wrapped(sp):\n"
+        '    sp.run(["pip", "install", "shadowed"])\n',
+        "tools/run.py",
+    )
+
+    assert findings == []
+
+
+def test_ast_process_detection_rejects_unsupported_os_apis() -> None:
+    assert _argv_findings('import os\nos.run(["pip", "install", "fake"])\n', "tools/run.py") == []
 
 
 def test_chained_uv_command_does_not_hide_second_install(tmp_path: Path) -> None:
@@ -402,7 +426,7 @@ def test_configured_core_entry_runs_through_gate(tmp_path: Path) -> None:
     )
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "bootstrap.py").write_text(
-        'subprocess.run([sys.executable, "-m", "pip", "install", "demo"])\n',
+        'import subprocess\nsubprocess.run([sys.executable, "-m", "pip", "install", "demo"])\n',
         encoding="utf-8",
     )
     (tmp_path / "pyproject.toml").write_text(
@@ -430,6 +454,7 @@ def test_argv_parser_handles_dynamic_and_invalid_python(tmp_path: Path) -> None:
     assert _string_sequence(ast.parse("value = 1").body[0]) is None
     assert _argv_findings("not valid python(", "tools/bad.py") == []
     findings = _argv_findings(
+        "import subprocess\n"
         'subprocess.run(["pip", "install", "demo"])\n'
         'subprocess.run(["-m", "pip", "install", "demo"])\n'
         'subprocess.run([dynamic, "-m", "venv"])\n',
@@ -496,11 +521,25 @@ def test_shell_logical_commands_parse_venv_private_interpreter_and_continuations
     ]
 
 
+def test_shell_parser_detects_versioned_python_venv_without_quoted_false_positive(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tools" / "bootstrap.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text("python3.11 -m venv .venv\necho 'python3.11 -m venv fake'\n", encoding="utf-8")
+
+    findings = _text_findings(path, "tools/bootstrap.sh")
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_VENV_BOOTSTRAP, "python3.11 -m venv .venv")
+    ]
+
+
 def test_python_shebang_extensionless_file_uses_ast_scanner(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "bootstrap"
     path.parent.mkdir(parents=True)
     path.write_text(
-        '#!/usr/bin/env python\nsubprocess.run(["pip", "install", "demo"])\n',
+        '#!/usr/bin/env python\nimport subprocess\nsubprocess.run(["pip", "install", "demo"])\n',
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -522,6 +561,21 @@ def test_shell_shebang_extensionless_file_keeps_shell_scanning(tmp_path: Path) -
 
     assert [(finding.rule, finding.content) for finding in findings] == [
         (RULE_VENV_BOOTSTRAP, "python -m venv .venv")
+    ]
+
+
+def test_shell_pipeline_scans_real_command_but_not_quoted_pipe(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "bootstrap.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "echo preamble | pip install demo\necho 'preamble | pip install fake'\n",
+        encoding="utf-8",
+    )
+
+    findings = _text_findings(path, "tools/bootstrap.sh")
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "pip install demo")
     ]
 
 
