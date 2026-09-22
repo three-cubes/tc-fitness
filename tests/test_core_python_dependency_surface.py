@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import runpy
 import sys
 from pathlib import Path
 
@@ -12,7 +14,12 @@ from tc_fitness.core_checks.python_dependency_surface import (
     RULE_PRIVATE_INTERPRETER,
     RULE_RAW_PIP_INSTALL,
     RULE_VENV_BOOTSTRAP,
+    _argv_findings,
+    _iter_files,
+    _string_sequence,
+    _text_findings,
     build,
+    main,
     scan_findings,
 )
 from tc_fitness.gate import run_gate
@@ -161,3 +168,83 @@ def test_configured_core_entry_runs_through_gate(tmp_path: Path) -> None:
         for name in list(sys.modules):
             if name == "scripts" or name.startswith("scripts."):
                 del sys.modules[name]
+
+
+def test_argv_parser_handles_dynamic_and_invalid_python(tmp_path: Path) -> None:
+    assert _string_sequence(ast.parse("value = 1").body[0]) is None
+    assert _argv_findings("not valid python(", "tools/bad.py") == []
+    findings = _argv_findings(
+        'subprocess.run(["pip", "install", "demo"])\n'
+        'subprocess.run(["-m", "pip", "install", "demo"])\n'
+        'subprocess.run([dynamic, "-m", "venv"])\n',
+        "tools/run.py",
+    )
+    assert [finding.content for finding in findings] == [
+        "pip install",
+        "-m pip install",
+        "-m venv",
+    ]
+    unreadable = tmp_path / "tools" / "broken.py"
+    unreadable.parent.mkdir()
+    unreadable.write_bytes(b"\xff")
+    assert _text_findings(unreadable, "tools/broken.py") == []
+
+
+def test_shell_findings_and_file_enumeration_cover_policy_boundaries(tmp_path: Path) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shell = scripts / "bootstrap.sh"
+    shell.write_text(
+        "# python -m venv ignored in a comment\n\n"
+        "python -m venv .venv\n"
+        "pip install demo\n"
+        "uv pip install approved\n"
+        ".venv/bin/python -m demo\n",
+        encoding="utf-8",
+    )
+    executable = scripts / "tool"
+    executable.write_text("pip install executable\n", encoding="utf-8")
+    executable.chmod(0o755)
+    (scripts / ".venv").mkdir()
+    (scripts / ".venv" / "ignored.py").write_text("pip install ignored\n", encoding="utf-8")
+
+    findings = _text_findings(shell, "scripts/bootstrap.sh")
+    assert {finding.rule for finding in findings} == {
+        RULE_RAW_PIP_INSTALL,
+        RULE_VENV_BOOTSTRAP,
+        RULE_PRIVATE_INTERPRETER,
+    }
+    paths = {
+        path.relative_to(tmp_path).as_posix() for path in _iter_files(tmp_path, ("missing",), (".py",), ())
+    }
+    assert paths == set()
+    paths = {path.relative_to(tmp_path).as_posix() for path in _iter_files(tmp_path, ("scripts",), (), ())}
+    assert paths == {"scripts/tool"}
+
+
+def test_invalid_ratchets_and_file_level_dispatch_are_explicit(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="array of tables"):
+        build({"ratchets": "invalid"}, repo_root=tmp_path)
+    with pytest.raises(ValueError, match="each ratchet"):
+        build({"ratchets": ["invalid"]}, repo_root=tmp_path)
+    with pytest.raises(ValueError, match="non-negative"):
+        build({"ratchets": [{"path": "x", "rule": "x", "max_count": -1}]}, repo_root=tmp_path)
+
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir()
+    path.write_text("pip install demo\n", encoding="utf-8")
+    rule = build({"roots": ["tools"]}, repo_root=tmp_path)
+    assert rule.file_has_violation(path)
+    assert not rule.file_has_violation(tmp_path / "other.sh")
+    assert main([]) == 0
+
+
+def test_module_main_guard_exits_cleanly() -> None:
+    original_argv = sys.argv
+    sys.argv = ["python-dependency-surface"]
+    try:
+        with pytest.raises(SystemExit) as raised:
+            runpy.run_module("tc_fitness.core_checks.python_dependency_surface", run_name="__main__")
+    finally:
+        sys.argv = original_argv
+    assert raised.value.code == 0
