@@ -240,7 +240,9 @@ def _process_aliases(
     nested_scopes: list[ast.AST] = []
     current = parents.get(call)
     while current is not None:
-        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            nested_scopes.append(current)
+        elif isinstance(current, ast.ClassDef) and not nested_scopes:
             nested_scopes.append(current)
         current = parents.get(current)
     scopes.extend(reversed(nested_scopes))

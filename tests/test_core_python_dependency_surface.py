@@ -434,6 +434,27 @@ def test_ast_process_nested_parameter_shadow_is_nearest_scope() -> None:
     assert [finding.content for finding in findings] == ["pip install outer"]
 
 
+def test_ast_process_methods_do_not_use_class_scope_bindings() -> None:
+    module_binding = _argv_findings(
+        "import subprocess\n"
+        "class Wrapper:\n"
+        "    subprocess = object()\n"
+        "    def run(self):\n"
+        '        subprocess.run(["pip", "install", "module"] )\n',
+        "tools/run.py",
+    )
+    class_binding = _argv_findings(
+        "class Wrapper:\n"
+        "    import subprocess\n"
+        "    def run(self):\n"
+        '        subprocess.run(["pip", "install", "class"] )\n',
+        "tools/run.py",
+    )
+
+    assert [finding.content for finding in module_binding] == ["pip install module"]
+    assert class_binding == []
+
+
 def test_ast_process_detection_rejects_unsupported_os_apis() -> None:
     assert _argv_findings('import os\nos.run(["pip", "install", "fake"])\n', "tools/run.py") == []
 
