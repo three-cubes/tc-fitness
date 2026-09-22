@@ -15,7 +15,9 @@ from tc_fitness.core_checks.python_dependency_surface import (
     RULE_RAW_PIP_INSTALL,
     RULE_VENV_BOOTSTRAP,
     _argv_findings,
+    _is_python_shebang,
     _iter_files,
+    _split_shell_commands,
     _string_sequence,
     _text_findings,
     build,
@@ -434,6 +436,19 @@ def test_ast_process_nested_parameter_shadow_is_nearest_scope() -> None:
     assert [finding.content for finding in findings] == ["pip install outer"]
 
 
+def test_ast_process_scope_boundaries_cover_late_import_async_and_varargs() -> None:
+    findings = _argv_findings(
+        'execute(["pip", "install", "late"] )\n'
+        "from subprocess import run as execute\n"
+        "async def wrapped(*sp, **kwargs):\n"
+        '    sp.run(["pip", "install", "vararg"] )\n'
+        '    kwargs.run(["pip", "install", "kwarg"] )\n',
+        "tools/run.py",
+    )
+
+    assert findings == []
+
+
 def test_ast_process_methods_do_not_use_class_scope_bindings() -> None:
     module_binding = _argv_findings(
         "import subprocess\n"
@@ -636,6 +651,22 @@ def test_shebang_parser_rejects_shell_comment_and_malformed_lines(tmp_path: Path
             (finding.rule, finding.path) for finding in findings
         }
         assert not any(finding.rule == RULE_VENV_BOOTSTRAP for finding in findings)
+
+
+def test_shebang_parser_handles_empty_and_env_split_python() -> None:
+    assert not _is_python_shebang("#!\n")
+    assert _is_python_shebang("#!/usr/bin/env -S python3\n")
+
+
+def test_shell_parser_handles_escaped_operators_and_trailing_continuations(tmp_path: Path) -> None:
+    assert _split_shell_commands(r"echo escaped\; pip install fake") == (r"echo escaped\; pip install fake",)
+    assert _split_shell_commands(r"echo escaped\& pip install fake") == (r"echo escaped\& pip install fake",)
+    path = tmp_path / "tools" / "bootstrap.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text("pip install \\\n", encoding="utf-8")
+    assert [(finding.rule, finding.content) for finding in _text_findings(path, "tools/bootstrap.sh")] == [
+        (RULE_RAW_PIP_INSTALL, "pip install")
+    ]
 
 
 def test_shell_shebang_extensionless_file_keeps_shell_scanning(tmp_path: Path) -> None:
