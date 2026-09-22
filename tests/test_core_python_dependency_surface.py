@@ -203,6 +203,26 @@ def test_argv_parser_covers_nonmatching_and_dynamic_process_sequences() -> None:
     assert findings == []
 
 
+def test_argv_parser_rejects_non_python_module_interpreters() -> None:
+    assert (
+        _argv_findings(
+            'subprocess.run(["pypy", "-m", "pip", "install", "demo"])\n',
+            "tools/run.py",
+        )
+        == []
+    )
+
+
+def test_argv_parser_rejects_non_python_launcher_for_module_pip() -> None:
+    assert (
+        _argv_findings(
+            'subprocess.run(["echo", "-m", "pip", "install", "demo"])\n',
+            "tools/run.py",
+        )
+        == []
+    )
+
+
 def test_argv_parser_detects_private_interpreter(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "run.py"
     path.parent.mkdir(parents=True)
@@ -258,6 +278,16 @@ def test_shell_parser_covers_equals_options_and_malformed_commands(tmp_path: Pat
     assert [(finding.rule, finding.content) for finding in findings] == [
         (RULE_RAW_PIP_INSTALL, "pip --config-settings=foo=bar install demo")
     ]
+
+
+def test_scan_findings_deduplicates_repeated_literal_calls(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir(parents=True)
+    path.write_text("pip install demo; pip install demo\n", encoding="utf-8")
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [(finding.rule, finding.path) for finding in findings] == [(RULE_RAW_PIP_INSTALL, "tools/run.sh")]
 
 
 def test_tracked_enumeration_normalises_overlapping_dot_roots_and_ignores_untracked_files(

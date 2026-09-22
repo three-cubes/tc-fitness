@@ -292,10 +292,7 @@ def scan_findings(
         ):
             if relative not in canonical_manifests:
                 finding = Finding(relative, RULE_ALTERNATIVE_MANIFEST, path.name)
-                key = (finding.path, finding.rule, finding.content, finding.line)
-                if key not in seen:
-                    findings.append(finding)
-                    seen.add(key)
+                findings.append(finding)
     return tuple(sorted(findings, key=lambda item: (item.path, item.rule, item.line, item.content)))
 
 
