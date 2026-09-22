@@ -39,3 +39,19 @@ def test_dev_tools_use_one_locked_dependency_group_across_local_surfaces() -> No
     assert "--all-groups" not in qualification
     assert "--group dev" in workflow
     assert "--all-extras" not in workflow
+
+
+def test_readme_distinguishes_consumer_extra_bootstrap_from_daily_locked_sync() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "uv lock" in readme
+    onboarding = readme.split("3. **Run it locally.**", 1)[1].split("4. **Point CI", 1)[0]
+    assert "uv sync --locked --extra dev" in onboarding
+    assert "uv sync --locked --group dev" not in onboarding
+
+
+def test_readme_describes_coverage_compatibility_provisioning() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Each detached checkout gets its own external environment provisioned with" in readme
+    assert "uv sync --locked --all-extras" in readme

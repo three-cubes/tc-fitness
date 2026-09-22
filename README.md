@@ -47,10 +47,12 @@ tc-fitness is the one check every repo uses instead of its own copy:
    full set of fields.
 
 3. **Run it locally.** Install your full dev environment, then run the check the
-   same way CI does:
+   same way CI does. On first setup, or after changing dependencies, generate
+   or update the lockfile first; subsequent runs use the locked consumer extra:
 
    ```bash
-   uv sync --locked --group dev
+   uv lock
+   uv sync --locked --extra dev
    uv run tc-fitness run
    ```
 
@@ -414,7 +416,7 @@ candidate-configured roots, tests, floors or base selectors are inputs. The
 optional JSON is output-only and cannot be imported for admission.
 
 Each detached checkout gets its own external environment provisioned with
-`uv sync --locked --group dev`. Coverage and pytest run through that
+`uv sync --locked --all-extras`. Coverage and pytest run through that
 environment's Python; provisioning or test failure is a terminal error, never
 a fallback to the controller environment. Measurements retain the lock digest
 and actual Python, Coverage.py, pytest and uv identities. The current trusted
