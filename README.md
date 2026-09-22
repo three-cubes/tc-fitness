@@ -268,6 +268,30 @@ scopes it plus a catalogue row that references it:
 roots = ["tests"]
 ```
 
+The `core:python_dependency_surface` check keeps configured Python tooling on
+the repository's canonical lock. It reports raw `pip install`, ad-hoc
+`python -m venv`, private `venv/bin` interpreters, and nested alternative
+dependency manifests. Bind the roots owned by your repository:
+
+```toml
+[tool.tc_fitness.core_checks.python_dependency_surface]
+roots = ["scripts", "tools"]
+exempt_paths = ["tools/legacy/"]
+
+[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]
+path = "tools/legacy/bootstrap.py"
+rule = "raw-pip-install"
+max_count = 1
+contents = ["pip install legacy-tool"]
+```
+
+Ratchets are shrink-only: a lower finding count is accepted, but a new path,
+rule, count above `max_count`, or changed content fails until the owning
+migration removes the exception. Consumers should replace local dependency
+surface logic with this CORE row after repinning to the release that contains
+it; keep any TAZ-specific paths and migration queue in tc-agent-zone, not in
+the shared engine.
+
 ```python
 RuleEntry(id="deterministic-tests", check="core:deterministic_tests",
           category="test-integrity", summary="Tests are stable across seeds and orders.")

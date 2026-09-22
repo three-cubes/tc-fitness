@@ -15,6 +15,13 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+### Added
+
+- **CORE check `python_dependency_surface`** — configurable roots, exemptions,
+  and shrink-only count/content ratchets for raw Python `pip`/venv bootstrap,
+  private interpreters, and nested alternative dependency manifests. This is
+  the shared migration surface for consumers retiring repository-local checks.
+
 ## [0.17.1] — 2026-09-21
 
 ### Fixed

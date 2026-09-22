@@ -1,0 +1,21 @@
+schema: tc.fitness/check-contract/v1
+check: core:python_dependency_surface
+config:
+  roots: [tools]
+cases:
+  - id: compliant
+    fixture: compliant
+    expected:
+      status: pass
+      exit: zero
+      findings: []
+  - id: violation
+    fixture: violation
+    expected:
+      status: fail
+      exit: nonzero
+      findings:
+        - rule: raw-pip-install
+          path: tools/bootstrap.py
+          message_contains: "uv run"
+dependencies: []

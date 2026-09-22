@@ -59,7 +59,7 @@ def _valid_contract(check: str = "core:example_check") -> dict[str, object]:
 def test_shipped_core_registry_has_exact_behavioural_contract_coverage() -> None:
     contracts = validate_contract_registry(CORE_CHECKS, SHIPPED_CONTRACTS)
 
-    assert len(contracts) == len(CORE_CHECKS) == 54
+    assert len(contracts) == len(CORE_CHECKS) == 55
     assert {contract.check for contract in contracts} == set(CORE_CHECKS)
 
 
