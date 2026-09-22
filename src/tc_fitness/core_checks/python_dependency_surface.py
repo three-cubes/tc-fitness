@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import re
+import shlex
 import subprocess
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -47,6 +48,19 @@ _PRIVATE_INTERPRETER_RE = re.compile(
 _SHELL_VENV_RE = re.compile(r"\bpython(?:3(?:\.\d+)?)?\s+-m\s+venv\b")
 _SHELL_PIP_RE = re.compile(
     r"(?<![\w-])(?:(?:python(?:3(?:\.\d+)?)?|/[^ \t]+/python(?:3(?:\.\d+)?))\s+-m\s+pip|(?:/[^ \t]+/)?pip3?)\s+install\b"
+)
+_PIP_OPTIONS_WITH_VALUES = frozenset(
+    {
+        "--cert",
+        "--client-cert",
+        "--exists-action",
+        "--log",
+        "--log-file",
+        "--proxy",
+        "--retries",
+        "--timeout",
+        "--trusted-host",
+    }
 )
 
 REMEDIATION = _remediation(
@@ -117,12 +131,17 @@ def _launch_call(node: ast.Call) -> bool:
 def _pip_install_index(sequence: tuple[str | None, ...]) -> int | None:
     for start, argument in enumerate(sequence):
         if argument == "pip" and (start == 0 or sequence[0] != "uv"):
-            for index in range(start + 1, len(sequence)):
+            index = start + 1
+            while index < len(sequence):
                 if sequence[index] == "install":
                     return index
                 argument = sequence[index]
+                if argument is not None and argument in _PIP_OPTIONS_WITH_VALUES:
+                    index += 2
+                    continue
                 if argument is not None and not argument.startswith("-"):
                     break
+                index += 1
     return None
 
 
@@ -137,11 +156,9 @@ def _argv_findings(text: str, relative: str) -> list[Finding]:
             continue
         if not _launch_call(node):
             continue
-        sequences = (
-            _string_sequence(candidate)
-            for candidate in ast.walk(node)
-            if isinstance(candidate, (ast.List, ast.Tuple))
-        )
+        argv_nodes = list(node.args[:1])
+        argv_nodes.extend(keyword.value for keyword in node.keywords if keyword.arg == "args")
+        sequences = (_string_sequence(candidate) for candidate in argv_nodes)
         for sequence in sequences:
             if sequence is None:
                 continue
@@ -175,8 +192,14 @@ def _text_findings(path: Path, relative: str) -> list[Finding]:
         if _SHELL_VENV_RE.search(line):
             findings.append(Finding(relative, RULE_VENV_BOOTSTRAP, line, number))
         for command in re.split(r"\s*(?:&&|\|\||;)\s*", line):
-            if _SHELL_PIP_RE.search(command) and not re.search(
-                r"\buv\s+(?:run\s+\S+\s+)?pip\s+install\b", command
+            try:
+                tokens = tuple(shlex.split(command))
+            except ValueError:
+                tokens = ()
+            if (
+                tokens
+                and _pip_install_index(tokens) is not None
+                and not (tokens[0] == "uv" and "pip" in tokens[:3])
             ):
                 findings.append(Finding(relative, RULE_RAW_PIP_INSTALL, command, number))
         if _PRIVATE_INTERPRETER_RE.search(line):
@@ -204,6 +227,7 @@ def _iter_files(
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         pass
     for configured in roots:
+        configured = configured.removeprefix("./").rstrip("/") or "."
         base = (root / configured).resolve()
         if not base.is_dir():
             continue
@@ -211,7 +235,7 @@ def _iter_files(
             (
                 (root / relative)
                 for relative in sorted(tracked)
-                if relative == configured or relative.startswith(configured.rstrip("/") + "/")
+                if configured == "." or relative == configured or relative.startswith(configured + "/")
             )
             if tracked is not None
             else sorted(base.rglob("*"))
@@ -338,7 +362,12 @@ class PythonDependencySurface(FitnessRule):
     def collect_violations(self) -> set[Path]:
         findings = self._raw_findings()
         counts: Counter[tuple[str, str]] = Counter((item.path, item.rule) for item in findings)
-        return {Path(item.path) for item in findings if not self._allowed(item, counts)}
+        violations = {Path(item.path) for item in findings if not self._allowed(item, counts)}
+        observed = {(item.path, item.rule) for item in findings}
+        for ratchet in self.ratchets:
+            if ratchet.max_count > 0 and (ratchet.path, ratchet.rule) not in observed:
+                violations.add(Path(ratchet.path))
+        return violations
 
     def file_has_violation(self, path: Path) -> bool:
         relative = _relative(path, self._repo_root)
