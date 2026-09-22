@@ -162,6 +162,23 @@ def _split_shell_commands(line: str) -> tuple[str, ...]:
     return tuple(command for command in commands if command)
 
 
+def _is_python_shebang(line: str) -> bool:
+    if not line.startswith("#!"):
+        return False
+    try:
+        tokens = shlex.split(line[2:])
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    if Path(tokens[0]).name == "env":
+        candidates = tokens[1:]
+        if candidates and candidates[0] == "-S":
+            candidates = candidates[1:]
+        return bool(candidates) and bool(_PYTHON_INTERPRETER_RE.fullmatch(Path(candidates[0]).name))
+    return bool(_PYTHON_INTERPRETER_RE.fullmatch(Path(tokens[0]).name))
+
+
 def _launch_call(node: ast.Call, module_aliases: dict[str, str], function_aliases: set[str]) -> bool:
     function = node.func
     if isinstance(function, ast.Attribute):
@@ -171,27 +188,86 @@ def _launch_call(node: ast.Call, module_aliases: dict[str, str], function_aliase
     return isinstance(function, ast.Name) and function.id in function_aliases
 
 
-def _process_aliases(tree: ast.Module) -> tuple[dict[str, str], set[str]]:
-    module_aliases: dict[str, str] = {}
-    function_aliases: set[str] = set()
-    rebound: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name in _PROCESS_MODULE_APIS:
-                    module_aliases[alias.asname or alias.name] = alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module in _PROCESS_MODULE_APIS:
+class _ScopeAliasCollector(ast.NodeVisitor):
+    def __init__(self, cutoff: ast.Call) -> None:
+        self.modules: dict[str, str] = {}
+        self.functions: set[str] = set()
+        self.rebound: set[str] = set()
+        self.cutoff = cutoff
+
+    def _before_call(self, node: ast.AST) -> bool:
+        return (getattr(node, "lineno", 0), getattr(node, "col_offset", 0)) <= (
+            self.cutoff.lineno,
+            self.cutoff.col_offset,
+        )
+
+    def visit_Import(self, node: ast.Import) -> None:
+        if not self._before_call(node):
+            return
+        for alias in node.names:
+            if alias.name in _PROCESS_MODULE_APIS:
+                self.modules[alias.asname or alias.name] = alias.name
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if not self._before_call(node):
+            return
+        if node.module in _PROCESS_MODULE_APIS:
             for alias in node.names:
                 if alias.name in _PROCESS_MODULE_APIS[node.module]:
-                    function_aliases.add(alias.asname or alias.name)
-    for descendant in ast.walk(tree):
-        if isinstance(descendant, ast.Name) and isinstance(descendant.ctx, ast.Store):
-            rebound.add(descendant.id)
-        if isinstance(descendant, ast.arg):
-            rebound.add(descendant.arg)
-    return {name: module for name, module in module_aliases.items() if name not in rebound}, {
-        name for name in function_aliases if name not in rebound
-    }
+                    self.functions.add(alias.asname or alias.name)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if self._before_call(node) and isinstance(node.ctx, ast.Store):
+            self.rebound.add(node.id)
+
+    def visit_arg(self, node: ast.arg) -> None:
+        self.rebound.add(node.arg)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+
+def _process_aliases(
+    tree: ast.Module, call: ast.Call, parents: dict[ast.AST, ast.AST]
+) -> tuple[dict[str, str], set[str]]:
+    scopes: list[ast.AST] = [tree]
+    nested_scopes: list[ast.AST] = []
+    current = parents.get(call)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            nested_scopes.append(current)
+        current = parents.get(current)
+    scopes.extend(reversed(nested_scopes))
+    modules: dict[str, str] = {}
+    functions: set[str] = set()
+    for scope in scopes:
+        collector = _ScopeAliasCollector(call)
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for statement in scope.body:
+                collector.visit(statement)
+            if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for argument in (*scope.args.posonlyargs, *scope.args.args, *scope.args.kwonlyargs):
+                    collector.visit(argument)
+                if scope.args.vararg:
+                    collector.visit(scope.args.vararg)
+                if scope.args.kwarg:
+                    collector.visit(scope.args.kwarg)
+        else:
+            collector.visit(scope)
+        for name in collector.rebound:
+            modules.pop(name, None)
+            functions.discard(name)
+        modules.update(
+            {name: module for name, module in collector.modules.items() if name not in collector.rebound}
+        )
+        functions.update(name for name in collector.functions if name not in collector.rebound)
+    return modules, functions
 
 
 def _pip_install_index(sequence: tuple[str | None, ...]) -> int | None:
@@ -234,10 +310,11 @@ def _argv_findings(text: str, relative: str) -> list[Finding]:
     except (SyntaxError, UnicodeDecodeError):
         return []
     findings: list[Finding] = []
-    module_aliases, function_aliases = _process_aliases(tree)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        module_aliases, function_aliases = _process_aliases(tree, node, parents)
         if not _launch_call(node, module_aliases, function_aliases):
             continue
         argv_nodes = list(node.args[:1])
@@ -267,9 +344,7 @@ def _text_findings(path: Path, relative: str) -> list[Finding]:
     except (OSError, UnicodeDecodeError):
         return []
     first_line = text.splitlines()[:1]
-    python_source = path.suffix in {".py", ".pyi"} or (
-        first_line and first_line[0].startswith("#!") and "python" in first_line[0]
-    )
+    python_source = path.suffix in {".py", ".pyi"} or (first_line and _is_python_shebang(first_line[0]))
     findings = _argv_findings(text, relative) if python_source else []
     # Python source is analysed structurally above.  Applying shell text rules
     # to the same lines would duplicate one semantic argv finding and make

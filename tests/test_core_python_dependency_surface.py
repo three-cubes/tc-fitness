@@ -386,6 +386,54 @@ def test_ast_process_detection_requires_import_and_rejects_rebound_aliases() -> 
     assert findings == []
 
 
+def test_ast_process_detection_accepts_imports_inside_function_scope() -> None:
+    findings = _argv_findings(
+        'def main():\n    from subprocess import run as execute\n    execute(["pip", "install", "local"] )\n',
+        "tools/run.py",
+    )
+
+    assert [finding.content for finding in findings] == ["pip install local"]
+
+
+def test_ast_process_bindings_follow_statement_order_and_scope() -> None:
+    findings = _argv_findings(
+        "import subprocess as sp\n"
+        'sp.run(["pip", "install", "before"] )\n'
+        "sp = object()\n"
+        'sp.run(["pip", "install", "after"] )\n'
+        "def wrapped(sp):\n"
+        '    sp.run(["pip", "install", "shadowed"] )\n',
+        "tools/run.py",
+    )
+
+    assert [finding.content for finding in findings] == [
+        "pip install before",
+    ]
+    assert [
+        finding.content
+        for finding in _argv_findings(
+            "import subprocess as sp\n"
+            "def wrapped(sp):\n"
+            '    sp.run(["pip", "install", "shadowed"] )\n'
+            'sp.run(["pip", "install", "module"] )\n',
+            "tools/run.py",
+        )
+    ] == ["pip install module"]
+
+
+def test_ast_process_nested_parameter_shadow_is_nearest_scope() -> None:
+    findings = _argv_findings(
+        "import subprocess as sp\n"
+        "def outer():\n"
+        "    def inner(sp):\n"
+        '        sp.run(["pip", "install", "shadowed"] )\n'
+        '    sp.run(["pip", "install", "outer"] )\n',
+        "tools/run.py",
+    )
+
+    assert [finding.content for finding in findings] == ["pip install outer"]
+
+
 def test_ast_process_detection_rejects_unsupported_os_apis() -> None:
     assert _argv_findings('import os\nos.run(["pip", "install", "fake"])\n', "tools/run.py") == []
 
@@ -549,6 +597,24 @@ def test_python_shebang_extensionless_file_uses_ast_scanner(tmp_path: Path) -> N
     assert [(finding.rule, finding.content) for finding in findings] == [
         (RULE_RAW_PIP_INSTALL, "pip install demo")
     ]
+
+
+def test_shebang_parser_rejects_shell_comment_and_malformed_lines(tmp_path: Path) -> None:
+    for name, shebang in (
+        ("comment", "#!/bin/sh # python3\n"),
+        ("malformed", '#!/usr/bin/env "python3\n'),
+        ("env-command", "#!/usr/bin/env bash python3\n"),
+    ):
+        path = tmp_path / "tools" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(shebang + "pip install demo\n", encoding="utf-8")
+        path.chmod(0o755)
+
+        findings = scan_findings(tmp_path, roots=("tools",))
+        assert (RULE_RAW_PIP_INSTALL, f"tools/{name}") in {
+            (finding.rule, finding.path) for finding in findings
+        }
+        assert not any(finding.rule == RULE_VENV_BOOTSTRAP for finding in findings)
 
 
 def test_shell_shebang_extensionless_file_keeps_shell_scanning(tmp_path: Path) -> None:
