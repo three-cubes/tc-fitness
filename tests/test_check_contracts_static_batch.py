@@ -43,6 +43,7 @@ OWNED = (
     "path_naming",
     "pattern_chokepoint",
     "posix_path_serialisation",
+    "python_dependency_surface",
     "shellcheck_disable_with_reason",
     "suppressions_have_rationale",
     "test_skip_rationale",

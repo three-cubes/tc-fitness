@@ -595,6 +595,7 @@ def test_scope_skips_non_test_files_and_excluded_parts(tmp_path: Path) -> None:
     _seed(tmp_path, "tests/fixtures/test_x.py", _UNTAGGED)  # excluded part
     _seed(tmp_path, "tests/test_real.py", _UNTAGGED)
     rule = EveryTestHasTierMarker.from_config({"roots": ["tests"]}, repo_root=tmp_path)
+    assert rule.is_in_scope("outside/test_x.py") is False
     assert {str(p) for p in rule.collect_violations()} == {"tests/test_real.py"}
 
 

@@ -176,6 +176,7 @@ CORE_CHECKS: tuple[str, ...] = (
     "core:path_naming",
     "core:pattern_chokepoint",
     "core:posix_path_serialisation",
+    "core:python_dependency_surface",
     "core:readme_resolver_coverage",
     "core:runtime_evidence_contract",
     "core:runtime_filesystem_contract",

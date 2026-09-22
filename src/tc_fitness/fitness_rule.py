@@ -55,6 +55,66 @@ from tc_fitness.lib import REPO_ROOT, gate
 #: against a wedged git process, after which enumeration falls back to a walk.
 _GIT_LS_FILES_TIMEOUT_S = 30
 
+
+def _normalise_scan_root(root: str) -> str:
+    """Canonicalise a configured repo-relative scan root."""
+    if root == "":
+        return ""
+    cleaned = root.replace("\\", "/").removeprefix("./").rstrip("/")
+    return cleaned or "."
+
+
+def _git_tracked_files(repo_root: Path) -> list[str] | None:
+    """Repo-relative paths of every git-tracked file, or ``None`` off-git."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "-z"],
+            check=True,
+            capture_output=True,
+            timeout=_GIT_LS_FILES_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    return [rel.decode("utf-8", "surrogateescape") for rel in result.stdout.split(b"\x00") if rel]
+
+
+def enumerate_repo_files(repo_root: Path, roots: tuple[str, ...]) -> list[Path]:
+    """Enumerate unique files under configured roots, preferring ``git ls-files``.
+
+    Roots are normalised before matching, so ``.``, ``./`` and overlapping
+    prefixes have identical semantics. The fallback is only used outside a Git
+    worktree and excludes the same cache/vendor directories as the base rule.
+    """
+    root = repo_root.resolve()
+    configured_roots = tuple(dict.fromkeys(_normalise_scan_root(item) or "." for item in roots))
+    if not configured_roots:
+        return []
+    tracked = _git_tracked_files(root)
+    candidates: list[Path] = []
+    if tracked is not None:
+        for relative in tracked:
+            if any(
+                configured == "." or relative == configured or relative.startswith(configured + "/")
+                for configured in configured_roots
+            ):
+                candidates.append(root / relative)
+    else:
+        for configured in configured_roots:
+            base = root / configured
+            if base.is_dir():
+                candidates.extend(base.rglob("*"))
+    unique: dict[Path, None] = {}
+    for path in candidates:
+        resolved = path.resolve()
+        if not path.is_file() or path.is_symlink() or not resolved.is_relative_to(root):
+            continue
+        relative_parts = resolved.relative_to(root).parts
+        if any(part in {".git", ".venv", "venv", "__pycache__", "node_modules"} for part in relative_parts):
+            continue
+        unique[resolved] = None
+    return sorted(unique)
+
+
 _REMOVED_SUPPRESSION_OPTIONS = frozenset(
     {
         "allowed_names",
@@ -130,7 +190,8 @@ class FitnessRule(ABC):
         # absolute path, which then fails every is_in_scope() prefix test.
         raw_root = repo_root if repo_root is not None else REPO_ROOT
         self._repo_root: Path = raw_root.resolve()
-        self._roots: tuple[str, ...] = roots if roots is not None else self.roots
+        raw_roots = roots if roots is not None else self.roots
+        self._roots: tuple[str, ...] = tuple(_normalise_scan_root(root) for root in raw_roots)
         self._extensions: tuple[str, ...] = extensions if extensions is not None else self.extensions
         self._name: str = name if name is not None else self.name
 
@@ -180,7 +241,9 @@ class FitnessRule(ABC):
         ext_ok = rel.endswith(self._extensions)
         if not self._roots:
             return ext_ok
-        return ext_ok and any(rel.startswith(prefix) for prefix in self._roots)
+        return ext_ok and any(
+            root in {"", "."} or rel == root or rel.startswith(root + "/") for root in self._roots
+        )
 
     def enumerate_files(self) -> list[Path]:
         """Default enumeration: the git-tracked, in-scope files under the repo root.
@@ -209,54 +272,11 @@ class FitnessRule(ABC):
 
         Override for custom enumeration (Gherkin parsing, single-file scans).
         """
-        if not self._roots:
-            return []
-        tracked = self._git_tracked_files()
-        if tracked is not None:
-            return [self._repo_root / rel for rel in tracked if self.is_in_scope(rel)]
-        return self._walk_working_tree()
-
-    def _git_tracked_files(self) -> list[str] | None:
-        """Repo-relative paths of every git-tracked file, or ``None`` off-git.
-
-        Runs ``git -C <repo_root> ls-files -z`` and returns the NUL-split,
-        repo-relative tracked paths. Returns ``None`` — the signal to fall back
-        to a working-tree walk — when the repo root is not a git working tree
-        (``git`` exits non-zero) or ``git`` is unavailable / wedged. argv0 is the
-        fixed literal ``git`` and ``shell`` is never used; the only variable is
-        the repo-root path.
-        """
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(self._repo_root), "ls-files", "-z"],
-                check=True,
-                capture_output=True,
-                timeout=_GIT_LS_FILES_TIMEOUT_S,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-            return None
-        return [rel.decode("utf-8", "surrogateescape") for rel in result.stdout.split(b"\x00") if rel]
-
-    def _walk_working_tree(self) -> list[Path]:
-        """Off-git fallback: rglob each configured root, skipping vendor residue.
-
-        Skips ``__pycache__`` and any ``node_modules`` segment so untracked
-        vendor residue cannot trip a scan that has no git tree to filter by.
-        Returns absolute paths.
-        """
-        out: list[Path] = []
-        for root in self._roots:
-            root_path = self._repo_root / root
-            if not root_path.exists():
-                continue
-            for path in root_path.rglob("*"):
-                if not path.is_file():
-                    continue
-                if "__pycache__" in path.parts or "node_modules" in path.parts:
-                    continue
-                if path.name.endswith(self._extensions):
-                    out.append(path)
-        return out
+        return [
+            path
+            for path in enumerate_repo_files(self._repo_root, self._roots)
+            if path.name.endswith(self._extensions) and self.is_in_scope(self._repo_relative(path).as_posix())
+        ]
 
     def _repo_relative(self, path: Path) -> Path:
         """Repo-relative path; tolerates absolute or already-relative inputs."""
