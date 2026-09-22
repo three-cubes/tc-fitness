@@ -43,7 +43,7 @@ dependencies = ["coverage>=7.10", "packaging>=23.2", "PyYAML>=6.0"]
 tc-fitness = "tc_fitness.gate:main"
 tc-fitness-runtime-contract = "tc_fitness.runtime_contract:main"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",

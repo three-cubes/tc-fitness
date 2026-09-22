@@ -50,7 +50,7 @@ tc-fitness is the one check every repo uses instead of its own copy:
    same way CI does:
 
    ```bash
-   uv sync --all-extras --all-groups
+   uv sync --locked --group dev
    uv run tc-fitness run
    ```
 
@@ -70,7 +70,7 @@ tc-fitness is the one check every repo uses instead of its own copy:
    engine's own `branch_naming` gate enforces (this repo dogfoods
    `tc_fitness.checks.branch_naming`).
 2. **Run the gate before every push:** sync with
-   `uv sync --locked --all-extras --all-groups`, run
+   `uv sync --locked --group dev`, run
    `uv run tc-fitness run`, and get it green.
    Local matches CI by construction — both run this same catalogue. Run your
    repo's own pytest separately where the gate does not.
@@ -414,7 +414,7 @@ candidate-configured roots, tests, floors or base selectors are inputs. The
 optional JSON is output-only and cannot be imported for admission.
 
 Each detached checkout gets its own external environment provisioned with
-`uv sync --locked --all-extras`. Coverage and pytest run through that
+`uv sync --locked --group dev`. Coverage and pytest run through that
 environment's Python; provisioning or test failure is a terminal error, never
 a fallback to the controller environment. Measurements retain the lock digest
 and actual Python, Coverage.py, pytest and uv identities. The current trusted
@@ -806,7 +806,7 @@ looser parse) won.**
 This repo IS the gate engine. Set up and run its own tests:
 
 ```bash
-uv sync --all-extras --all-groups
+uv sync --locked --group dev
 uv run pytest tests/ -q
 ```
 
