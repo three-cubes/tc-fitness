@@ -192,6 +192,21 @@ def test_argv_parser_requires_pip_executable_or_python_module(tmp_path: Path) ->
     ]
 
 
+def test_argv_parser_detects_private_interpreter(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.py"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        'subprocess.run([".venv/bin/python", "-m", "tool"])\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_findings(tmp_path, roots=("tools",))
+
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_PRIVATE_INTERPRETER, ".venv/bin/python -m tool")
+    ]
+
+
 def test_shell_parser_skips_valued_options(tmp_path: Path) -> None:
     path = tmp_path / "tools" / "run.sh"
     path.parent.mkdir()

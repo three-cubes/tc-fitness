@@ -196,6 +196,10 @@ def _argv_findings(text: str, relative: str) -> list[Finding]:
         for sequence in sequences:
             if sequence is None:
                 continue
+            if any(item is not None and _PRIVATE_INTERPRETER_RE.search(item) for item in sequence):
+                findings.append(
+                    Finding(relative, RULE_PRIVATE_INTERPRETER, _argv_content(sequence), node.lineno)
+                )
             for index in range(len(sequence) - 1):
                 pair = sequence[index : index + 2]
                 if pair == ("-m", "venv"):
