@@ -87,14 +87,10 @@ def test_nested_project_manifests_are_findings(tmp_path: Path) -> None:
     }
 
 
-def test_canonical_root_manifests_and_configured_exemptions_are_clean(tmp_path: Path) -> None:
+def test_canonical_root_manifests_are_clean(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
-    exempt = tmp_path / "vendor" / "requirements.txt"
-    exempt.parent.mkdir()
-    exempt.write_text("demo==1\n", encoding="utf-8")
-
-    rule = build({"roots": ["."], "exempt_paths": ["vendor/"]}, repo_root=tmp_path)
+    rule = build({"roots": ["."]}, repo_root=tmp_path)
 
     assert rule.collect_violations() == set()
 
@@ -109,7 +105,7 @@ def test_ratchet_allows_only_shrink_and_known_content(tmp_path: Path) -> None:
             {
                 "path": "tools/run.sh",
                 "rule": RULE_RAW_PIP_INSTALL,
-                "max_count": 2,
+                "max_count": 1,
                 "contents": ["pip install demo"],
             }
         ],
@@ -118,6 +114,57 @@ def test_ratchet_allows_only_shrink_and_known_content(tmp_path: Path) -> None:
     assert build(config, repo_root=tmp_path).collect_violations() == set()
     path.write_text("pip install replacement\n", encoding="utf-8")
     assert {str(item) for item in build(config, repo_root=tmp_path).collect_violations()} == {"tools/run.sh"}
+
+
+def test_ratchet_must_track_current_count_and_exemptions_are_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.sh"
+    path.parent.mkdir()
+    path.write_text("pip install one\npip install two\n", encoding="utf-8")
+    config = {
+        "roots": ["tools"],
+        "ratchets": [{"path": "tools/run.sh", "rule": RULE_RAW_PIP_INSTALL, "max_count": 1}],
+    }
+    assert build(config, repo_root=tmp_path).collect_violations() == {Path("tools/run.sh")}
+    with pytest.raises(ValueError, match="exempt_paths"):
+        build({"roots": ["tools"], "exempt_paths": ["tools/"]}, repo_root=tmp_path)
+
+
+def test_full_argv_global_options_launch_calls_and_nested_manifests(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.py"
+    path.parent.mkdir()
+    path.write_text(
+        'notify(["pip", "install", "not-a-process"])\n'
+        'subprocess.run([sys.executable, "-m", "pip", "--isolated", "install", "demo"])\n',
+        encoding="utf-8",
+    )
+    req = tmp_path / "tools" / "requirements" / "prod.txt"
+    req.parent.mkdir()
+    req.write_text("demo==1\n", encoding="utf-8")
+    findings = scan_findings(tmp_path, roots=("tools",))
+    assert {(finding.rule, finding.content) for finding in findings} == {
+        (RULE_RAW_PIP_INSTALL, "<dynamic> -m pip --isolated install demo"),
+        (RULE_ALTERNATIVE_MANIFEST, "prod.txt"),
+    }
+
+
+def test_python_source_has_one_structural_finding_per_argv(tmp_path: Path) -> None:
+    path = tmp_path / "tools" / "run.py"
+    path.parent.mkdir()
+    path.write_text('subprocess.run(["pip", "install", "demo"])\n', encoding="utf-8")
+    findings = scan_findings(tmp_path, roots=("tools",))
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "pip install demo")
+    ]
+
+
+def test_chained_uv_command_does_not_hide_second_install(tmp_path: Path) -> None:
+    script = tmp_path / "tools" / "run.sh"
+    script.parent.mkdir()
+    script.write_text("uv pip install approved && pip install untracked\n", encoding="utf-8")
+    findings = scan_findings(tmp_path, roots=("tools",))
+    assert [(finding.rule, finding.content) for finding in findings] == [
+        (RULE_RAW_PIP_INSTALL, "pip install untracked")
+    ]
 
 
 def test_rule_emits_actionable_output_for_unratcheted_finding(
@@ -180,9 +227,9 @@ def test_argv_parser_handles_dynamic_and_invalid_python(tmp_path: Path) -> None:
         "tools/run.py",
     )
     assert [finding.content for finding in findings] == [
-        "pip install",
-        "-m pip install",
-        "-m venv",
+        "pip install demo",
+        "-m pip install demo",
+        "<dynamic> -m venv",
     ]
     unreadable = tmp_path / "tools" / "broken.py"
     unreadable.parent.mkdir()

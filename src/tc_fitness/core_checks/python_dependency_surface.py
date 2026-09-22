@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
 from tc_fitness.lib import remediation as _remediation
@@ -30,6 +32,8 @@ DEFAULT_MANIFEST_PATTERNS = (
     "pyproject.toml",
     "uv.lock",
     "requirements*.txt",
+    "requirements/*.txt",
+    "*/requirements/*.txt",
     "Pipfile",
     "Pipfile.lock",
     "poetry.lock",
@@ -84,12 +88,6 @@ def _relative(path: Path, root: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
 
-def _is_exempt(relative: str, exemptions: tuple[str, ...]) -> bool:
-    return any(
-        relative == item.rstrip("/") or relative.startswith(item.rstrip("/") + "/") for item in exemptions
-    )
-
-
 def _string_sequence(node: ast.AST) -> tuple[str | None, ...] | None:
     if not isinstance(node, (ast.List, ast.Tuple)):
         return None
@@ -97,6 +95,35 @@ def _string_sequence(node: ast.AST) -> tuple[str | None, ...] | None:
     for item in node.elts:
         values.append(item.value if isinstance(item, ast.Constant) and isinstance(item.value, str) else None)
     return tuple(values)
+
+
+def _argv_content(sequence: tuple[str | None, ...]) -> str:
+    return " ".join(item if item is not None else "<dynamic>" for item in sequence)
+
+
+def _launch_call(node: ast.Call) -> bool:
+    function = node.func
+    if isinstance(function, ast.Attribute):
+        return function.attr in {"call", "check_call", "check_output", "Popen", "run", "system"}
+    return isinstance(function, ast.Name) and function.id in {
+        "call",
+        "check_call",
+        "check_output",
+        "popen",
+        "run",
+    }
+
+
+def _pip_install_index(sequence: tuple[str | None, ...]) -> int | None:
+    for start, argument in enumerate(sequence):
+        if argument == "pip" and (start == 0 or sequence[0] != "uv"):
+            for index in range(start + 1, len(sequence)):
+                if sequence[index] == "install":
+                    return index
+                argument = sequence[index]
+                if argument is not None and not argument.startswith("-"):
+                    break
+    return None
 
 
 def _argv_findings(text: str, relative: str) -> list[Finding]:
@@ -107,6 +134,8 @@ def _argv_findings(text: str, relative: str) -> list[Finding]:
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
+            continue
+        if not _launch_call(node):
             continue
         sequences = (
             _string_sequence(candidate)
@@ -119,11 +148,11 @@ def _argv_findings(text: str, relative: str) -> list[Finding]:
             for index in range(len(sequence) - 1):
                 pair = sequence[index : index + 2]
                 if pair == ("-m", "venv"):
-                    findings.append(Finding(relative, RULE_VENV_BOOTSTRAP, "-m venv", node.lineno))
-                if pair == ("-m", "pip") and index + 2 < len(sequence) and sequence[index + 2] == "install":
-                    findings.append(Finding(relative, RULE_RAW_PIP_INSTALL, "-m pip install", node.lineno))
-            if len(sequence) >= 2 and sequence[:2] == ("pip", "install"):
-                findings.append(Finding(relative, RULE_RAW_PIP_INSTALL, "pip install", node.lineno))
+                    findings.append(
+                        Finding(relative, RULE_VENV_BOOTSTRAP, _argv_content(sequence), node.lineno)
+                    )
+            if _pip_install_index(sequence) is not None:
+                findings.append(Finding(relative, RULE_RAW_PIP_INSTALL, _argv_content(sequence), node.lineno))
     return findings
 
 
@@ -133,14 +162,23 @@ def _text_findings(path: Path, relative: str) -> list[Finding]:
     except (OSError, UnicodeDecodeError):
         return []
     findings = _argv_findings(text, relative) if path.suffix in {".py", ".pyi"} else []
+    # Python source is analysed structurally above.  Applying shell text rules
+    # to the same lines would duplicate one semantic argv finding and make
+    # ratchet counts unstable; dynamic string construction remains outside the
+    # detector's static guarantee.
+    if path.suffix in {".py", ".pyi"}:
+        return findings
     for number, raw_line in enumerate(text.splitlines(), 1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         if _SHELL_VENV_RE.search(line):
             findings.append(Finding(relative, RULE_VENV_BOOTSTRAP, line, number))
-        if _SHELL_PIP_RE.search(line) and not re.search(r"\buv\s+pip\s+install\b", line):
-            findings.append(Finding(relative, RULE_RAW_PIP_INSTALL, line, number))
+        for command in re.split(r"\s*(?:&&|\|\||;)\s*", line):
+            if _SHELL_PIP_RE.search(command) and not re.search(
+                r"\buv\s+(?:run\s+\S+\s+)?pip\s+install\b", command
+            ):
+                findings.append(Finding(relative, RULE_RAW_PIP_INSTALL, command, number))
         if _PRIVATE_INTERPRETER_RE.search(line):
             findings.append(Finding(relative, RULE_PRIVATE_INTERPRETER, line, number))
     return findings
@@ -154,11 +192,31 @@ def _iter_files(
 ) -> Iterable[Path]:
     import fnmatch
 
+    tracked: set[str] | None = None
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "-C", str(root), "ls-files", "-z"],  # noqa: S607
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        tracked = {item.decode("utf-8", "surrogateescape") for item in result.stdout.split(b"\0") if item}
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        pass
     for configured in roots:
         base = (root / configured).resolve()
         if not base.is_dir():
             continue
-        for path in sorted(base.rglob("*")):
+        candidates: Iterable[Path] = (
+            (
+                (root / relative)
+                for relative in sorted(tracked)
+                if relative == configured or relative.startswith(configured.rstrip("/") + "/")
+            )
+            if tracked is not None
+            else sorted(base.rglob("*"))
+        )
+        for path in candidates:
             if not path.is_file() or path.is_symlink():
                 continue
             relative_parts = path.relative_to(root).parts
@@ -169,7 +227,11 @@ def _iter_files(
             if (
                 path.suffix in extensions
                 or bool(path.stat().st_mode & 0o111)
-                or any(fnmatch.fnmatch(path.name, pattern) for pattern in manifest_patterns)
+                or any(
+                    fnmatch.fnmatch(path.relative_to(root).as_posix(), pattern)
+                    or fnmatch.fnmatch(path.name, pattern)
+                    for pattern in manifest_patterns
+                )
             ):
                 yield path
 
@@ -179,7 +241,6 @@ def scan_findings(
     *,
     roots: tuple[str, ...],
     extensions: tuple[str, ...] = DEFAULT_EXTENSIONS,
-    exempt_paths: tuple[str, ...] = (),
     manifest_patterns: tuple[str, ...] = DEFAULT_MANIFEST_PATTERNS,
     canonical_manifests: tuple[str, ...] = DEFAULT_CANONICAL_MANIFESTS,
 ) -> tuple[Finding, ...]:
@@ -190,14 +251,15 @@ def scan_findings(
     seen: set[tuple[str, str, str, int]] = set()
     for path in _iter_files(root, roots, extensions, manifest_patterns):
         relative = _relative(path, root)
-        if _is_exempt(relative, exempt_paths):
-            continue
         for finding in _text_findings(path, relative):
             key = (finding.path, finding.rule, finding.content, finding.line)
             if key not in seen:
                 findings.append(finding)
                 seen.add(key)
-        if any(fnmatch.fnmatch(path.name, pattern) for pattern in manifest_patterns):
+        if any(
+            fnmatch.fnmatch(relative, pattern) or fnmatch.fnmatch(path.name, pattern)
+            for pattern in manifest_patterns
+        ):
             if relative not in canonical_manifests:
                 finding = Finding(relative, RULE_ALTERNATIVE_MANIFEST, path.name)
                 key = (finding.path, finding.rule, finding.content, finding.line)
@@ -213,7 +275,6 @@ class PythonDependencySurface(FitnessRule):
     name = "python-dependency-surface"
     remediation = REMEDIATION
     extensions = DEFAULT_EXTENSIONS
-    exempt_paths: tuple[str, ...] = ()
     manifest_patterns: tuple[str, ...] = DEFAULT_MANIFEST_PATTERNS
     canonical_manifests: tuple[str, ...] = DEFAULT_CANONICAL_MANIFESTS
     ratchets: tuple[Ratchet, ...] = ()
@@ -227,7 +288,8 @@ class PythonDependencySurface(FitnessRule):
     ) -> PythonDependencySurface:
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, PythonDependencySurface)  # noqa: S101
-        rule.exempt_paths = tuple(str(item) for item in config.get("exempt_paths", ()))
+        if "exempt_paths" in config:
+            raise ValueError("exempt_paths is not supported: findings cannot be suppressed")
         rule.manifest_patterns = tuple(
             str(item) for item in config.get("manifest_patterns", DEFAULT_MANIFEST_PATTERNS)
         )
@@ -260,7 +322,6 @@ class PythonDependencySurface(FitnessRule):
             self._repo_root,
             roots=self._roots,
             extensions=self._extensions,
-            exempt_paths=self.exempt_paths,
             manifest_patterns=self.manifest_patterns,
             canonical_manifests=self.canonical_manifests,
         )
@@ -270,7 +331,7 @@ class PythonDependencySurface(FitnessRule):
             (item for item in self.ratchets if item.path == finding.path and item.rule == finding.rule),
             None,
         )
-        if ratchet is None or counts[(finding.path, finding.rule)] > ratchet.max_count:
+        if ratchet is None or counts[(finding.path, finding.rule)] != ratchet.max_count:
             return False
         return not ratchet.contents or finding.content in ratchet.contents
 
@@ -284,6 +345,18 @@ class PythonDependencySurface(FitnessRule):
         findings = [item for item in self._raw_findings() if item.path == relative]
         counts: Counter[tuple[str, str]] = Counter((item.path, item.rule) for item in findings)
         return any(not self._allowed(item, counts) for item in findings)
+
+    def run(self) -> int:
+        """Emit each raw policy rule as a contract-visible structured finding."""
+        findings = self._raw_findings()
+        counts: Counter[tuple[str, str]] = Counter((item.path, item.rule) for item in findings)
+        violations = [item for item in findings if not self._allowed(item, counts)]
+        for finding in violations:
+            report_finding(finding.rule, finding.path, finding.content)
+            print(f"FAIL [{self.name}] {finding.path}: {finding.content}")
+        if violations:
+            print(self.remediation)
+        return int(bool(violations))
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> PythonDependencySurface:

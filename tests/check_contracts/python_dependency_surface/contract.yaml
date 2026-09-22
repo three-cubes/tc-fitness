@@ -17,5 +17,5 @@ cases:
       findings:
         - rule: raw-pip-install
           path: tools/bootstrap.py
-          message_contains: "uv run"
+          message_contains: "pip install"
 dependencies: []

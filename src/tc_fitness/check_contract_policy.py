@@ -107,9 +107,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "path_naming": frozenset({"kebab_roots", "snake_roots"}),
     "pattern_chokepoint": frozenset({"patterns", "chokepoint_files"}),
     "posix_path_serialisation": frozenset(),
-    "python_dependency_surface": frozenset(
-        {"exempt_paths", "manifest_patterns", "canonical_manifests", "ratchets"}
-    ),
+    "python_dependency_surface": frozenset({"manifest_patterns", "canonical_manifests", "ratchets"}),
     "readme_resolver_coverage": frozenset({"resolver_file"}),
     "runtime_evidence_contract": _RUNTIME_OPTIONS,
     "runtime_filesystem_contract": _RUNTIME_OPTIONS,
