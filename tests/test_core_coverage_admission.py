@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from tc_fitness.core_checks._coverage_evidence import CoverageCounts
-from tc_fitness.coverage_admission import complete_line_hits, exact_checkout
+from tc_fitness.coverage_admission import complete_line_hits, exact_checkout, source_files
 from tc_fitness.coverage_measurement import cross_check_branches
 from tc_fitness.runner import run_contract_case
 
@@ -138,6 +138,30 @@ def test_exact_checkout_rejects_a_noncommit_base(tmp_path: Path) -> None:
     ).stdout.strip()
     with pytest.raises(ValueError, match="exact base is not a commit"):
         exact_checkout(tmp_path, tag_object, head)
+
+
+def test_source_inventory_ignores_directories_with_python_suffix(tmp_path: Path) -> None:
+    """Only regular Python files belong in immutable coverage evidence."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subject = seed(tmp_path, "src/subject.py", "value = 1\n")
+    (tmp_path / "src/generated.py").mkdir()
+    subprocess.run(["git", "add", "src/subject.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Coverage",
+            "-c",
+            "user.email=coverage@example.invalid",
+            "commit",
+            "-qm",
+            "candidate",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    assert source_files(tmp_path, ["src"]) == {"src/subject.py": subject}
 
 
 def test_complete_line_hits_rejects_missing_source_document(tmp_path: Path) -> None:

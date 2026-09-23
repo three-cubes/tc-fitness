@@ -39,7 +39,6 @@ repository.
 
 from __future__ import annotations
 
-import importlib
 import os
 import re
 import shutil
@@ -47,8 +46,8 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from types import ModuleType
 from typing import Any
+from xml.etree import ElementTree
 
 from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
@@ -102,22 +101,6 @@ def _reject_unsafe_xml(text: str, source: str) -> None:
         raise ValueError(f"unsafe coverage XML at {source}: DTD/entity declarations are not allowed")
 
 
-def _resolve_element_tree(
-    import_module: Callable[[str], ModuleType] = importlib.import_module,
-) -> Any:
-    """Prefer defusedxml; fall back to stdlib after explicit DTD/entity rejection.
-
-    ``import_module`` is a DI seam so a test can drive either path without
-    monkeypatching the production module.
-    """
-    try:
-        from defusedxml import ElementTree as DefusedET
-
-        return DefusedET
-    except ImportError:
-        return import_module("xml.etree.ElementTree")
-
-
 def parse_line_coverage(report_path: Path, *, element_tree: Any | None = None) -> dict[str, dict[int, int]]:
     """Return ``{<source>/<filename>: {line_no: hits}}`` from a Cobertura report.
 
@@ -133,7 +116,7 @@ def parse_line_coverage(report_path: Path, *, element_tree: Any | None = None) -
         return {}
     text = report_path.read_text(encoding="utf-8")
     _reject_unsafe_xml(text, str(report_path))
-    et = element_tree if element_tree is not None else _resolve_element_tree()
+    et = element_tree if element_tree is not None else ElementTree
     root = et.parse(report_path).getroot()
 
     source_roots = [s.text.strip().strip("/") for s in root.iter("source") if s.text and s.text.strip()]

@@ -175,6 +175,24 @@ def test_diff_cover_execution_error_is_actionable(
     assert "could not evaluate" in capsys.readouterr().out.lower()
 
 
+def test_diff_cover_failure_forwards_stderr(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _valid_report(tmp_path / "coverage.xml")
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/bin/diff-cover")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda args, **kwargs: _completed(list(args), 1, "", "uncovered changed line\n"),
+    )
+
+    rule = module.build({}, repo_root=tmp_path, git_runner=lambda a, c: _completed(a, 0, "base\n"))
+    assert rule.run() == 1
+    captured = capsys.readouterr()
+    assert "uncovered changed line" in captured.err
+    assert "below 100%" in captured.out
+
+
 def test_remote_base_refresh_rejects_invalid_branch_name(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
