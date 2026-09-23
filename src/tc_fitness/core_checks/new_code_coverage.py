@@ -341,6 +341,9 @@ class NewCodeCoverage(FitnessRule):
             str(self.floor_pct),
             "--include-untracked",
         ]
+        scoped_roots = [root for root in self._roots if root not in {"", "."}]
+        if scoped_roots and len(scoped_roots) == len(self._roots):
+            argv.extend(["--include", *(f"{root}/**" for root in scoped_roots)])
         try:
             result = subprocess.run(argv, cwd=self._repo_root, capture_output=True, text=True, check=False)
         except Exception as exc:  # diff-cover errors are gate errors, never passes

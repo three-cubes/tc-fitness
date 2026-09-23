@@ -111,6 +111,26 @@ def test_changed_test_only_paths_do_not_trigger_mapping_precheck(
     assert not any(args[:1] == ["diff"] for args in git_calls)
 
 
+def test_configured_roots_limit_diff_cover_inputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _valid_report(tmp_path / "coverage.xml")
+    calls: list[list[str]] = []
+
+    def run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return _completed(args, 0, "coverage passed\n")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    rule = module.build(
+        {"roots": ["src", "scripts/checks"]},
+        repo_root=tmp_path,
+        git_runner=lambda args, cwd: _completed(args, 0, "base\n"),
+    )
+
+    assert rule.run() == 0
+    diff_cover_call = next(args for args in calls if args[0].endswith("/diff-cover"))
+    assert diff_cover_call[-3:] == ["--include", "src/**", "scripts/checks/**"]
+
+
 def _valid_report(path: Path) -> None:
     path.write_text(
         '<coverage><sources><source>.</source></sources><class filename="src/a.py">'

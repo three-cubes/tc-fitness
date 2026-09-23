@@ -296,13 +296,75 @@ def test_gate_id_selects_only_catalogue_steps(repo: Path, capsys: pytest.Capture
     assert "run [unrelated]" not in out
 
 
+def test_gate_id_selects_only_owning_catalogue(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_synthetic_catalogue(repo)
+    (repo / "scripts/checks/other_cat.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "OTHER_ENTRIES = (RuleEntry(id='OTHER', gate='other', check='beta'),)\n"
+    )
+    _write_config(
+        repo,
+        '[[steps]]\nid = "primary"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n'
+        '[[steps]]\nid = "other"\ncatalogue = "scripts.checks.other_cat:OTHER_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo, gate_id="A1")
+    out = _plain(capsys.readouterr().out)
+
+    assert outcome.ok
+    assert "run [primary]" in out
+    assert "run [other]" not in out
+
+
+def test_gate_id_rejects_ambiguous_catalogue_owners(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_synthetic_catalogue(repo)
+    (repo / "scripts/checks/duplicate_cat.py").write_text(
+        "from tc_fitness.catalogue import RuleEntry\n"
+        "DUPLICATE_ENTRIES = (RuleEntry(id='A1', gate='duplicate', check='beta'),)\n"
+    )
+    _write_config(
+        repo,
+        '[[steps]]\nid = "primary"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n'
+        '[[steps]]\nid = "duplicate"\ncatalogue = "scripts.checks.duplicate_cat:DUPLICATE_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo, gate_id="A1")
+    out = _plain(capsys.readouterr().out)
+
+    assert not outcome.ok
+    assert "ambiguous catalogue target [A1]" in out
+    assert "owned by: primary, duplicate" in out
+    assert "run [primary]" not in out
+    assert "run [duplicate]" not in out
+
+
 def test_gate_id_without_catalogue_step_fails_closed(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(repo, '[[steps]]\nid = "lint"\nrun = ["true"]\n')
     outcome = run_gate(load_config(repo), repo, gate_id="A1")
     out = _plain(capsys.readouterr().out)
     assert not outcome.ok
-    assert "contains no catalogue step" in out
+    assert "no configured catalogue owns" in out
     assert "run [lint]" not in out
+
+
+def test_gate_id_with_unresolvable_catalogue_fails_closed(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "broken"\ncatalogue = "nope.module:ALL_ENTRIES"\n',
+    )
+
+    outcome = run_gate(load_config(repo), repo, gate_id="A1")
+    out = _plain(capsys.readouterr().out)
+
+    assert not outcome.ok
+    assert "could not resolve catalogue target [A1]" in out
+    assert "run [broken]" not in out
 
 
 def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
