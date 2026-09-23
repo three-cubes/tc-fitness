@@ -40,6 +40,12 @@ def test_default_is_strict_and_invokes_diff_cover(monkeypatch: pytest.MonkeyPatc
     assert "--include-untracked" in diff_cover_calls[0]
 
 
+def test_per_file_api_cannot_bypass_atomic_gate(tmp_path: Path) -> None:
+    rule = module.build({}, repo_root=tmp_path)
+    with pytest.raises(RuntimeError, match=r"evaluated with run\(\)"):
+        rule.file_has_violation(tmp_path / "src/a.py")
+
+
 def test_missing_report_fails_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

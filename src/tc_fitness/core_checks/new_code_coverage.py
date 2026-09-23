@@ -43,11 +43,9 @@ import importlib
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
-from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -283,6 +281,10 @@ class NewCodeCoverage(FitnessRule):
         report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
+    def file_has_violation(self, path: Path) -> bool:
+        """Reject the per-file API: this rule is one atomic changed-line gate."""
+        raise RuntimeError("new-code coverage must be evaluated with run(), not file_has_violation()")
+
     def _refresh_remote_base(self) -> bool:
         """Refresh a configured remote-tracking base before resolving it.
 
@@ -314,104 +316,6 @@ class NewCodeCoverage(FitnessRule):
             file=sys.stderr,
         )
         return False
-
-    def _changed_lines(self) -> dict[str, set[int]]:
-        """Added lines from the merge-base through the current checkout.
-
-        A remote-tracking base is refreshed first. Refresh failure warns and
-        continues with the cached ref. Returns ``{}`` (→ a soft PASS) when the
-        base ref is unsafe/unresolvable, the merge-base can't be computed, or
-        the diff command fails — none of which is a coverage defect.
-        """
-        if not _SAFE_REF_RE.match(self.base_ref):
-            return {}
-        self._refresh_remote_base()
-        merge_base = self.git_runner(["merge-base", self.base_ref, "HEAD"], self._repo_root)
-        if merge_base.returncode != 0:
-            return {}
-        base = _decode_git_output(merge_base.stdout).strip()
-        if not base:
-            return {}
-        # Comparing the base tree to the checkout includes committed, staged,
-        # and unstaged changes. ``base...HEAD`` omits the latter two and made a
-        # pre-commit local gate pass code that CI rejected after it was committed.
-        diff = self.git_runner(["diff", "-U0", base, "--"], self._repo_root)
-        if diff.returncode != 0:
-            return {}
-        changed = parse_added_lines(_decode_git_output(diff.stdout))
-        changed.update(self._untracked_added_lines())
-        return changed
-
-    def _untracked_added_lines(self) -> dict[str, set[int]]:
-        """All physical lines in untracked, non-ignored, in-scope source files."""
-        result = self.git_runner(
-            ["ls-files", "--others", "--exclude-standard", "-z", "--"],
-            self._repo_root,
-        )
-        if result.returncode != 0:
-            return {}
-
-        added: dict[str, set[int]] = {}
-        for rel in _decode_git_output(result.stdout).split("\0"):
-            if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
-                continue
-            if not self.is_in_scope(rel):
-                continue
-            path = self._repo_root / rel
-            try:
-                if not stat.S_ISREG(path.lstat().st_mode):
-                    continue
-                line_count = len(path.read_bytes().splitlines())
-            except OSError:
-                continue
-            added[rel] = set(range(1, line_count + 1))
-        return added
-
-    @cached_property
-    def _measured(self) -> dict[str, tuple[int, int]]:
-        """``{repo_relative_path: (covered_changed, coverable_changed)}``.
-
-        Only files with at least one *coverable* changed line (a changed line the
-        report recorded) appear — a file with no measurable new code is omitted,
-        so it is neither enumerated nor a violation. Cached: the git subprocess
-        and the XML parse run once per rule instance.
-        """
-        changed = self._changed_lines()
-        if not changed:
-            return {}
-        coverage = parse_line_coverage(self._report_path())
-        if not coverage:
-            return {}
-        out: dict[str, tuple[int, int]] = {}
-        for rel, lines in changed.items():
-            line_hits = coverage.get(rel)
-            if not line_hits:
-                continue
-            coverable = [ln for ln in lines if ln in line_hits]
-            if not coverable:
-                continue
-            covered = sum(1 for ln in coverable if line_hits[ln] > 0)
-            out[rel] = (covered, len(coverable))
-        return out
-
-    def enumerate_files(self) -> list[Path]:
-        """The changed in-scope files with measurable new code, as repo-anchored paths.
-
-        Overrides the default rglob walk: the rule's universe is the changed
-        lines that landed in the coverage report, not the on-disk tree. The
-        inherited scope predicate (extensions + roots) still applies via
-        :meth:`FitnessRule.collect_violations`.
-        """
-        return [self._repo_root / rel for rel in self._measured]
-
-    def file_has_violation(self, path: Path) -> bool:
-        """True iff the file's covered/coverable changed-line ratio is below the floor."""
-        rel = str(self._repo_relative(path))
-        measured = self._measured.get(rel)
-        if measured is None:
-            return False
-        covered, coverable = measured
-        return covered / coverable * 100.0 < self.floor_pct
 
     def run(self) -> int:
         """Run the standard diff-cover changed-line gate, failing closed."""
