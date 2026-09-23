@@ -296,6 +296,15 @@ def test_gate_id_selects_only_catalogue_steps(repo: Path, capsys: pytest.Capture
     assert "run [unrelated]" not in out
 
 
+def test_gate_id_without_catalogue_step_fails_closed(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(repo, '[[steps]]\nid = "lint"\nrun = ["true"]\n')
+    outcome = run_gate(load_config(repo), repo, gate_id="A1")
+    out = _plain(capsys.readouterr().out)
+    assert not outcome.ok
+    assert "contains no catalogue step" in out
+    assert "run [lint]" not in out
+
+
 def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
