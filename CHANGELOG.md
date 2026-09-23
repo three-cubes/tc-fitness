@@ -17,6 +17,12 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ### Added
 
+- **Strict changed-code coverage and catalogue targeting.** The
+  `new-code-coverage` CORE check now uses the locked `diff-cover` tool with a
+  100% default floor and fails closed on missing or invalid evidence. The
+  `tc-fitness run --gate ID` selector now executes only the requested catalogue
+  rule, without unrelated top-level commands.
+
 - **CORE check `python_dependency_surface`** — configurable roots, exemptions,
   and shrink-only count/content ratchets for raw Python `pip`/venv bootstrap,
   private interpreters, and nested alternative dependency manifests. This is

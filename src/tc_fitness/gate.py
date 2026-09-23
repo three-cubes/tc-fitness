@@ -392,6 +392,20 @@ def run_gate(
         # Tier selector: keep only steps tagged `tier` (silently, like --only).
         selected = tuple(s for s in selected if tier in s.tags)
 
+    if gate_id is not None:
+        # A rule selector is meaningful only inside catalogue steps.  Never run
+        # unrelated top-level commands (pytest, lint, etc.) while targeting one
+        # catalogue rule; this is the fast local/CI feedback contract.
+        selected = tuple(s for s in selected if s.kind == "catalogue")
+        if not selected:
+            print(
+                f"{_RED}unknown catalogue target [{gate_id}]{_RESET}; "
+                "the configured selection contains no catalogue step"
+            )
+            outcome = GateOutcome([StepResult("--gate", "fail")])
+            _print_aggregate(cfg, outcome)
+            return outcome
+
     runner = _run_scheduled if _has_stages(selected) else _run_sequential
     outcome = runner(
         cfg,

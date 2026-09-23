@@ -67,7 +67,10 @@ def test_core_check_module_entrypoint_uses_its_public_runtime_contract(tmp_path:
         env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
     )
 
-    if module in {"osv_scanner_sca", "mutation_survival_ratchet"}:
+    if module == "new_code_coverage":
+        assert result.returncode == 1
+        assert "coverage report is missing" in result.stdout
+    elif module in {"osv_scanner_sca", "mutation_survival_ratchet"}:
         if module == "mutation_survival_ratchet":
             assert result.returncode == 1
             assert "baseline" in result.stdout.lower()

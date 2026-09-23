@@ -281,6 +281,21 @@ def test_catalogue_step_gate_id_targets_one_rule(repo: Path, capsys: pytest.Capt
     assert "run [B1]" not in out  # only A1 targeted
 
 
+def test_gate_id_selects_only_catalogue_steps(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_synthetic_catalogue(repo)
+    _write_config(
+        repo,
+        '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+        'checks_dir = "scripts/checks"\n'
+        '[[steps]]\nid = "unrelated"\nrun = ["false"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo, gate_id="A1")
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert "run [A1]" in out
+    assert "run [unrelated]" not in out
+
+
 def test_catalogue_step_unresolvable_ref_is_a_fail(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,

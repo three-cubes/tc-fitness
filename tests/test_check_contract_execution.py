@@ -1018,7 +1018,7 @@ def _custom_finding_contract(root: Path, check: str) -> tuple[Path, tuple[str, s
             "coverage_report": "reports/new-lines.xml",
             "base_ref": "refs/heads/base",
         }
-        expected = ("new-code-coverage", "src/example.py", "new code below")
+        expected = ("new-code-coverage", ".", "diff-cover")
     elif check == "untrusted_automation_boundary":
         workflow = violation / ".github" / "workflows" / "analysis.yml"
         workflow.parent.mkdir(parents=True)

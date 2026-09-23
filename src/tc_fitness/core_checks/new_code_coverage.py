@@ -5,7 +5,7 @@ so long as the file's *aggregate* rate stays above the bar: a well-covered file
 absorbs a block of new, untested lines without dipping under the floor. The
 merge gate SonarCloud enforces closes that gap by scoring "new code" in
 isolation — the lines a branch ADDED or CHANGED versus the trunk — and blocking
-when their coverage is below a floor (80% by default). This rule mirrors that
+when their coverage is below a floor (100% by default). This rule mirrors that
 condition LOCALLY so an agent catches it before the CI round-trip, not after.
 
 "New code" is the set of right-side lines between the merge base and the current
@@ -27,13 +27,14 @@ Strict-mode missing inputs raise; they never enter the legacy soft-pass path.
 
 Hard floor, by design: new code that misses the threshold always fails.
 
-The floor, the report path, the trunk ref, and the scan roots are CONFIG the
+Standard mode delegates changed-line calculation and report matching to
+``diff-cover``. The floor, report path, trunk ref, and scan roots are CONFIG the
 consumer supplies; nothing here names a repo, a source package, or a threshold
 beyond the domain-intrinsic default. A configured remote-tracking trunk ref is
-refreshed before the merge-base is resolved; an offline refresh failure remains
-visible while the cached ref supplies the best available local measurement. The
-git invocation is a DI seam (a callable defaulting to :func:`subprocess.run`) so
-the detector is testable without a real repository.
+refreshed before the merge-base is resolved; failure is blocking so stale local
+state cannot produce a false pass. The git invocation is a DI seam (a callable
+defaulting to :func:`subprocess.run`) so the detector is testable without a real
+repository.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from __future__ import annotations
 import importlib
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -57,7 +59,7 @@ from tc_fitness.lib import remediation as _remediation
 
 #: The domain-intrinsic default floor for new code — SonarCloud's own default
 #: "Coverage on New Code" condition. Overridable per consumer via ``floor_pct``.
-DEFAULT_FLOOR_PCT = 80.0
+DEFAULT_FLOOR_PCT = 100.0
 
 #: Default coverage report location relative to the repo root. Overridable.
 DEFAULT_COVERAGE_REPORT = "coverage.xml"
@@ -281,36 +283,37 @@ class NewCodeCoverage(FitnessRule):
         report = Path(self.coverage_report)
         return report if report.is_absolute() else self._repo_root / report
 
-    def _refresh_remote_base(self) -> None:
+    def _refresh_remote_base(self) -> bool:
         """Refresh a configured remote-tracking base before resolving it.
 
         Local refs and revisions are left untouched. A failed fetch is visible
-        but non-blocking: the cached remote-tracking ref still gives an offline
-        run the best available coverage measurement.
+        and blocking because a stale remote-tracking ref is not admissible
+        changed-line evidence.
         """
         remotes = self.git_runner(["remote"], self._repo_root)
         if remotes.returncode != 0:
-            return
+            return False
         names = sorted(_decode_git_output(remotes.stdout).splitlines(), key=len, reverse=True)
         remote = next((name for name in names if self.base_ref.startswith(f"{name}/")), None)
         if remote is None:
-            return
+            return True
         branch = self.base_ref[len(remote) + 1 :]
         if not branch or not re.fullmatch(r"[A-Za-z0-9_./-]+", branch):
-            return
+            return False
         refspec = f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"
         fetched = self.git_runner(
             ["fetch", "--quiet", "--no-tags", "--", remote, refspec],
             self._repo_root,
         )
         if fetched.returncode == 0:
-            return
+            return True
         detail = _decode_git_output(fetched.stderr).strip().splitlines()
         reason = detail[-1] if detail else f"git fetch exited {fetched.returncode}"
         print(
-            f"warning [arch:{self._name}] — could not refresh {self.base_ref}; using cached ref: {reason}",
+            f"warning [arch:{self._name}] — could not refresh {self.base_ref}: {reason}",
             file=sys.stderr,
         )
+        return False
 
     def _changed_lines(self) -> dict[str, set[int]]:
         """Added lines from the merge-base through the current checkout.
@@ -411,15 +414,7 @@ class NewCodeCoverage(FitnessRule):
         return covered / coverable * 100.0 < self.floor_pct
 
     def run(self) -> int:
-        """Hard-floor gate: every below-floor changed file fails.
-
-        The "new" line set is recomputed against the merge-base on every branch,
-        and an uncovered line added on this branch is a current defect. This
-        method gates the raw violation set with a hard floor, mirroring
-        SonarCloud's "Coverage on New Code"
-        merge condition. Returns ``0`` when the changed lines clear the floor (or
-        there is no measurable new code), ``1`` otherwise.
-        """
+        """Run the standard diff-cover changed-line gate, failing closed."""
         if self.exact_config is not None:
             from tc_fitness.coverage_admission import changed_line_failures
 
@@ -428,16 +423,57 @@ class NewCodeCoverage(FitnessRule):
                 report_finding(self.name, relative, message)
                 print(f"FAIL [{self.name}] {relative}: {message}")
             return int(bool(failures))
-        violations = sorted(self.collect_violations(), key=lambda path: str(path))
-        if not violations:
-            print(f"ok [arch:{self._name}] — new code clears the {self.floor_pct:g}% coverage floor.")
-            return 0
-        print(f"FAIL [arch:{self._name}] — new code below the {self.floor_pct:g}% coverage floor:")
-        finding = f"new code below the {self.floor_pct:g}% coverage floor"
-        for path in violations:
-            report_finding(self._name, self._repo_relative(path).as_posix(), finding)
-            print(f"  {path}")
-        print()
+
+        report = self._report_path()
+        if not report.is_file():
+            return self._fail(f"coverage report is missing: {report}")
+        try:
+            covered_paths = parse_line_coverage(report)
+        except Exception as exc:
+            return self._fail(f"coverage report is unreadable or invalid: {exc}")
+        if not covered_paths:
+            return self._fail(f"coverage report contains no source file data: {report}")
+
+        if not _SAFE_REF_RE.fullmatch(self.base_ref):
+            return self._fail(f"base ref is unsafe or invalid: {self.base_ref!r}")
+        if not self._refresh_remote_base():
+            return self._fail(f"base ref could not be fetched: {self.base_ref}")
+        merge_base = self.git_runner(["merge-base", self.base_ref, "HEAD"], self._repo_root)
+        if merge_base.returncode != 0 or not _decode_git_output(merge_base.stdout).strip():
+            detail = _decode_git_output(merge_base.stderr).strip() or "git merge-base failed"
+            return self._fail(f"base ref is unavailable: {self.base_ref} ({detail})")
+        executable = shutil.which("diff-cover")
+        if executable is None:
+            return self._fail("diff-cover is not installed; sync the locked environment")
+        argv = [
+            executable,
+            str(report),
+            "--compare-branch",
+            self.base_ref,
+            "--fail-under",
+            str(self.floor_pct),
+            "--include-untracked",
+        ]
+        try:
+            result = subprocess.run(argv, cwd=self._repo_root, capture_output=True, text=True, check=False)
+        except Exception as exc:  # diff-cover errors are gate errors, never passes
+            return self._fail(f"diff-cover could not evaluate changed Python coverage: {exc}")
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        if result.returncode != 0:
+            message = f"diff-cover changed Python coverage is below {self.floor_pct:g}%"
+            report_finding(self._name, ".", message)
+            print(f"FAIL [arch:{self._name}] — {message}.")
+            print(self.remediation)
+            return 1
+        print(f"ok [arch:{self._name}] — changed Python coverage clears {self.floor_pct:g}%.")
+        return 0
+
+    def _fail(self, message: str) -> int:
+        print(f"FAIL [arch:{self._name}] — {message}")
+        report_finding(self._name, ".", message)
         print(self.remediation)
         return 1
 

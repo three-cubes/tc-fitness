@@ -34,7 +34,7 @@ cases:
     exit: nonzero
     findings:
     - rule: new-code-coverage
-      path: src/example.py
+      path: .
       message_contains: below
 - id: unavailable
   fixture: unavailable
