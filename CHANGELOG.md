@@ -15,6 +15,8 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-23
+
 ### Added
 
 - **Strict changed-code coverage and catalogue targeting.** The
