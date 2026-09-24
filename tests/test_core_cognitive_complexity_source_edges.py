@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tc_fitness.core_checks.cognitive_complexity import _function_scores, build
+from tc_fitness.core_checks.cognitive_complexity import _function_scores, _tree_entries, build
 
 pytestmark = pytest.mark.integration
 
@@ -43,6 +43,12 @@ def _rule(repo: Path):
 
 def test_function_scores_returns_empty_for_invalid_syntax() -> None:
     assert _function_scores("def broken(:\n") == {}
+
+
+def test_tree_entries_skip_regular_non_source_blobs() -> None:
+    payload = b"100644 blob abcdef\tsrc/readme.txt\x00"
+
+    assert _tree_entries(payload, (".py",)) == []
 
 
 def test_function_scores_qualifies_duplicate_class_and_function_ordinals() -> None:
