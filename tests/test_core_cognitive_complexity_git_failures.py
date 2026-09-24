@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 import tc_fitness.core_checks.cognitive_complexity as cognitive_complexity
+from tc_fitness.core_checks.cognitive_complexity import _batch_sources, _path_changes
 
 pytestmark = pytest.mark.integration
 
@@ -154,6 +155,30 @@ def test_malformed_blob_batch_is_rejected(tmp_path: Path, monkeypatch: pytest.Mo
     assert "could not decode the origin/main source tree" in result
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"",
+        b"wrong blob 0\n\n",
+        b"abcdef blob 3\nxx",
+        b"abcdef blob 0\n\ntrailing",
+    ],
+)
+def test_blob_batch_parser_rejects_each_malformed_boundary(payload: bytes) -> None:
+    with pytest.raises(ValueError):
+        _batch_sources(payload, [("src/example.py", b"abcdef")])
+
+
+@pytest.mark.parametrize("payload", [b"M", b"R100\x00src/old.py"])
+def test_path_change_parser_rejects_truncated_records(payload: bytes) -> None:
+    with pytest.raises(ValueError):
+        _path_changes(payload)
+
+
+def test_path_change_parser_ignores_copies() -> None:
+    assert _path_changes(b"C100\x00src/old.py\x00src/copy.py\x00") == ({}, set())
+
+
 def test_rename_diff_failure_includes_git_diagnostic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cognitive_complexity.shutil, "which", lambda _: "/usr/bin/git")
     calls = iter(
@@ -170,6 +195,24 @@ def test_rename_diff_failure_includes_git_diagnostic(tmp_path: Path, monkeypatch
 
     assert isinstance(result, str)
     assert "could not compare paths with merge base" in result
+
+
+def test_malformed_rename_diff_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cognitive_complexity.shutil, "which", lambda _: "/usr/bin/git")
+    calls = iter(
+        [
+            _completed(0, stdout="commit\n"),
+            _completed(0, stdout="merge-base\n"),
+            _completed(0, stdout=b""),
+            _completed(0, stdout=b"R100\x00src/old.py"),
+        ]
+    )
+    monkeypatch.setattr(cognitive_complexity.subprocess, "run", lambda *args, **kwargs: next(calls))
+
+    result = _rule(tmp_path)._baseline_sources()
+
+    assert isinstance(result, str)
+    assert "could not decode path changes" in result
 
 
 @pytest.mark.parametrize("failure", [OSError("git missing"), subprocess.TimeoutExpired("git", 30)])
