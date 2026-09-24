@@ -803,3 +803,61 @@ def test_cyclic_local_module_references_terminate_and_fail_closed(tmp_path: Path
     assert not passed
     assert meta["execution_error"] is True
     assert errors and "Checkov JSON report is missing results or summary" in errors[0]
+
+
+def test_diff_command_failure_after_valid_base_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _iac_repo(tmp_path / "repo")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  rev-parse|merge-base) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;\n"
+        "  diff) exit 1 ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir="infra", base_ref="main").evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors == ["diff cannot be computed"]
+
+
+def test_malformed_external_parser_module_path_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pycep import BicepParser
+
+    repo = _iac_repo(tmp_path)
+    (repo / "infra" / "safe.bicep").write_text(
+        "module storage './unsafe.bicep' = {\n  name: 'storage'\n}\n",
+        encoding="utf-8",
+    )
+    real_parse = BicepParser.parse
+
+    def malformed_parse(
+        parser: BicepParser, *, text: str | None = None, file_path: Path | None = None
+    ) -> dict[str, object]:
+        report = real_parse(parser, text=text, file_path=file_path)
+        for module in report.get("modules", {}).values():
+            if module["type"] == "local":
+                module["detail"]["path"] = None
+        return report
+
+    monkeypatch.setattr(BicepParser, "parse", malformed_parse)
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "local Bicep module path is invalid" in errors[0]
