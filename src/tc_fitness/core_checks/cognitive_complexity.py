@@ -221,6 +221,7 @@ class CognitiveComplexity(FitnessRule):
     threshold: int = DEFAULT_THRESHOLD
     base_ref: str = DEFAULT_BASE_REF
     _base_error: str | None = None
+    _scan_error: str | None = None
 
     @classmethod
     def from_config(
@@ -234,6 +235,7 @@ class CognitiveComplexity(FitnessRule):
         rule.threshold = int(config.get("threshold", DEFAULT_THRESHOLD))
         rule.base_ref = str(config.get("base_ref", DEFAULT_BASE_REF))
         rule._base_error = None
+        rule._scan_error = None
         return rule
 
     def file_has_violation(self, path: Path) -> bool:
@@ -248,8 +250,10 @@ class CognitiveComplexity(FitnessRule):
 
     def enumerate_files(self) -> list[Path]:
         """Enumerate tracked and nonignored untracked source from the index view."""
+        self._scan_error = None
         git = shutil.which("git")
         if git is None:
+            self._scan_error = "git is unavailable; install git to enumerate source files"
             return []
         try:
             result = subprocess.run(  # noqa: S603  # executable is resolved; fixed argv
@@ -259,9 +263,12 @@ class CognitiveComplexity(FitnessRule):
                 check=False,
                 timeout=30,
             )
-        except (OSError, subprocess.TimeoutExpired):
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self._scan_error = f"could not enumerate source files with git ls-files: {exc}"
             return []
         if result.returncode:
+            detail = result.stderr.decode("utf-8", "replace").strip() or "git ls-files failed"
+            self._scan_error = f"could not enumerate source files with git ls-files: {detail}"
             return []
         paths: set[Path] = set()
         for raw_path in result.stdout.split(b"\x00"):
@@ -333,7 +340,10 @@ class CognitiveComplexity(FitnessRule):
             return {Path("base_ref")}
         self._base_error = None
         violations: set[Path] = set()
-        for path in self.enumerate_files():
+        paths = self.enumerate_files()
+        if self._scan_error:
+            return {Path("source_inventory")}
+        for path in paths:
             relative = self._repo_relative(path).as_posix()
             try:
                 current_text = path.read_text(encoding="utf-8")
@@ -350,6 +360,10 @@ class CognitiveComplexity(FitnessRule):
         if self._base_error:
             report_finding(self._name, "base_ref", self._base_error, status="error")
             print(f"FAIL [arch:{self._name}] — {self._base_error}")
+            return 1
+        if self._scan_error:
+            report_finding(self._name, "source_inventory", self._scan_error, status="error")
+            print(f"FAIL [arch:{self._name}] — {self._scan_error}")
             return 1
         return gate(self._name, violations, self.remediation, repo_root=self._repo_root)
 
