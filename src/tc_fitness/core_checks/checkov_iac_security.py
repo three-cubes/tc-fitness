@@ -162,6 +162,19 @@ def run_checkov(
     binary = checkov_binary()
     if binary is None:
         return None
+
+    return _run_checkov(binary, scan_dir, framework=framework, timeout=timeout, files=files)
+
+
+def _run_checkov(
+    binary: str,
+    scan_dir: Path,
+    *,
+    framework: str = DEFAULT_FRAMEWORK,
+    timeout: int = DEFAULT_TIMEOUT,
+    files: Sequence[Path] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Run a previously resolved Checkov executable."""
     target = ["-f", *(str(path) for path in files)] if files is not None else ["-d", str(scan_dir)]
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as config_file:
@@ -372,6 +385,20 @@ class CheckovIacSecurity:
         """Run Checkov and determine whether the complete scan is clean."""
         try:
             files = self._scan_files()
+            binary = checkov_binary()
+            if binary is None:
+                return (
+                    False,
+                    [],
+                    {
+                        "unavailable": True,
+                        "execution_error": False,
+                        "exit_code": None,
+                        "failed": 0,
+                        _PARSING_ERRORS_KEY: 0,
+                        "findings": [],
+                    },
+                )
             if files == ():
                 return (
                     True,
@@ -385,8 +412,12 @@ class CheckovIacSecurity:
                         "findings": [],
                     },
                 )
-            result = run_checkov(
-                self.scan_path, framework=self._framework, timeout=self._timeout, files=files
+            result = _run_checkov(
+                binary,
+                self.scan_path,
+                framework=self._framework,
+                timeout=self._timeout,
+                files=files,
             )
         except CheckovScanError as exc:
             return (
@@ -400,19 +431,6 @@ class CheckovIacSecurity:
                     "findings": [],
                 },
             )
-        if result is None:
-            return (
-                False,
-                [],
-                {
-                    "unavailable": True,
-                    "execution_error": False,
-                    "failed": 0,
-                    _PARSING_ERRORS_KEY: 0,
-                    "findings": [],
-                },
-            )
-
         exit_code, report = result
         failed = report["results"]["failed_checks"]
         parsing_errors = report["summary"][_PARSING_ERRORS_KEY]

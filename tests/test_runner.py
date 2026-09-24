@@ -194,6 +194,29 @@ def test_main_cli_changed_files_from_missing_file_fails_closed(
     assert "missing-files.txt" in err
 
 
+def test_staged_core_without_changed_file_input_keeps_catalogue_scope(repo_root: Path) -> None:
+    rules = (
+        RuleEntry(
+            id="DUPLICATES",
+            gate="duplicates",
+            check="core:no_duplicate_string",
+            summary="duplicate strings",
+            staged_class="file-local",
+            staged_scope=("src",),
+        ),
+    )
+
+    verdict = run(
+        rules,
+        mode="staged",
+        staged_files=["docs/architecture.md"],
+        repo_root=repo_root,
+    )
+
+    assert verdict.ran == 0
+    assert verdict.skipped == 1
+
+
 def test_inprocess_fail_records_failure_and_exit_code(
     checks_dir: Path, repo_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

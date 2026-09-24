@@ -14,6 +14,7 @@ import yaml
 from test_check_contract_execution import invoke, make_contract
 
 from tc_fitness.check_contract_execution import validate_contract_ledger
+from tc_fitness.check_contract_policy import validate_contract_configuration
 from tc_fitness.check_contracts import CheckContractError
 from tc_fitness.core_checks import CORE_CHECKS
 
@@ -57,6 +58,14 @@ def test_every_core_check_rejects_an_unreviewed_advisory_alias(tmp_path: Path, c
         validate_contract_ledger(
             manifest, "compliant", ledger, process_exit=2, started_after=datetime.now(UTC)
         )
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [("base_ref", "origin/main"), ("changed_files", ["infra/main.bicep"])],
+)
+def test_checkov_contract_accepts_its_reviewed_diff_scope_options(option: str, value: object) -> None:
+    validate_contract_configuration("core:checkov_iac_security", {option: value})
 
 
 @pytest.mark.parametrize(

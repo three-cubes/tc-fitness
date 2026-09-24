@@ -324,10 +324,14 @@ base_ref = "origin/main"
 ```
 
 The direct module CLI also accepts `--base-ref REF` or
-`--changed-files-from PATH` (newline-delimited repo-relative paths). The
-engine's staged mode supplies its changed-file list to this CORE check when
-it runs. A missing manifest, invalid path, parser failure, or missing local
-module is an error. No baseline or skip list is used.
+`--changed-files-from PATH` (newline-delimited repo-relative paths). In staged
+mode, the engine recognises CORE checks whose `build()` accepts
+`changed_files`, runs them for every staged manifest regardless of a narrower
+catalogue scope, and supplies the complete changed-file list. This prevents a
+changed local module outside `scan_dir` from being dropped before Checkov can
+find its in-scope importers. A missing manifest, invalid path, parser failure,
+missing local module, or unavailable scanner is an error. No baseline or skip
+list is used.
 
 For deployable surfaces, `core:behavioural_evidence` prevents a static
 source-shape test from being credited as runtime proof. Consumers declare the

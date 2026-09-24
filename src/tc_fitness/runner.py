@@ -901,6 +901,19 @@ def _staged_decisions(
         if script in seen_scripts:
             continue
         seen_scripts.add(script)
+        if is_core_check(entry):
+            module = importlib.import_module(core_module_name(entry))
+            if "changed_files" in inspect.signature(module.build).parameters:
+                out.append(
+                    (
+                        entry,
+                        StagedDecision(
+                            run=True,
+                            reason="changed-file-aware CORE check — inspect complete staged manifest",
+                        ),
+                    )
+                )
+                continue
         out.append((entry, decide(entry, script, staged, cfg.scope_resolver)))
     return out
 

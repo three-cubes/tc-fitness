@@ -375,6 +375,67 @@ def test_staged_runner_passes_its_changed_files_to_checkov(tmp_path: Path) -> No
     assert verdict.ran == 1
 
 
+def test_staged_runner_does_not_drop_changed_external_checkov_module(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _iac_repo(tmp_path)
+    modules = repo / "modules"
+    modules.mkdir()
+    (repo / "infra" / "unsafe.bicep").rename(modules / "unsafe.bicep")
+    (repo / "infra" / "safe.bicep").write_text(
+        "module storage '../modules/unsafe.bicep' = {\n  name: 'storage'\n}\n",
+        encoding="utf-8",
+    )
+    rules = (
+        RuleEntry(
+            id="checkov_iac_security",
+            gate="checkov",
+            check="core:checkov_iac_security",
+            summary="IaC security",
+            staged_class="file-local",
+            staged_scope=("infra",),
+        ),
+    )
+
+    verdict = run(
+        rules,
+        mode="staged",
+        staged_files=["modules/unsafe.bicep"],
+        repo_root=repo,
+        core_check_configs={"checkov_iac_security": {"scan_dir": "infra"}},
+    )
+
+    assert checkov_binary()
+    assert verdict.ran == 1
+    assert verdict.failures == ["checkov_iac_security"]
+    assert "CKV_AZURE_35" in capsys.readouterr().out
+
+
+def test_staged_runner_with_no_paths_runs_full_checkov_scan_fail_safe(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    rules = (
+        RuleEntry(
+            id="checkov_iac_security",
+            gate="checkov",
+            check="core:checkov_iac_security",
+            summary="IaC security",
+            staged_class="file-local",
+            staged_scope=("infra",),
+        ),
+    )
+
+    verdict = run(
+        rules,
+        mode="staged",
+        staged_files=[],
+        repo_root=repo,
+        core_check_configs={"checkov_iac_security": {"scan_dir": "infra"}},
+    )
+
+    assert verdict.ran == 1
+    assert verdict.failures == ["checkov_iac_security"]
+
+
 def test_direct_cli_runs_the_real_scan_from_repository_root() -> None:
     assert main(["--repo-root", str(CONTRACT_ROOT / "compliant")]) == 0
 
@@ -417,6 +478,27 @@ def test_missing_scanner_is_an_error_not_a_clean_result(tmp_path: Path) -> None:
     assert not passed
     assert errors == []
     assert meta["unavailable"] is True
+
+
+def test_missing_scanner_blocks_changed_scope_with_no_bicep_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _iac_repo(tmp_path)
+    monkeypatch.setenv("PATH", "")
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir="infra", changed_files=["README.md"]).evaluate()
+
+    assert not passed
+    assert errors == []
+    assert meta["unavailable"] is True
+
+
+def test_run_checkov_reports_missing_scanner_directly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", "")
+
+    assert run_checkov(tmp_path) is None
 
 
 def test_missing_scanner_run_reports_structured_error_without_test_doubles(
