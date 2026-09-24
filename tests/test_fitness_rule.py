@@ -53,6 +53,19 @@ def test_collect_violations_respects_config_roots(tmp_path: Path) -> None:
     assert violations == {"src/bad.py"}  # 'other/' is out of configured scope
 
 
+def test_collect_violations_scopes_custom_enumeration(tmp_path: Path) -> None:
+    """A rule-specific enumerator cannot bypass the configured scan roots."""
+    _seed(tmp_path, "src/bad.py", "BADWORD\n")
+    _seed(tmp_path, "other/bad.py", "BADWORD\n")
+
+    class ExplicitFiles(_BadWord):
+        def enumerate_files(self) -> list[Path]:
+            return [self._repo_root / "src/bad.py", self._repo_root / "other/bad.py"]
+
+    rule = ExplicitFiles(repo_root=tmp_path, roots=("src",))
+    assert rule.collect_violations() == {Path("src/bad.py")}
+
+
 def test_extension_filter(tmp_path: Path) -> None:
     _seed(tmp_path, "src/a.py", "BADWORD")
     _seed(tmp_path, "src/a.txt", "BADWORD")

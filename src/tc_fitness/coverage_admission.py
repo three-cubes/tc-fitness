@@ -149,7 +149,7 @@ def source_files(root: Path, roots: list[str]) -> dict[str, Path]:
 
 def complete_line_hits(root: Path, report: Path, files: dict[str, Path]) -> dict[str, dict[int, int]]:
     """Validate all detail against the actual Coverage.py statement inventory."""
-    from tc_fitness.core_checks.new_code_coverage import _resolve_element_tree
+    from tc_fitness.core_checks.coverage_floor import _resolve_element_tree
 
     details = parse_coverage_details(report, repo_root=root)
     if set(details) != set(files):

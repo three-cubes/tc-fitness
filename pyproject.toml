@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "three-cubes-fitness"
-version = "0.17.1"
+version = "0.18.0"
 description = "Shared architecture-fitness primitives and the single runnable quality gate for Three Cubes repositories: hard-gating checks, agent-actionable diagnostics, the unified ratchet grammar, and catalogue-driven local/CI orchestration."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -35,7 +35,12 @@ classifiers = [
 # It is imported lazily, inside the two functions that parse requirements, so
 # importing this package remains a stdlib-only operation: a bare checkout still
 # reports its version and degrades legibly.
-dependencies = ["coverage>=7.10", "packaging>=23.2", "PyYAML>=6.0"]
+dependencies = [
+    "coverage>=7.10",
+    "diff-cover>=9.2,<10",
+    "packaging>=23.2",
+    "PyYAML>=6.0",
+]
 
 [project.scripts]
 # The single runnable gate. Consumers invoke `uv run tc-fitness run` (local) and

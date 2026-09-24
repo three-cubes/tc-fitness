@@ -230,6 +230,19 @@ def _resolve_catalogue(ref: str) -> tuple[RuleEntry, ...]:
     return rules
 
 
+def _resolve_step_catalogue(step: StepSpec, repo_root: Path) -> tuple[RuleEntry, ...]:
+    """Resolve one catalogue step with the consumer repository importable."""
+    repo_root_str = str(repo_root)
+    added = repo_root_str not in sys.path
+    if added:
+        sys.path.insert(0, repo_root_str)
+    try:
+        return _resolve_catalogue(step.catalogue or "")
+    finally:
+        if added and repo_root_str in sys.path:
+            sys.path.remove(repo_root_str)
+
+
 def _run_catalogue_step(
     step: StepSpec,
     repo_root: Path,
@@ -267,21 +280,13 @@ def _run_catalogue_step(
 
     # Make the catalogue module importable from the repo root (the consumer's
     # catalogue typically lives under scripts/checks/ alongside its checks).
-    repo_root_str = str(repo_root)
-    added = repo_root_str not in sys.path
-    if added:
-        sys.path.insert(0, repo_root_str)
     try:
-        rules = _resolve_catalogue(catalogue_ref)
+        rules = _resolve_step_catalogue(step, repo_root)
     except (ImportError, AttributeError, ValueError) as exc:
         print(f"{_RED}FAIL [{step.id}]{_RESET} could not load catalogue {catalogue_ref!r}: {exc}")
         print(f'   fix: confirm the `catalogue = "module:attr"` ref resolves from {repo_root}')
         _print_fix_next(step)
         return StepResult(step.id, "fail", gating=not step.continue_on_error)
-    finally:
-        if added and repo_root_str in sys.path:
-            sys.path.remove(repo_root_str)
-
     if gate_id:
         argv = ["--gate", gate_id]
     elif staged or changed_files is not None:
@@ -391,6 +396,36 @@ def run_gate(
     if tier is not None:
         # Tier selector: keep only steps tagged `tier` (silently, like --only).
         selected = tuple(s for s in selected if tier in s.tags)
+
+    if gate_id is not None:
+        # A rule selector is meaningful only inside catalogue steps.  Never run
+        # unrelated top-level commands (pytest, lint, etc.) while targeting one
+        # catalogue rule; this is the fast local/CI feedback contract.
+        catalogue_steps = tuple(s for s in selected if s.kind == "catalogue")
+        try:
+            selected = tuple(
+                step
+                for step in catalogue_steps
+                if any(rule.id == gate_id for rule in _resolve_step_catalogue(step, repo_root))
+            )
+        except (ImportError, AttributeError, ValueError) as exc:
+            print(f"{_RED}could not resolve catalogue target [{gate_id}]{_RESET}: {exc}")
+            outcome = GateOutcome([StepResult("--gate", "fail")])
+            _print_aggregate(cfg, outcome)
+            return outcome
+        if not selected:
+            print(
+                f"{_RED}unknown catalogue target [{gate_id}]{_RESET}; no configured catalogue owns that rule"
+            )
+            outcome = GateOutcome([StepResult("--gate", "fail")])
+            _print_aggregate(cfg, outcome)
+            return outcome
+        if len(selected) > 1:
+            owners = ", ".join(step.id for step in selected)
+            print(f"{_RED}ambiguous catalogue target [{gate_id}]{_RESET}; owned by: {owners}")
+            outcome = GateOutcome([StepResult("--gate", "fail")])
+            _print_aggregate(cfg, outcome)
+            return outcome
 
     runner = _run_scheduled if _has_stages(selected) else _run_sequential
     outcome = runner(
