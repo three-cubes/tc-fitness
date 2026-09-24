@@ -64,7 +64,7 @@ _CORE_OPTIONS: dict[str, frozenset[str]] = {
     "ci_silencers_have_rationale": frozenset(
         {"rationale_tokens", "silencer_patterns", "window", "workflows_dir", "scan_files"}
     ),
-    "cognitive_complexity": frozenset({"threshold"}),
+    "cognitive_complexity": frozenset({"threshold", "base_ref"}),
     "contract_change_has_test": frozenset({"contract_surface", "test_globs", "base_ref"}),
     "coverage_floor": frozenset({"floor_pct", "coverage_report", "branch_floor_pct", "critical_branch_files"})
     | _COVERAGE_EVIDENCE_OPTIONS,

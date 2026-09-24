@@ -273,11 +273,53 @@ def test_allowed_identity_policy_accepts_only_the_configured_real_git_identity(t
 
 
 def test_real_complexity_threshold_remains_a_detector_policy_input(tmp_path: Path) -> None:
-    manifest = contract_for(tmp_path, "core:cognitive_complexity", {"roots": ["src"], "threshold": 0})
-    (tmp_path / "violation" / "src" / "example.py").write_text(
-        "def check(value):\n    if value:\n        return 1\n    return 0\n"
+    manifest = contract_for(
+        tmp_path,
+        "core:cognitive_complexity",
+        {"roots": ["src"], "threshold": 0, "base_ref": "origin/main"},
     )
+    base_source = b"# SPDX-License-Identifier: MIT\nvalue = 1\n"
+    complex_source = b"def check(value):\n    if value:\n        return 1\n    return 0\n"
+
+    def history(candidate_source: bytes) -> bytes:
+        return (
+            b"blob\nmark :1\ndata "
+            + str(len(base_source)).encode()
+            + b"\n"
+            + base_source
+            + b"\nblob\nmark :2\ndata "
+            + str(len(candidate_source)).encode()
+            + b"\n"
+            + candidate_source
+            + b"\ncommit refs/heads/main\nmark :4\n"
+            + b"author Contract Fixture <fixture@example.invalid> 0 +0000\n"
+            + b"committer Contract Fixture <fixture@example.invalid> 0 +0000\n"
+            + b"data 4\nbase\nM 100644 :1 src/example.py\n\n"
+            + b"reset refs/remotes/origin/main\nfrom :4\n\n"
+            + b"commit refs/heads/candidate\nmark :3\n"
+            + b"author Contract Fixture <fixture@example.invalid> 0 +0000\n"
+            + b"committer Contract Fixture <fixture@example.invalid> 0 +0000\n"
+            + b"data 9\ncandidate\nfrom :4\nM 100644 :2 src/example.py\n\n"
+        )
+
+    for case, source in (("compliant", base_source), ("violation", complex_source)):
+        fixture = tmp_path / case
+        (fixture / "src" / "example.py").unlink()
+        (fixture / "src").rmdir()
+        history_path = fixture / ".contract" / "git.fast-import"
+        history_path.parent.mkdir()
+        history_path.write_bytes(history(source))
     data = yaml.safe_load(manifest.read_text())
+    for case in data["cases"]:
+        case["environment"] = {
+            "schema": "tc.fitness/check-environment/v2",
+            "path": "inherit",
+            "git": {
+                "schema": "tc.fitness/git-fixture/v1",
+                "history": ".contract/git.fast-import",
+                "checkout": "refs/heads/candidate",
+            },
+        }
     data["cases"][1]["expected"]["findings"] = [
         {"rule": "cognitive-complexity", "path": "src/example.py", "message_contains": "fix:"}
     ]

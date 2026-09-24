@@ -1,15 +1,29 @@
 schema: tc.fitness/check-contract/v1
 check: core:cognitive_complexity
-config: {"roots":["src"]}
+config: {"roots":["src"],"base_ref":"origin/main"}
 cases:
   - id: compliant
     fixture: compliant
+    environment:
+      schema: tc.fitness/check-environment/v2
+      path: inherit
+      git:
+        schema: tc.fitness/git-fixture/v1
+        history: .contract/git.fast-import
+        checkout: refs/heads/candidate
     expected:
       status: pass
       exit: zero
       findings: []
   - id: violation
     fixture: violation
+    environment:
+      schema: tc.fitness/check-environment/v2
+      path: inherit
+      git:
+        schema: tc.fitness/git-fixture/v1
+        history: .contract/git.fast-import
+        checkout: refs/heads/candidate
     expected:
       status: fail
       exit: nonzero

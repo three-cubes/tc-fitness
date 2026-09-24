@@ -4,29 +4,41 @@ Cognitive complexity measures how hard a function is to *read*, not how hard
 it is to test. The score climbs with each branch (``if`` / ``elif`` / ``else``
 / ``for`` / ``while`` / ``try`` / ``except`` / ternary / boolean operator) and
 is amplified by nesting depth — a triple-nested ``if`` is harder to follow
-than three sequential ones. A function scoring above the threshold is flagged;
-the file is the unit reported.
+than three sequential ones. The merge gate compares qualified function scores
+with the merge base: a new over-threshold function or an existing function that
+worsens above the threshold is flagged, while unchanged legacy debt does not
+need a stored exception list. The file is the unit reported.
 
 Ported from kairix ``scripts/checks/check_cognitive_complexity.py`` (F16) and
 re-expressed as a configurable, repo-agnostic rule: the only domain-intrinsic
 number is S3776's own default ceiling (15), exposed as a ``threshold`` knob the
-consumer overrides via ``[tool.tc_fitness]``. No repo paths or globs are baked
-in — the consumer supplies ``roots``.
+consumer overrides via ``[tool.tc_fitness]``. The comparison ref is also
+configurable. No repo paths or globs are baked in — the consumer supplies
+``roots``.
 """
 
 from __future__ import annotations
 
 import ast
+import io
+import re
+import shutil
+import subprocess
+import tarfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tc_fitness.check_evidence import report_finding
 from tc_fitness.core_checks import run_core_check
 from tc_fitness.fitness_rule import FitnessRule
+from tc_fitness.lib import gate
 from tc_fitness.lib import remediation as _remediation
 
 #: S3776's own default ceiling — domain-intrinsic, not repo identity. Overridable.
 DEFAULT_THRESHOLD = 15
+DEFAULT_BASE_REF = "origin/main"
+_SAFE_REF_RE = re.compile(r"^[A-Za-z0-9_./@{}~^-]+$")
 
 REMEDIATION = _remediation(
     fix=(
@@ -134,6 +146,53 @@ def _score_function(func: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
     return scorer.score
 
 
+def _function_scores(source: str, *, filename: str = "<source>") -> dict[str, int]:
+    """Return complexity by qualified lexical function identity."""
+    try:
+        tree = ast.parse(source, filename=filename)
+    except (SyntaxError, UnicodeDecodeError):
+        return {}
+
+    scores: dict[str, int] = {}
+
+    def visit_definition(child: ast.AST, prefix: str, counts: dict[str, int]) -> None:
+        if isinstance(child, ast.ClassDef):
+            ordinal = counts.get(child.name, 0)
+            counts[child.name] = ordinal + 1
+            class_name = f"{child.name}#{ordinal}"
+            visit_scope(child, f"{prefix}.{class_name}" if prefix else class_name)
+            return
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+            ordinal = counts.get(child.name, 0)
+            counts[child.name] = ordinal + 1
+            function_name = f"{child.name}#{ordinal}"
+            identity = f"{prefix}.{function_name}" if prefix else function_name
+            scores[identity] = _score_function(child)
+            visit_scope(child, identity)
+            return
+        for descendant in ast.iter_child_nodes(child):
+            visit_definition(descendant, prefix, counts)
+
+    def visit_scope(
+        node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef, prefix: str
+    ) -> None:
+        counts: dict[str, int] = {}
+        for child in node.body:
+            visit_definition(child, prefix, counts)
+
+    visit_scope(tree, "")
+    return scores
+
+
+def _regressed_functions(previous: dict[str, int], current: dict[str, int], *, threshold: int) -> bool:
+    """Return whether current source adds or worsens an over-threshold function."""
+    return any(
+        score > threshold
+        and (identity not in previous or previous[identity] <= threshold or score > previous[identity])
+        for identity, score in current.items()
+    )
+
+
 def module_over_threshold(path: Path, *, threshold: int) -> bool:
     """True iff any function in ``path`` scores above ``threshold``.
 
@@ -152,7 +211,7 @@ def module_over_threshold(path: Path, *, threshold: int) -> bool:
 
 
 class CognitiveComplexity(FitnessRule):
-    """Flags files holding a function above the cognitive-complexity ceiling (S3776)."""
+    """Fail only when this change adds or worsens an over-threshold function."""
 
     name = "cognitive-complexity"
     remediation = REMEDIATION
@@ -160,6 +219,8 @@ class CognitiveComplexity(FitnessRule):
 
     #: Rule-specific knob — S3776's own ceiling; overridable per consumer.
     threshold: int = DEFAULT_THRESHOLD
+    base_ref: str = DEFAULT_BASE_REF
+    _base_error: str | None = None
 
     @classmethod
     def from_config(
@@ -171,10 +232,126 @@ class CognitiveComplexity(FitnessRule):
         rule = super().from_config(config, repo_root=repo_root)
         assert isinstance(rule, CognitiveComplexity)  # noqa: S101  # narrowing for mypy
         rule.threshold = int(config.get("threshold", DEFAULT_THRESHOLD))
+        rule.base_ref = str(config.get("base_ref", DEFAULT_BASE_REF))
+        rule._base_error = None
         return rule
 
     def file_has_violation(self, path: Path) -> bool:
-        return module_over_threshold(path, threshold=self.threshold)
+        baseline = self._baseline_sources()
+        if isinstance(baseline, str):
+            self._base_error = baseline
+            return True
+        relative = self._repo_relative(path).as_posix()
+        previous = _function_scores(baseline.get(relative, ""), filename=relative)
+        current = _function_scores(path.read_text(encoding="utf-8"), filename=relative)
+        return _regressed_functions(previous, current, threshold=self.threshold)
+
+    def enumerate_files(self) -> list[Path]:
+        """Enumerate tracked and nonignored untracked source from the index view."""
+        git = shutil.which("git")
+        if git is None:
+            return []
+        try:
+            result = subprocess.run(  # noqa: S603  # executable is resolved; fixed argv
+                [git, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                cwd=self._repo_root,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode:
+            return []
+        paths: set[Path] = set()
+        for raw_path in result.stdout.split(b"\x00"):
+            if not raw_path:
+                continue
+            relative = raw_path.decode("utf-8", "surrogateescape")
+            if not relative.endswith(self._extensions) or not self.is_in_scope(relative):
+                continue
+            path = self._repo_root / relative
+            if not path.is_file() or path.is_symlink():
+                continue
+            resolved = path.resolve()
+            if resolved.is_relative_to(self._repo_root):
+                paths.add(resolved)
+        return sorted(paths)
+
+    def _baseline_sources(self) -> dict[str, str] | str:
+        """Read scoped source from one immutable merge-base archive or return its error."""
+        if not _SAFE_REF_RE.fullmatch(self.base_ref) or self.base_ref.startswith("-"):
+            return f"base ref is unsafe or invalid: {self.base_ref!r}; set a valid base_ref"
+        git = shutil.which("git")
+        if git is None:
+            return (
+                "git is unavailable; install git to compare cognitive complexity with the configured base_ref"
+            )
+        verified = subprocess.run(  # noqa: S603  # validated git ref; argv, not shell
+            [git, "rev-parse", "--verify", "--end-of-options", f"{self.base_ref}^{{commit}}"],
+            cwd=self._repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if verified.returncode:
+            detail = verified.stderr.strip() or "git could not resolve the configured ref"
+            return f"base ref is unavailable: {self.base_ref} ({detail}); fetch or configure base_ref"
+        merge_base = subprocess.run(  # noqa: S603  # resolved commit; argv, not shell
+            [git, "merge-base", "--all", verified.stdout.strip(), "HEAD"],
+            cwd=self._repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        bases = merge_base.stdout.splitlines()
+        if merge_base.returncode or len(bases) != 1:
+            detail = merge_base.stderr.strip() or "merge base is missing or ambiguous"
+            return f"could not establish one merge base with {self.base_ref}: {detail}"
+        command = [git, "archive", "--format=tar", bases[0], *self._roots]
+        archive = subprocess.run(command, cwd=self._repo_root, capture_output=True, check=False)  # noqa: S603  # resolved commit and configured repo paths
+        if archive.returncode:
+            detail = archive.stderr.decode("utf-8", "replace").strip() or "git archive failed"
+            return f"could not read files at merge base with {self.base_ref}: {detail}"
+        try:
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as snapshot:
+                return {
+                    member.name: extracted.read().decode("utf-8")
+                    for member in snapshot.getmembers()
+                    if member.isfile()
+                    and member.name.endswith(self._extensions)
+                    and (extracted := snapshot.extractfile(member)) is not None
+                }
+        except (tarfile.TarError, UnicodeDecodeError) as exc:
+            return f"could not decode the {self.base_ref} source snapshot: {exc}"
+
+    def collect_violations(self) -> set[Path]:
+        """Compare working-tree files, including staged and untracked content."""
+        baseline = self._baseline_sources()
+        if isinstance(baseline, str):
+            self._base_error = baseline
+            return {Path("base_ref")}
+        self._base_error = None
+        violations: set[Path] = set()
+        for path in self.enumerate_files():
+            relative = self._repo_relative(path).as_posix()
+            try:
+                current_text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            previous = _function_scores(baseline.get(relative, ""), filename=relative)
+            current = _function_scores(current_text, filename=relative)
+            if _regressed_functions(previous, current, threshold=self.threshold):
+                violations.add(self._repo_relative(path))
+        return violations
+
+    def run(self) -> int:
+        violations = self.collect_violations()
+        if self._base_error:
+            report_finding(self._name, "base_ref", self._base_error, status="error")
+            print(f"FAIL [arch:{self._name}] — {self._base_error}")
+            return 1
+        return gate(self._name, violations, self.remediation, repo_root=self._repo_root)
 
 
 def build(config: Mapping[str, Any], *, repo_root: Path | None = None) -> CognitiveComplexity:
