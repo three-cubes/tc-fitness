@@ -2223,7 +2223,7 @@ wheels = [
 
 [[package]]
 name = "three-cubes-fitness"
-version = "0.18.0"
+version = "0.18.1"
 source = { editable = "." }
 dependencies = [
     { name = "coverage" },
