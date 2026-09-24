@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from tc_fitness.catalogue import RuleEntry
 from tc_fitness.core_checks.checkov_iac_security import (
     CheckovIacSecurity,
     CheckovScanError,
@@ -22,9 +24,18 @@ from tc_fitness.core_checks.checkov_iac_security import (
     main,
     run_checkov,
 )
+from tc_fitness.runner import run
 
 pytestmark = pytest.mark.integration
 CONTRACT_ROOT = Path(__file__).parent / "check_contracts" / "checkov_iac_security"
+
+
+def _iac_repo(tmp_path: Path) -> Path:
+    infra = tmp_path / "infra"
+    infra.mkdir()
+    for name, fixture in (("safe.bicep", "compliant"), ("unsafe.bicep", "violation")):
+        shutil.copyfile(CONTRACT_ROOT / fixture / "infra" / "main.bicep", infra / name)
+    return tmp_path
 
 
 def test_compliant_storage_fixture_passes_real_checkov() -> None:
@@ -76,6 +87,292 @@ def test_config_factory_and_public_run_use_the_configured_fixture(capsys: pytest
     assert rule.scan_path == (CONTRACT_ROOT / "compliant" / "infra").resolve()
     assert rule.run() == 0
     assert "PASS checkov_iac_security" in capsys.readouterr().out
+
+
+def test_affected_scan_rejects_changed_vulnerable_file(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/unsafe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["failed"] >= 1
+    assert any("CKV_AZURE_35" in error for error in errors)
+
+
+def test_affected_scan_excludes_unchanged_vulnerable_file_but_full_scan_finds_it(
+    tmp_path: Path,
+) -> None:
+    repo = _iac_repo(tmp_path)
+
+    affected_passed, _, affected_meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+    full_passed, _, full_meta = CheckovIacSecurity(repo, scan_dir="infra").evaluate()
+
+    assert affected_passed
+    assert affected_meta["failed"] == 0
+    assert not full_passed
+    assert full_meta["failed"] >= 1
+
+
+def test_affected_scan_includes_local_module_dependency_closure(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    (repo / "infra" / "safe.bicep").write_text(
+        "module storage './unsafe.bicep' = {\n  name: 'storage'\n}\n", encoding="utf-8"
+    )
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["failed"] >= 1
+    assert any("CKV_AZURE_35" in error for error in errors)
+
+
+def test_module_outside_scan_directory_is_reported_at_repository_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _iac_repo(tmp_path)
+    modules = repo / "modules"
+    modules.mkdir()
+    (repo / "infra" / "unsafe.bicep").rename(modules / "unsafe.bicep")
+    (repo / "infra" / "safe.bicep").write_text(
+        "module storage '../modules/unsafe.bicep' = {\n  name: 'storage'\n}\n",
+        encoding="utf-8",
+    )
+
+    assert CheckovIacSecurity(repo, scan_dir="infra", changed_files=["infra/safe.bicep"]).run() == 1
+    assert "at /modules/unsafe.bicep:" in capsys.readouterr().out
+    result = run_checkov(modules, files=[modules / "unsafe.bicep"])
+    assert result is not None
+    finding = result[1]["results"]["failed_checks"][0]
+    assert (
+        _finding_path(finding, scan_path=repo / "infra", scan_dir="infra", repo_root=repo)
+        == "modules/unsafe.bicep"
+    )
+
+
+def test_changed_external_module_scans_unchanged_in_scope_importer(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    modules = repo / "modules"
+    modules.mkdir()
+    (repo / "infra" / "unsafe.bicep").rename(modules / "unsafe.bicep")
+    (repo / "infra" / "safe.bicep").write_text(
+        "module storage '../modules/unsafe.bicep' = {\n  name: 'storage'\n}\n",
+        encoding="utf-8",
+    )
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["modules/unsafe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["failed"] >= 1
+    assert any("CKV_AZURE_35" in error for error in errors)
+
+
+def test_deleted_external_module_imported_by_unchanged_template_fails_closed(
+    tmp_path: Path,
+) -> None:
+    repo = _iac_repo(tmp_path)
+    modules = repo / "modules"
+    modules.mkdir()
+    (repo / "infra" / "unsafe.bicep").rename(modules / "unsafe.bicep")
+    (repo / "infra" / "safe.bicep").write_text(
+        "module storage '../modules/unsafe.bicep' = {\n  name: 'storage'\n}\n",
+        encoding="utf-8",
+    )
+    (modules / "unsafe.bicep").unlink()
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["modules/unsafe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "missing" in errors[0].lower()
+
+
+def test_affected_scan_ignores_deleted_bicep_and_scans_rename_destination(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    (repo / "infra" / "safe.bicep").unlink()
+    (repo / "infra" / "unsafe.bicep").rename(repo / "infra" / "renamed.bicep")
+
+    deleted_passed, _, deleted_meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+    renamed_passed, errors, renamed_meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/unsafe.bicep", "infra/renamed.bicep"]
+    ).evaluate()
+
+    assert deleted_passed
+    assert deleted_meta["failed"] == 0
+    assert not renamed_passed
+    assert renamed_meta["failed"] >= 1
+    assert any("CKV_AZURE_35" in error for error in errors)
+
+
+def test_unresolvable_diff_base_fails_closed(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", base_ref="refs/heads/does-not-exist"
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "base" in errors[0].lower()
+
+
+def test_missing_configured_scan_directory_fails_affected_scan(tmp_path: Path) -> None:
+    passed, errors, meta = CheckovIacSecurity(
+        tmp_path, scan_dir="infra", changed_files=["infra/missing.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "scan directory" in errors[0].lower()
+
+
+def test_ambient_checkov_skip_setting_cannot_hide_a_changed_finding(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    (repo / ".checkov.yaml").write_text("skip-check: CKV_AZURE_35\n", encoding="utf-8")
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import json, sys; "
+            "from tc_fitness.core_checks.checkov_iac_security import CheckovIacSecurity; "
+            "print(json.dumps(CheckovIacSecurity(Path(sys.argv[1]), scan_dir='infra', "
+            "changed_files=['infra/unsafe.bicep']).evaluate()))",
+            str(repo),
+        ],
+        cwd=repo,
+        env={**os.environ, "CKV_SKIP_CHECK": "CKV_AZURE_35"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert process.returncode == 0
+    passed, errors, meta = json.loads(process.stdout)
+    assert not passed
+    assert meta["failed"] >= 1
+    assert any("CKV_AZURE_35" in error for error in errors)
+
+
+def test_explicit_changed_files_manifest_is_used_by_direct_cli(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    changed = repo / "changed-files.txt"
+    changed.write_text("infra/safe.bicep\n", encoding="utf-8")
+
+    assert main(["--repo-root", str(repo), "--changed-files-from", str(changed)]) == 0
+
+
+def test_full_catalogue_mode_can_use_diff_scoped_checkov_config(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "add", "infra"], cwd=repo, check=True)
+    commit = [
+        "git",
+        "-c",
+        "user.name=three-cubes-agent[bot]",
+        "-c",
+        "user.email=295831460+three-cubes-agent[bot]@users.noreply.github.com",
+        "commit",
+        "-qm",
+        "fixture base",
+    ]
+    subprocess.run(commit, cwd=repo, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    safe = repo / "infra" / "safe.bicep"
+    safe.write_text(safe.read_text(encoding="utf-8") + "\n// changed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "infra/safe.bicep"], cwd=repo, check=True)
+    subprocess.run(commit, cwd=repo, check=True)
+    rules = (
+        RuleEntry(
+            id="checkov_iac_security",
+            gate="checkov",
+            check="core:checkov_iac_security",
+            summary="IaC security",
+        ),
+    )
+
+    verdict = run(
+        rules,
+        mode="all",
+        repo_root=repo,
+        core_check_configs={"checkov_iac_security": {"scan_dir": "infra", "base_ref": base}},
+    )
+
+    assert verdict.ok
+    assert verdict.ran == 1
+
+
+def test_base_ref_rename_detects_unchanged_importer_of_old_module_path(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    modules = repo / "modules"
+    modules.mkdir()
+    (repo / "infra" / "unsafe.bicep").rename(modules / "old.bicep")
+    (repo / "infra" / "safe.bicep").write_text(
+        "module storage '../modules/old.bicep' = {\n  name: 'storage'\n}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "add", "infra", "modules"], cwd=repo, check=True)
+    commit = [
+        "git",
+        "-c",
+        "user.name=three-cubes-agent[bot]",
+        "-c",
+        "user.email=295831460+three-cubes-agent[bot]@users.noreply.github.com",
+        "commit",
+        "-qm",
+        "fixture",
+    ]
+    subprocess.run(commit, cwd=repo, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (modules / "old.bicep").rename(modules / "new.bicep")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(commit, cwd=repo, check=True)
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir="infra", base_ref=base).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "missing" in errors[0].lower()
+
+
+def test_staged_runner_passes_its_changed_files_to_checkov(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    rules = (
+        RuleEntry(
+            id="checkov_iac_security",
+            gate="checkov",
+            check="core:checkov_iac_security",
+            summary="IaC security",
+            staged_class="file-local",
+            staged_scope=("infra",),
+        ),
+    )
+
+    verdict = run(
+        rules,
+        mode="staged",
+        staged_files=["infra/safe.bicep"],
+        repo_root=repo,
+        core_check_configs={"checkov_iac_security": {"scan_dir": "infra"}},
+    )
+
+    assert verdict.ok
+    assert verdict.ran == 1
 
 
 def test_direct_cli_runs_the_real_scan_from_repository_root() -> None:

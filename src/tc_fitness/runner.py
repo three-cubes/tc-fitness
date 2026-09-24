@@ -561,7 +561,9 @@ def _core_check_config(entry: RuleEntry, cfg: RunnerConfig) -> Mapping[str, Any]
     return cfg.core_check_configs.get(module, {})
 
 
-def _load_core_check(entry: RuleEntry, cfg: RunnerConfig) -> Callable[[], int]:
+def _load_core_check(
+    entry: RuleEntry, cfg: RunnerConfig, changed_files: list[str] | None = None
+) -> Callable[[], int]:
     """Build the configured CORE rule for ``entry`` and return a zero-arg runner.
 
     Resolves the importable module (``tc_fitness.core_checks.<module>``), looks up
@@ -571,7 +573,10 @@ def _load_core_check(entry: RuleEntry, cfg: RunnerConfig) -> Callable[[], int]:
     runs the hard gate with the injected config."""
     module = importlib.import_module(core_module_name(entry))
     config = _core_check_config(entry, cfg)
-    rule = module.build(config, repo_root=cfg.repo_root)
+    build_kwargs: dict[str, Any] = {"repo_root": cfg.repo_root}
+    if changed_files is not None and "changed_files" in inspect.signature(module.build).parameters:
+        build_kwargs["changed_files"] = changed_files
+    rule = module.build(config, **build_kwargs)
 
     def _invoke() -> int:
         return int(rule.run())
@@ -588,7 +593,9 @@ def _print_paved_road(entry: RuleEntry, cfg: RunnerConfig) -> None:
         print(footer)
 
 
-def _run_one_inprocess(entry: RuleEntry, cfg: RunnerConfig) -> int | None:
+def _run_one_inprocess(
+    entry: RuleEntry, cfg: RunnerConfig, changed_files: list[str] | None = None
+) -> int | None:
     """Dispatch ``entry``'s pure-python check IN-PROCESS, sharing the context.
 
     Prints the ``run`` / ``PASS`` / ``FAIL`` framing the subprocess path prints,
@@ -615,7 +622,7 @@ def _run_one_inprocess(entry: RuleEntry, cfg: RunnerConfig) -> int | None:
             # ``[tool.tc_fitness.core_checks.<module>]`` config injected via the
             # module's ``build()`` — never through ``main([])`` (no config) nor
             # the non-existent subprocess script path.
-            check_main = _load_core_check(entry, cfg)
+            check_main = _load_core_check(entry, cfg, changed_files)
         else:
             check_main = _load_check_main(_module_name_for(entry))
         with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
@@ -1004,8 +1011,8 @@ def _run_staged_one(
             stack.enter_context(restrict_python_files(cfg.repo_root, scope_files))
             if cfg.enumeration_narrower is not None:
                 stack.enter_context(cfg.enumeration_narrower(cfg.repo_root, scope_files))
-            return _run_one_inprocess(entry, cfg)
-    return _run_one_inprocess(entry, cfg)
+            return _run_one_inprocess(entry, cfg, staged if staged else None)
+    return _run_one_inprocess(entry, cfg, staged if staged else None)
 
 
 def _dispatch_staged(

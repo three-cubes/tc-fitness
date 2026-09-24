@@ -308,6 +308,27 @@ in. [`docs/STANDARDS.md`](docs/STANDARDS.md) is the worked example
 (`deterministic_tests`); every shipped check binds through the same
 `[tool.tc_fitness.core_checks.<name>]` table.
 
+`core:checkov_iac_security` scans the whole configured IaC directory by
+default. For PR admission, set `base_ref` in its config to the target branch
+ref (for example `origin/main`). The check computes a single merge base and
+scans changed `.bicep` files, in-scope templates that import a changed or
+deleted local module, and their local module dependencies. An
+unresolvable or ambiguous base fails the check. This option narrows Checkov
+inside a full catalogue run; it does not change which tests or other checks run.
+
+```toml
+[tool.tc_fitness.core_checks.checkov_iac_security]
+scan_dir = "infra"
+framework = "bicep"
+base_ref = "origin/main"
+```
+
+The direct module CLI also accepts `--base-ref REF` or
+`--changed-files-from PATH` (newline-delimited repo-relative paths). The
+engine's staged mode supplies its changed-file list to this CORE check when
+it runs. A missing manifest, invalid path, parser failure, or missing local
+module is an error. No baseline or skip list is used.
+
 For deployable surfaces, `core:behavioural_evidence` prevents a static
 source-shape test from being credited as runtime proof. Consumers declare the
 critical surface globs plus claims that bind each surface to its executable and

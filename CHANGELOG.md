@@ -15,6 +15,14 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+### Added
+
+- `checkov_iac_security` can scan changed Bicep files, in-scope importers of
+  changed or deleted local modules, and their dependencies from a reviewed
+  `base_ref`, an explicit changed-file list, or
+  the engine's staged input. Full-tree scanning remains the default; the
+  diff-scoped option works inside a full catalogue run without skipping tests.
+
 ## [0.18.0] — 2026-09-23
 
 ### Added
