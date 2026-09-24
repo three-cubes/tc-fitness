@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -47,6 +49,152 @@ def _seed(tmp_path: Path, rel: str, body: str) -> Path:
     return p
 
 
+def _git_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    """Commit baseline source and expose it as the default remote-tracking ref."""
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    author_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test Maintainer",
+        "GIT_AUTHOR_EMAIL": "maintainer@example.test",
+        "GIT_COMMITTER_NAME": "Test Maintainer",
+        "GIT_COMMITTER_EMAIL": "maintainer@example.test",
+    }
+    for rel, body in files.items():
+        _seed(tmp_path, rel, body)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline"],
+        cwd=tmp_path,
+        env=author_env,
+        check=True,
+    )
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def _nested(depth: int) -> str:
+    lines = ["def f(value):"]
+    lines.extend(f"{'    ' * level}if value:" for level in range(1, depth + 1))
+    lines.append(f"{'    ' * (depth + 1)}return 1")
+    return "\n".join(lines) + "\n"
+
+
+def _configured_rule(
+    tmp_path: Path, *, threshold: int = 2, base_ref: str = "origin/main"
+) -> CognitiveComplexity:
+    return build({"roots": ["src"], "threshold": threshold, "base_ref": base_ref}, repo_root=tmp_path)
+
+
+def test_unchanged_legacy_function_above_threshold_passes(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/legacy.py": _nested(5)})
+
+    assert _configured_rule(repo).collect_violations() == set()
+
+
+def test_reducing_existing_complexity_is_allowed(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/legacy.py": _nested(5)})
+    (repo / "src/legacy.py").write_text("def f(value):\n    return bool(value)\n", encoding="utf-8")
+
+    assert _configured_rule(repo).collect_violations() == set()
+
+
+def test_increasing_existing_over_threshold_function_fails(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/legacy.py": _nested(3)})
+    (repo / "src/legacy.py").write_text(_nested(4), encoding="utf-8")
+
+    assert {path.as_posix() for path in _configured_rule(repo).collect_violations()} == {"src/legacy.py"}
+
+
+def test_qualified_class_identity_prevents_same_method_names_masking_regressions(tmp_path: Path) -> None:
+    def method(depth: int) -> str:
+        body = _nested(depth).replace("def f(value):", "def run(self, value):", 1)
+        return "\n".join(f"    {line}" if line else "" for line in body.splitlines()) + "\n"
+
+    baseline = "class A:\n" + method(3) + "\nclass B:\n" + method(3)
+    repo = _git_repo(tmp_path, {"src/service.py": baseline})
+    # Moving B above A must not make both methods collapse onto one bare `run` key.
+    current = "class B:\n" + method(4) + "\nclass A:\n" + method(3)
+    (repo / "src/service.py").write_text(current, encoding="utf-8")
+
+    assert {path.as_posix() for path in _configured_rule(repo).collect_violations()} == {"src/service.py"}
+
+
+def test_new_function_above_threshold_fails_even_in_existing_file(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/legacy.py": "def existing(value):\n    return value\n"})
+    with (repo / "src/legacy.py").open("a", encoding="utf-8") as source:
+        source.write("\n" + _nested(4).replace("def f(", "def added(", 1))
+
+    assert {path.as_posix() for path in _configured_rule(repo).collect_violations()} == {"src/legacy.py"}
+
+
+def test_new_untracked_file_is_included_from_working_tree(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/clean.py": "def f(value):\n    return value\n"})
+    _seed(repo, "src/new.py", _nested(4))
+
+    assert {path.as_posix() for path in _configured_rule(repo).collect_violations()} == {"src/new.py"}
+
+
+def test_staged_source_uses_materialized_content(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/legacy.py": "def f(value):\n    return value\n"})
+    _seed(repo, "src/legacy.py", _nested(4))
+    subprocess.run(["git", "add", "src/legacy.py"], cwd=repo, check=True)
+
+    assert {item.as_posix() for item in _configured_rule(repo).collect_violations()} == {"src/legacy.py"}
+
+
+def test_function_defined_inside_module_control_flow_is_checked(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/conditional.py": "VALUE = True\n"})
+    nested_function = "\n".join(f"    {line}" if line else "" for line in _nested(4).splitlines())
+    (repo / "src/conditional.py").write_text(f"if VALUE:\n{nested_function}\n", encoding="utf-8")
+
+    assert {path.as_posix() for path in _configured_rule(repo).collect_violations()} == {"src/conditional.py"}
+
+
+def test_method_in_class_defined_inside_control_flow_is_checked(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/conditional.py": "VALUE = True\n"})
+    nested_method = _nested(4).replace("def f(value):", "def render(self, value):", 1)
+    indented_method = "\n".join(f"        {line}" if line else "" for line in nested_method.splitlines())
+    source = f"if VALUE:\n    class Conditional:\n{indented_method}\n"
+    (repo / "src/conditional.py").write_text(source, encoding="utf-8")
+
+    assert {path.as_posix() for path in _configured_rule(repo).collect_violations()} == {"src/conditional.py"}
+
+
+def test_ignored_untracked_python_file_is_not_scanned(tmp_path: Path) -> None:
+    repo = _git_repo(
+        tmp_path,
+        {
+            ".gitignore": "src/ignored.py\n",
+            "src/clean.py": "def f(value):\n    return value\n",
+        },
+    )
+    _seed(repo, "src/ignored.py", _nested(4))
+
+    assert {path.relative_to(repo).as_posix() for path in _configured_rule(repo).enumerate_files()} == {
+        "src/clean.py"
+    }
+    assert _configured_rule(repo).collect_violations() == set()
+
+
+def test_below_threshold_function_and_deleted_function_pass(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"src/legacy.py": _nested(5) + "\ndef removed(value):\n    return value\n"})
+    (repo / "src/legacy.py").write_text(
+        "def current(value):\n    if value:\n        return 1\n    return 0\n", encoding="utf-8"
+    )
+
+    assert _configured_rule(repo).collect_violations() == set()
+
+
+@pytest.mark.parametrize("base_ref", ["missing-ref", "main;touch /tmp/unsafe"])
+def test_unresolvable_or_unsafe_base_fails_closed(
+    tmp_path: Path, base_ref: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _git_repo(tmp_path, {"src/clean.py": "def f(value):\n    return value\n"})
+
+    assert _configured_rule(repo, base_ref=base_ref).run() == 1
+    assert "base ref" in capsys.readouterr().out.lower()
+
+
 def test_detection_core_flags_complex(tmp_path: Path) -> None:
     p = _seed(tmp_path, "c.py", _COMPLEX)
     assert module_over_threshold(p, threshold=15) is True
@@ -60,9 +208,10 @@ def test_detection_core_clean(tmp_path: Path) -> None:
 def test_threshold_is_config_driven(tmp_path: Path) -> None:
     # A moderately-branchy function: clean at 15, flagged when the ceiling is 1.
     body = "def f(x):\n    if x:\n        return 1\n    return 0\n"
-    p = _seed(tmp_path, "m.py", body)
+    repo = _git_repo(tmp_path, {"m.py": "def f(x):\n    return x\n"})
+    p = _seed(repo, "m.py", body)
     assert module_over_threshold(p, threshold=15) is False
-    rule = build({"roots": ["."], "threshold": 0}, repo_root=tmp_path)
+    rule = build({"roots": ["."], "threshold": 0}, repo_root=repo)
     assert rule.file_has_violation(p) is True
 
 
@@ -152,22 +301,27 @@ def test_empty_else_paths_and_nested_function_definitions_are_scored(tmp_path: P
 
 
 def test_rule_from_config_scopes_roots(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/c.py", _COMPLEX)
-    _seed(tmp_path, "vendor/c.py", _COMPLEX)
-    rule = CognitiveComplexity.from_config({"roots": ["src"]}, repo_root=tmp_path)
+    repo = _git_repo(
+        tmp_path,
+        {"src/c.py": _SIMPLE, "vendor/c.py": _SIMPLE},
+    )
+    _seed(repo, "src/c.py", _COMPLEX)
+    _seed(repo, "vendor/c.py", _COMPLEX)
+    rule = CognitiveComplexity.from_config({"roots": ["src"]}, repo_root=repo)
     assert {str(p) for p in rule.collect_violations()} == {"src/c.py"}
 
 
 def test_main_accepts_repo_root_and_scans_it(tmp_path: Path) -> None:
-    _seed(tmp_path, "src/complex.py", _COMPLEX)
-    assert main(["--repo-root", str(tmp_path)]) == 0
+    repo = _git_repo(tmp_path, {"src/complex.py": _COMPLEX})
+    assert main(["--repo-root", str(repo)]) == 0
 
 
 def test_module_entrypoint_uses_repo_root_argument(tmp_path: Path) -> None:
     import tc_fitness.core_checks.cognitive_complexity as module
 
+    repo = _git_repo(tmp_path, {"src/complex.py": _COMPLEX})
     original_argv = sys.argv
-    sys.argv = ["cognitive_complexity", "--repo-root", str(tmp_path)]
+    sys.argv = ["cognitive_complexity", "--repo-root", str(repo)]
     try:
         with pytest.raises(SystemExit) as result:
             runpy.run_path(str(Path(module.__file__)), run_name="__main__")

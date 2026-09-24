@@ -15,6 +15,16 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-09-24
+
+### Changed
+
+- `cognitive_complexity` is now a baseline-free no-regression gate. It compares
+  qualified function scores with a configurable merge base, blocks new or
+  worsened over-threshold functions, includes nonignored untracked source, and
+  fails closed when the comparison ref cannot be established. Unchanged legacy
+  findings no longer require a committed exception list.
+
 ## [0.18.1] — 2026-09-24
 
 ### Added

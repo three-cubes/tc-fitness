@@ -1,0 +1,28 @@
+blob
+mark :1
+data <<SOURCE
+def evaluate(value):
+    return value > 0
+SOURCE
+
+commit refs/heads/main
+mark :2
+author Contract Fixture <fixture@example.invalid> 0 +0000
+committer Contract Fixture <fixture@example.invalid> 0 +0000
+data 4
+base
+M 100644 :1 src/example.py
+
+reset refs/remotes/origin/main
+from :2
+
+commit refs/heads/candidate
+mark :3
+author Contract Fixture <fixture@example.invalid> 0 +0000
+committer Contract Fixture <fixture@example.invalid> 0 +0000
+data 9
+candidate
+from :2
+M 100644 :1 src/example.py
+
+done
