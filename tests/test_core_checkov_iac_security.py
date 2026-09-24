@@ -32,7 +32,7 @@ CONTRACT_ROOT = Path(__file__).parent / "check_contracts" / "checkov_iac_securit
 
 def _iac_repo(tmp_path: Path) -> Path:
     infra = tmp_path / "infra"
-    infra.mkdir()
+    infra.mkdir(parents=True)
     for name, fixture in (("safe.bicep", "compliant"), ("unsafe.bicep", "violation")):
         shutil.copyfile(CONTRACT_ROOT / fixture / "infra" / "main.bicep", infra / name)
     return tmp_path
@@ -573,3 +573,233 @@ def test_checkov_report_paths_are_mapped_from_the_real_scan_root() -> None:
     assert _finding_path(finding, scan_path=scan_path, scan_dir="infra") == "infra/main.bicep"
     outside_scan_root = {**finding, "file_abs_path": "/outside/tree/main.bicep"}
     assert _finding_path(outside_scan_root, scan_path=scan_path, scan_dir="infra") == "infra/main.bicep"
+    assert (
+        _finding_path(
+            outside_scan_root,
+            scan_path=scan_path,
+            scan_dir="infra",
+            repo_root=CONTRACT_ROOT / "violation",
+        )
+        == "infra/main.bicep"
+    )
+
+
+@pytest.mark.parametrize("base_ref", ["", "--bad", "HEAD other"])
+def test_invalid_diff_base_fails_closed(tmp_path: Path, base_ref: str) -> None:
+    repo = _iac_repo(tmp_path)
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir="infra", base_ref=base_ref).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors == ["diff base is invalid"]
+
+
+def test_missing_git_fails_closed_before_scanning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _iac_repo(tmp_path)
+    monkeypatch.setenv("PATH", "")
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir="infra", base_ref="HEAD").evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors == ["diff cannot be computed: git is unavailable"]
+
+
+def test_unrelated_git_history_fails_closed(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "add", "infra"], cwd=repo, check=True)
+    commit = [
+        "git",
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "fixture",
+    ]
+    subprocess.run(commit, cwd=repo, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    subprocess.run(["git", "checkout", "-q", "--orphan", "unrelated"], cwd=repo, check=True)
+    (repo / "infra" / "safe.bicep").write_text(
+        (repo / "infra" / "safe.bicep").read_text(encoding="utf-8") + "\n// unrelated\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "infra"], cwd=repo, check=True)
+    subprocess.run(commit, cwd=repo, check=True)
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir="infra", base_ref=base).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors == ["diff base is missing or ambiguous"]
+
+
+def test_nonexistent_repository_fails_closed_on_git_process_error(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+
+    passed, errors, meta = CheckovIacSecurity(missing, scan_dir="infra", base_ref="HEAD").evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and errors[0].startswith("diff cannot be computed:")
+
+
+@pytest.mark.parametrize(
+    ("changed_files", "scan_dir", "message"),
+    [
+        (["infra/safe.bicep"], "../", "scan directory escapes the repository"),
+        ([""], "infra", "changed file path is invalid"),
+        (["/absolute.bicep"], "infra", "changed file path is invalid"),
+        (["../outside.bicep"], "infra", "changed file escapes the repository"),
+    ],
+)
+def test_affected_scan_rejects_unsafe_scope_inputs(
+    tmp_path: Path, changed_files: list[str], scan_dir: str, message: str
+) -> None:
+    repo = _iac_repo(tmp_path)
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir=scan_dir, changed_files=changed_files).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and message in errors[0]
+
+
+def test_affected_scan_rejects_conflicting_or_malformed_config(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    conflicting = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"], base_ref="HEAD"
+    )
+    malformed = build({"scan_dir": "infra", "changed_files": "infra/safe.bicep"}, repo_root=repo)
+
+    for rule, message in (
+        (conflicting, "changed files and diff base cannot both be set"),
+        (malformed, "changed files must be a list"),
+    ):
+        passed, errors, meta = rule.evaluate()
+        assert not passed
+        assert meta["execution_error"] is True
+        assert errors and message in errors[0]
+
+
+def test_affected_scan_with_no_changed_bicep_files_excludes_unchanged_findings(
+    tmp_path: Path,
+) -> None:
+    repo = _iac_repo(tmp_path)
+
+    passed, errors, meta = CheckovIacSecurity(repo, scan_dir="infra", changed_files=["README.md"]).evaluate()
+
+    assert passed
+    assert errors == []
+    assert meta["failed"] == 0
+
+
+def test_affected_scan_rejects_symlinked_bicep_outside_repository(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path / "repo")
+    outside = tmp_path / "outside.bicep"
+    outside.write_text("param name string\n", encoding="utf-8")
+    (repo / "infra" / "linked.bicep").symlink_to(outside)
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "escapes the repository" in errors[0]
+
+
+def test_affected_scan_rejects_directory_disguised_as_bicep_file(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    (repo / "infra" / "not-a-file.bicep").mkdir()
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "not a file" in errors[0]
+
+
+def test_affected_scan_rejects_local_module_outside_repository(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path / "repo")
+    (repo / "infra" / "safe.bicep").write_text(
+        "module outside '../../outside.bicep' = {\n  name: 'outside'\n}\n", encoding="utf-8"
+    )
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "module escapes the repository" in errors[0]
+
+
+def test_unreadable_changed_file_manifest_fails_closed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _iac_repo(tmp_path)
+
+    assert main(["--repo-root", str(repo), "--changed-files-from", str(repo / "missing.txt")]) == 2
+    assert "changed-file input cannot be read" in capsys.readouterr().out
+
+
+def test_changed_bicep_parser_failure_fails_closed(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    (repo / "infra" / "safe.bicep").write_text("module broken", encoding="utf-8")
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "Bicep dependency parsing failed" in errors[0]
+
+
+def test_remote_module_reference_is_not_treated_as_missing_local_dependency(
+    tmp_path: Path,
+) -> None:
+    repo = _iac_repo(tmp_path)
+    (repo / "infra" / "remote.bicep").write_text(
+        "module remote 'br/public:avm/res/storage/storage-account:0.1.0' = {\n"
+        "  name: 'remote'\n"
+        "  params: {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert passed
+    assert errors == []
+    assert meta["execution_error"] is False
+
+
+def test_cyclic_local_module_references_terminate_and_fail_closed(tmp_path: Path) -> None:
+    repo = _iac_repo(tmp_path)
+    (repo / "infra" / "safe.bicep").write_text(
+        "module unsafe './unsafe.bicep' = {\n  name: 'unsafe'\n}\n",
+        encoding="utf-8",
+    )
+    (repo / "infra" / "unsafe.bicep").write_text(
+        "module safe './safe.bicep' = {\n  name: 'safe'\n}\n",
+        encoding="utf-8",
+    )
+
+    passed, errors, meta = CheckovIacSecurity(
+        repo, scan_dir="infra", changed_files=["infra/safe.bicep"]
+    ).evaluate()
+
+    assert not passed
+    assert meta["execution_error"] is True
+    assert errors and "Checkov JSON report is missing results or summary" in errors[0]
