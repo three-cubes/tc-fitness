@@ -15,6 +15,8 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-09-24
+
 ### Added
 
 - `checkov_iac_security` can scan changed Bicep files, in-scope importers of
