@@ -15,6 +15,8 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-09-24
+
 ### Changed
 
 - `cognitive_complexity` is now a baseline-free no-regression gate. It compares
