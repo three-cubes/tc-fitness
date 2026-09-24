@@ -20,11 +20,9 @@ configurable. No repo paths or globs are baked in — the consumer supplies
 from __future__ import annotations
 
 import ast
-import io
 import re
 import shutil
 import subprocess
-import tarfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -193,6 +191,77 @@ def _regressed_functions(previous: dict[str, int], current: dict[str, int], *, t
     )
 
 
+def _tree_entries(payload: bytes, extensions: tuple[str, ...]) -> list[tuple[str, bytes]]:
+    """Return regular source paths and blob ids from ``git ls-tree -z`` output."""
+    entries: list[tuple[str, bytes]] = []
+    for record in payload.split(b"\x00"):
+        if not record:
+            continue
+        metadata, separator, raw_path = record.partition(b"\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3:
+            raise ValueError("git ls-tree returned a malformed record")
+        mode, kind, object_id = fields
+        path = raw_path.decode("utf-8", "surrogateescape")
+        if mode.startswith(b"100") and kind == b"blob" and path.endswith(extensions):
+            entries.append((path, object_id))
+    return entries
+
+
+def _batch_sources(payload: bytes, entries: list[tuple[str, bytes]]) -> dict[str, str]:
+    """Match ``git cat-file --batch`` blob output to tree paths."""
+    sources: dict[str, str] = {}
+    offset = 0
+    for path, expected_id in entries:
+        newline = payload.find(b"\n", offset)
+        if newline < 0:
+            raise ValueError("git cat-file returned a truncated header")
+        header = payload[offset:newline].split()
+        if len(header) != 3 or header[0] != expected_id or header[1] != b"blob":
+            raise ValueError("git cat-file returned an unexpected object")
+        try:
+            size = int(header[2])
+        except ValueError as exc:
+            raise ValueError("git cat-file returned an invalid object size") from exc
+        start = newline + 1
+        end = start + size
+        if end >= len(payload) or payload[end : end + 1] != b"\n":
+            raise ValueError("git cat-file returned truncated object content")
+        try:
+            sources[path] = payload[start:end].decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        offset = end + 1
+    if payload[offset:]:
+        raise ValueError("git cat-file returned trailing object content")
+    return sources
+
+
+def _path_changes(payload: bytes) -> tuple[dict[str, str], set[str]]:
+    """Return rename aliases and deleted paths from ``git diff --name-status -z``."""
+    fields = payload.split(b"\x00")
+    aliases: dict[str, str] = {}
+    deleted: set[str] = set()
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index].decode("ascii", "replace")
+        index += 1
+        if index >= len(fields):
+            raise ValueError("git diff returned a truncated path record")
+        old_path = fields[index].decode("utf-8", "surrogateescape")
+        index += 1
+        if status.startswith(("R", "C")):
+            if index >= len(fields):
+                raise ValueError("git diff returned a truncated rename record")
+            new_path = fields[index].decode("utf-8", "surrogateescape")
+            index += 1
+            if status.startswith("R"):
+                aliases[new_path] = old_path
+        elif status == "D":
+            deleted.add(old_path)
+    return aliases, deleted
+
+
 def module_over_threshold(path: Path, *, threshold: int) -> bool:
     """True iff any function in ``path`` scores above ``threshold``.
 
@@ -222,6 +291,8 @@ class CognitiveComplexity(FitnessRule):
     base_ref: str = DEFAULT_BASE_REF
     _base_error: str | None = None
     _scan_error: str | None = None
+    _baseline_aliases: dict[str, str]
+    _deleted_baseline_paths: set[str]
 
     @classmethod
     def from_config(
@@ -236,7 +307,19 @@ class CognitiveComplexity(FitnessRule):
         rule.base_ref = str(config.get("base_ref", DEFAULT_BASE_REF))
         rule._base_error = None
         rule._scan_error = None
+        rule._baseline_aliases = {}
+        rule._deleted_baseline_paths = set()
         return rule
+
+    def _previous_source(self, relative: str, current: str, baseline: dict[str, str]) -> tuple[str, str]:
+        """Return prior path/source, including an unchanged unstaged filesystem move."""
+        previous_path = self._baseline_aliases.get(relative, relative)
+        if previous_path != relative or relative in baseline:
+            return previous_path, baseline.get(previous_path, "")
+        exact_moves = [path for path in self._deleted_baseline_paths if baseline.get(path) == current]
+        if len(exact_moves) == 1:
+            previous_path = exact_moves[0]
+        return previous_path, baseline.get(previous_path, "")
 
     def file_has_violation(self, path: Path) -> bool:
         baseline = self._baseline_sources()
@@ -244,13 +327,17 @@ class CognitiveComplexity(FitnessRule):
             self._base_error = baseline
             return True
         relative = self._repo_relative(path).as_posix()
-        previous = _function_scores(baseline.get(relative, ""), filename=relative)
-        current = _function_scores(path.read_text(encoding="utf-8"), filename=relative)
+        current_text = path.read_text(encoding="utf-8")
+        previous_path, previous_text = self._previous_source(relative, current_text, baseline)
+        previous = _function_scores(previous_text, filename=previous_path)
+        current = _function_scores(current_text, filename=relative)
         return _regressed_functions(previous, current, threshold=self.threshold)
 
     def enumerate_files(self) -> list[Path]:
         """Enumerate tracked and nonignored untracked source from the index view."""
         self._scan_error = None
+        if not self._roots:
+            return []
         git = shutil.which("git")
         if git is None:
             self._scan_error = "git is unavailable; install git to enumerate source files"
@@ -286,7 +373,11 @@ class CognitiveComplexity(FitnessRule):
         return sorted(paths)
 
     def _baseline_sources(self) -> dict[str, str] | str:
-        """Read scoped source from one immutable merge-base archive or return its error."""
+        """Read scoped source from one immutable raw merge-base tree."""
+        self._baseline_aliases = {}
+        self._deleted_baseline_paths = set()
+        if not self._roots:
+            return {}
         if not _SAFE_REF_RE.fullmatch(self.base_ref) or self.base_ref.startswith("-"):
             return f"base ref is unsafe or invalid: {self.base_ref!r}; set a valid base_ref"
         git = shutil.which("git")
@@ -315,22 +406,49 @@ class CognitiveComplexity(FitnessRule):
         if merge_base.returncode or len(bases) != 1:
             detail = merge_base.stderr.strip() or "merge base is missing or ambiguous"
             return f"could not establish one merge base with {self.base_ref}: {detail}"
-        command = [git, "archive", "--format=tar", bases[0], *self._roots]
-        archive = subprocess.run(command, cwd=self._repo_root, capture_output=True, check=False)  # noqa: S603  # resolved commit and configured repo paths
-        if archive.returncode:
-            detail = archive.stderr.decode("utf-8", "replace").strip() or "git archive failed"
-            return f"could not read files at merge base with {self.base_ref}: {detail}"
+        tree = subprocess.run(  # noqa: S603  # resolved commit and configured repo paths
+            [git, "ls-tree", "-r", "-z", "--full-tree", bases[0], "--", *self._roots],
+            cwd=self._repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if tree.returncode:
+            detail = tree.stderr.decode("utf-8", "replace").strip() or "git ls-tree failed"
+            return f"could not enumerate files at merge base with {self.base_ref}: {detail}"
         try:
-            with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as snapshot:
-                return {
-                    member.name: extracted.read().decode("utf-8")
-                    for member in snapshot.getmembers()
-                    if member.isfile()
-                    and member.name.endswith(self._extensions)
-                    and (extracted := snapshot.extractfile(member)) is not None
-                }
-        except (tarfile.TarError, UnicodeDecodeError) as exc:
-            return f"could not decode the {self.base_ref} source snapshot: {exc}"
+            entries = _tree_entries(tree.stdout, self._extensions)
+        except ValueError as exc:
+            return f"could not decode the {self.base_ref} source tree: {exc}"
+        sources: dict[str, str] = {}
+        if entries:
+            blobs = subprocess.run(  # noqa: S603  # object ids came from the resolved tree
+                [git, "cat-file", "--batch"],
+                cwd=self._repo_root,
+                input=b"".join(object_id + b"\n" for _, object_id in entries),
+                capture_output=True,
+                check=False,
+            )
+            if blobs.returncode:
+                detail = blobs.stderr.decode("utf-8", "replace").strip() or "git cat-file failed"
+                return f"could not read files at merge base with {self.base_ref}: {detail}"
+            try:
+                sources = _batch_sources(blobs.stdout, entries)
+            except ValueError as exc:
+                return f"could not decode the {self.base_ref} source tree: {exc}"
+        renamed = subprocess.run(  # noqa: S603  # resolved commit and configured repo paths
+            [git, "diff", "--name-status", "-z", "--find-renames", bases[0], "--", *self._roots],
+            cwd=self._repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if renamed.returncode:
+            detail = renamed.stderr.decode("utf-8", "replace").strip() or "git diff failed"
+            return f"could not compare paths with merge base {self.base_ref}: {detail}"
+        try:
+            self._baseline_aliases, self._deleted_baseline_paths = _path_changes(renamed.stdout)
+        except ValueError as exc:
+            return f"could not decode path changes from merge base {self.base_ref}: {exc}"
+        return sources
 
     def collect_violations(self) -> set[Path]:
         """Compare working-tree files, including staged and untracked content."""
@@ -349,7 +467,8 @@ class CognitiveComplexity(FitnessRule):
                 current_text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            previous = _function_scores(baseline.get(relative, ""), filename=relative)
+            previous_path, previous_text = self._previous_source(relative, current_text, baseline)
+            previous = _function_scores(previous_text, filename=previous_path)
             current = _function_scores(current_text, filename=relative)
             if _regressed_functions(previous, current, threshold=self.threshold):
                 violations.add(self._repo_relative(path))

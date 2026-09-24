@@ -78,7 +78,9 @@ def test_unavailable_base_ref_is_reported(tmp_path: Path, monkeypatch: pytest.Mo
     assert "base ref is unavailable" in result
 
 
-def test_archive_failure_includes_git_diagnostic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tree_listing_failure_includes_git_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(cognitive_complexity.shutil, "which", lambda _: "/usr/bin/git")
     calls = iter(
         [
@@ -92,42 +94,17 @@ def test_archive_failure_includes_git_diagnostic(tmp_path: Path, monkeypatch: py
     result = _rule(tmp_path)._baseline_sources()
 
     assert isinstance(result, str)
-    assert "could not read files at merge base" in result
+    assert "could not enumerate files at merge base" in result
     assert "pathspec did not match" in result
 
 
-@pytest.mark.parametrize(
-    ("archive_bytes", "expected"),
-    [
-        (b"not a tar archive", "could not decode the origin/main source snapshot"),
-        # A valid tar containing invalid UTF-8 exercises source decoding after archive parsing.
-        (b"", "could not decode the origin/main source snapshot"),
-    ],
-)
-def test_invalid_archive_and_source_bytes_are_rejected(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    archive_bytes: bytes,
-    expected: str,
-) -> None:
-    if archive_bytes == b"":
-        import io
-        import tarfile
-
-        archive = io.BytesIO()
-        with tarfile.open(fileobj=archive, mode="w") as snapshot:
-            payload = b"def f():\n    return \xff\n"
-            info = tarfile.TarInfo("src/bad.py")
-            info.size = len(payload)
-            snapshot.addfile(info, io.BytesIO(payload))
-        archive_bytes = archive.getvalue()
-
+def test_malformed_tree_output_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cognitive_complexity.shutil, "which", lambda _: "/usr/bin/git")
     calls = iter(
         [
             _completed(0, stdout="commit\n"),
             _completed(0, stdout="merge-base\n"),
-            _completed(0, stdout=archive_bytes),
+            _completed(0, stdout=b"not a tree record"),
         ]
     )
     monkeypatch.setattr(cognitive_complexity.subprocess, "run", lambda *args, **kwargs: next(calls))
@@ -135,7 +112,64 @@ def test_invalid_archive_and_source_bytes_are_rejected(
     result = _rule(tmp_path)._baseline_sources()
 
     assert isinstance(result, str)
-    assert expected in result
+    assert "could not decode the origin/main source tree" in result
+
+
+def test_blob_read_failure_includes_git_diagnostic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cognitive_complexity.shutil, "which", lambda _: "/usr/bin/git")
+    tree = b"100644 blob abcdef\tsrc/example.py\x00"
+    calls = iter(
+        [
+            _completed(0, stdout="commit\n"),
+            _completed(0, stdout="merge-base\n"),
+            _completed(0, stdout=tree),
+            _completed(128, stderr=b"object unavailable"),
+        ]
+    )
+    monkeypatch.setattr(cognitive_complexity.subprocess, "run", lambda *args, **kwargs: next(calls))
+
+    result = _rule(tmp_path)._baseline_sources()
+
+    assert isinstance(result, str)
+    assert "could not read files at merge base" in result
+    assert "object unavailable" in result
+
+
+def test_malformed_blob_batch_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cognitive_complexity.shutil, "which", lambda _: "/usr/bin/git")
+    tree = b"100644 blob abcdef\tsrc/example.py\x00"
+    calls = iter(
+        [
+            _completed(0, stdout="commit\n"),
+            _completed(0, stdout="merge-base\n"),
+            _completed(0, stdout=tree),
+            _completed(0, stdout=b"abcdef blob invalid-size\n"),
+        ]
+    )
+    monkeypatch.setattr(cognitive_complexity.subprocess, "run", lambda *args, **kwargs: next(calls))
+
+    result = _rule(tmp_path)._baseline_sources()
+
+    assert isinstance(result, str)
+    assert "could not decode the origin/main source tree" in result
+
+
+def test_rename_diff_failure_includes_git_diagnostic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cognitive_complexity.shutil, "which", lambda _: "/usr/bin/git")
+    calls = iter(
+        [
+            _completed(0, stdout="commit\n"),
+            _completed(0, stdout="merge-base\n"),
+            _completed(0, stdout=b""),
+            _completed(128, stderr=b"diff failed"),
+        ]
+    )
+    monkeypatch.setattr(cognitive_complexity.subprocess, "run", lambda *args, **kwargs: next(calls))
+
+    result = _rule(tmp_path)._baseline_sources()
+
+    assert isinstance(result, str)
+    assert "could not compare paths with merge base" in result
 
 
 @pytest.mark.parametrize("failure", [OSError("git missing"), subprocess.TimeoutExpired("git", 30)])
