@@ -202,6 +202,7 @@ def test_optional_step_fields_default(tmp_path: Path) -> None:
     assert step.stage is None
     assert step.depends_on == ()
     assert step.tags == ()
+    assert step.paths == ()
 
 
 def test_stage_depends_on_tags_parse(tmp_path: Path) -> None:
@@ -439,3 +440,25 @@ def test_load_core_check_configs_from_dedicated_file(tmp_path: Path) -> None:
 
 def test_load_core_check_configs_no_config_file_is_empty(tmp_path: Path) -> None:
     assert load_core_check_configs(tmp_path) == {}
+
+
+def test_paths_parse_as_a_tuple_of_patterns(tmp_path: Path) -> None:
+    cfg = parse_config_table(
+        "[[steps]]\nid = 'm'\npaths = ['memory/*', 'Makefile']\nrun = ['true']\n", tmp_path
+    )
+    assert cfg.steps[0].paths == ("memory/*", "Makefile")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["", "/src/*", "../outside/*", "src/../../outside", "C:/src/*", "..\\outside\\*", "\\\\server\\share\\*"],
+)
+def test_paths_must_be_repo_relative(tmp_path: Path, pattern: str) -> None:
+    """A pattern no repo-relative file can match would skip its step on every affected run."""
+    with pytest.raises(GateConfigError, match="not a repo-relative glob"):
+        parse_config_table(f"[[steps]]\nid = 'm'\npaths = ['{pattern}']\nrun = ['true']\n", tmp_path)
+
+
+def test_paths_must_be_a_list_of_strings(tmp_path: Path) -> None:
+    with pytest.raises(GateConfigError, match="paths"):
+        parse_config_table("[[steps]]\nid = 'm'\npaths = 'memory/*'\nrun = ['true']\n", tmp_path)

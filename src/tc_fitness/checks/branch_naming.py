@@ -64,6 +64,10 @@ DEFAULT_EXEMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^gh-pages$"),
     re.compile(r"^renovate/"),  # Renovate
     re.compile(r"^dependabot/"),  # Dependabot
+    # GitHub merge-queue branches (gh-readonly-queue/<base>/pr-<n>-<sha>): created
+    # by GitHub, never named by a person; the org branch-naming ruleset exempts
+    # them too. Without this every merge-queue run fails the gate.
+    re.compile(r"^gh-readonly-queue/"),
     # Conventional Branch operational prefixes (conventionalbranch.org): denote
     # operational work that need not map to a Linear item, matching the org
     # branch-naming ruleset. Linear feature branches still use the

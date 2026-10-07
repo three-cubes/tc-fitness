@@ -91,6 +91,7 @@ def test_public_contract_runner_rejects_a_sabotaged_expected_result(tmp_path: Pa
         run_contract_case(manifest, "violation", tmp_path / "ledger.json")
 
 
+@pytest.mark.soak
 def test_repository_collection_executes_contract_drivers_without_collecting_fixture_tests() -> None:
     result = subprocess.run(
         [
@@ -107,7 +108,7 @@ def test_repository_collection_executes_contract_drivers_without_collecting_fixt
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=300,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr

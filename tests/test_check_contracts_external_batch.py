@@ -90,6 +90,7 @@ def test_scanner_protocol_contracts_are_explicitly_non_admissible(
     assert not ledger["release_admission"]
 
 
+@pytest.mark.soak
 def test_checkov_contract_runs_the_pinned_scanner_against_real_iac_fixtures(tmp_path: Path) -> None:
     """The Checkov contract calls the installed scanner, not a protocol double."""
     contract_path = CONTRACTS_ROOT / "checkov_iac_security" / "contract.yaml"
@@ -105,6 +106,7 @@ def test_checkov_contract_runs_the_pinned_scanner_against_real_iac_fixtures(tmp_
         assert ledger["actual"]["status"] == ledger["expected"]["status"]
 
 
+@pytest.mark.soak
 def test_contract_fixture_registry_is_not_collected_as_an_outer_test_suite() -> None:
     """Only registry drivers are tests; files below a contract manifest are fixture data."""
     result = subprocess.run(

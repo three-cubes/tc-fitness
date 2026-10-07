@@ -236,6 +236,7 @@ def receipt_pair(root: Path, output: Path) -> tuple[dict[str, object], Path, Pat
     return config, accepted_dir / "receipt.json", current_dir / "receipt.json"
 
 
+@pytest.mark.soak
 def test_public_producer_and_admission_accept_current_exact_source(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()

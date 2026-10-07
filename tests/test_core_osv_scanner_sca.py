@@ -131,11 +131,14 @@ def test_vulnerability_ids_are_deduplicated_and_blank_ids_are_ignored() -> None:
     assert vulnerability_ids(report) == ["GHSA-1", "GHSA-2"]
 
 
+@pytest.mark.soak
 def test_real_osv_scanner_executes_against_the_repository_lockfile() -> None:
     scanner = shutil.which("osv-scanner")
     if scanner is None:
         pytest.skip("real OSV scanner is installed by the SCA development/CI toolchain")
-    repo_root = Path(__file__).parents[1]
+    # The lockfile that governs this package: its own in a standalone checkout,
+    # the workspace lock when the package is a workspace member.
+    repo_root = next(p for p in Path(__file__).resolve().parents if (p / "uv.lock").is_file())
     probe = subprocess.run([scanner, "--version"], capture_output=True, text=True, check=True, timeout=10)
     version = probe.stdout + probe.stderr
     expected_version = version.split("version:", 1)[1].splitlines()[0].strip()

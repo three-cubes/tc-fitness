@@ -15,7 +15,7 @@ def test_default_wheel_install_parses_a_check_contract(tmp_path: Path) -> None:
     """A clean default install includes the YAML parser required by the contract API."""
     dist = tmp_path / "dist"
     build = subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(dist)],
+        ["uv", "build", str(Path(__file__).resolve().parents[1]), "--wheel", "--out-dir", str(dist)],
         check=False,
         capture_output=True,
         text=True,

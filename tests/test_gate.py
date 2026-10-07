@@ -871,6 +871,32 @@ def test_in_memory_configuration_has_no_file_banner(repo: Path, capsys: pytest.C
     assert "(config:" not in _plain(capsys.readouterr().out)
 
 
+def test_an_in_memory_step_prints_remediation_without_a_source(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A step built in code has no declaring file, so its FAIL names none."""
+    from tc_fitness.gate_config import GateConfig, StepSpec
+
+    config = GateConfig(name="in-memory", steps=(StepSpec(id="bad", run=("false",), next="rerun it"),))
+
+    assert run_gate(config, repo).gating_failures == ["bad"]
+    out = _plain(capsys.readouterr().out)
+    assert "next: rerun it" in out
+    assert "declared in:" not in out
+
+
+def test_a_failing_step_with_no_remediation_prints_none(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tc_fitness.gate_config import GateConfig, StepSpec
+
+    config = GateConfig(name="in-memory", steps=(StepSpec(id="bad", run=("false",)),))
+
+    assert run_gate(config, repo).gating_failures == ["bad"]
+    out = _plain(capsys.readouterr().out).split("=== in-memory")[0]
+    assert "fix:" not in out and "next:" not in out and "declared in:" not in out
+
+
 def test_scheduled_shard_reaches_opted_in_command(repo: Path) -> None:
     marker = repo / "marker.txt"
     (repo / "probe.py").write_text(
@@ -901,3 +927,111 @@ def test_module_entrypoint_runs_public_gate(repo: Path) -> None:
 
     assert result.returncode == 0
     assert "PASS [ok]" in _plain(result.stdout)
+
+
+# ── path-scoped steps (--affected-from) ─────────────────────────────────────
+
+
+_SCOPED = (
+    '[[steps]]\nid = "everywhere"\nrun = ["true"]\n'
+    '[[steps]]\nid = "memory"\npaths = ["memory/*"]\nrun = ["false"]\n'
+)
+
+
+def test_a_scoped_step_skips_when_no_affected_file_matches(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(repo, _SCOPED)
+    outcome = run_gate(load_config(repo), repo, affected_files=["execution/pipelines/README.md"])
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert "SKIP [memory]" in out and "no affected file under memory/*" in out
+    assert "PASS [everywhere]" in out
+
+
+def test_a_scoped_step_runs_and_gates_when_an_affected_file_matches(repo: Path) -> None:
+    _write_config(repo, _SCOPED)
+    outcome = run_gate(load_config(repo), repo, affected_files=["memory/kairix/search.py"])
+    assert not outcome.ok
+    assert outcome.gating_failures == ["memory"]
+
+
+def test_a_root_config_change_runs_every_scoped_step(repo: Path) -> None:
+    """The root config can change any step's command or scope, so its change runs them all."""
+    _write_config(repo, _SCOPED)
+    outcome = run_gate(load_config(repo), repo, affected_files=[".tc-fitness.toml"])
+    assert outcome.gating_failures == ["memory"]
+
+
+def test_an_in_memory_config_has_no_root_file_to_change(repo: Path) -> None:
+    """A config built in code is read from no file, so no affected file can be it."""
+    from tc_fitness.gate_config import GateConfig, StepSpec
+
+    config = GateConfig(name="in-memory", steps=(StepSpec(id="memory", run=("false",), paths=("memory/*",)),))
+
+    assert run_gate(config, repo, affected_files=["pyproject.toml"]).ok
+
+
+def test_a_root_config_outside_the_repository_does_not_run_every_scoped_step(tmp_path: Path) -> None:
+    """A config read from another checkout is not one of this repository's changed files."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _write_config(elsewhere, _SCOPED)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    outcome = run_gate(load_config(elsewhere), checkout, affected_files=["README.md"])
+
+    assert outcome.ok
+
+
+def test_an_affected_list_that_is_not_utf8_is_a_config_error(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(repo, _SCOPED)
+    affected = repo / "affected.txt"
+    affected.write_bytes(b"\xff\xfe not utf-8\n")
+
+    assert main(["run", "--repo-root", str(repo), "--affected-from", str(affected)]) == 2
+    err = _plain(capsys.readouterr().err)
+    assert "FAIL --affected-from" in err
+    assert "git diff --no-renames --name-only" in err
+
+
+def test_without_a_change_set_every_scoped_step_runs(repo: Path) -> None:
+    _write_config(repo, _SCOPED)
+    assert run_gate(load_config(repo), repo).gating_failures == ["memory"]
+
+
+def test_scoped_steps_skip_inside_the_staged_scheduler_too(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "lint"\nstage = "static"\nrun = ["true"]\n'
+        '[[steps]]\nid = "memory"\nstage = "static"\npaths = ["memory/*"]\nrun = ["false"]\n'
+        '[[steps]]\nid = "tests"\nstage = "test"\ndepends_on = ["static"]\nrun = ["true"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo, affected_files=["assurance/checks/x.py"])
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert "SKIP [memory]" in out and "PASS [tests]" in out
+
+
+def test_affected_from_reads_the_change_set_from_a_file(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(repo, _SCOPED)
+    changes = repo / "changed.txt"
+    changes.write_text("README.md\n\nexecution/x.yml\n", encoding="utf-8")
+    assert main(["run", "--repo-root", str(repo), "--affected-from", str(changes)]) == 0
+    changes.write_text("memory/tests/test_x.py\n", encoding="utf-8")
+    assert main(["run", "--repo-root", str(repo), "--affected-from", str(changes)]) == 1
+
+
+def test_an_unreadable_affected_list_is_a_config_error(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(repo, _SCOPED)
+    assert main(["run", "--repo-root", str(repo), "--affected-from", str(repo / "missing.txt")]) == 2
+    assert "fix:" in capsys.readouterr().err

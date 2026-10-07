@@ -131,8 +131,8 @@ def parse_overrides(
     are ignored. Each match becomes an :class:`Override` with ``vague`` computed
     via :func:`is_vague_reason`. ``min_len`` is forwarded to
     :func:`is_vague_reason` and defaults to :data:`OVERRIDE_MIN_REASON_LEN`
-    (=40), so the v0.1.0 call shape is unchanged; pass ``min_len=10`` for
-    tc-agent-zone's shell-directive floor.
+    (=40), so the v0.1.0 call shape is unchanged; pass ``min_len=10`` for a
+    shell-directive floor.
     """
     out: list[Override] = []
     for line in (text or "").splitlines():
