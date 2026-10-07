@@ -97,13 +97,11 @@ this repo's contributor specifics live in [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Green auto-merges — except here.** The platform default is auto-merge on a
   green gate: the App arms `gh pr merge --auto` and GitHub merges the moment every
   required check (the fan-in Quality gate + SonarCloud) passes, with no human
-  running the merge. Because it IS the gate engine,
-  [`.github/CODEOWNERS`](.github/CODEOWNERS) owns the control-plane paths — the
-  engine source (`src/tc_fitness/`), its config and pins (`pyproject.toml`,
-  `uv.lock`, `.python-version`, `.uv-version`), CI (`.github/`), and the licence
-  — so a PR touching any of those **holds for a maintainer review and does not auto-merge**;
-  a docs-, test-, or CHANGELOG-only PR auto-merges on green like any other. An
-  agent must never be able to weaken the gate that gates it.
+  running the merge. Because it IS the gate engine, the engine is developed in
+  the `three-cubes/agent-platform` repository under `assurance/fitness/`, where
+  CODEOWNERS holds every engine path for a maintainer review; this public
+  repository is a one-way export of that directory. An agent must never be able
+  to weaken the gate that gates it.
 - **Red you fix.** A failing check is never bypassed. If it fails, you fix your
   change — you do not force it in. Green on your laptop but red in CI is a bug in
   the local setup; fix the setup, do not force the merge.
@@ -253,6 +251,36 @@ across runners and `coverage combine` the shard files into one report — the
 composes with `--only`, `--staged` and `--changed-files-from`). This is the
 fast-feedback entrypoint kairix's `safe-commit.sh --check` builds on, with
 `--changed-files-from` as the GitHub Actions companion.
+
+### Fragments: steps and scopes owned where they apply
+
+`include` names TOML fragments by repo-root-relative glob, so each part of a
+repository declares its own steps and CORE-check scopes in a file it owns:
+
+```toml
+[tool.tc_fitness]
+include = ["capabilities/fitness.toml", "agents/fitness.toml"]
+```
+
+```toml
+# capabilities/fitness.toml — no [tool.tc_fitness] prefix
+[[steps]]
+id = "skill-frontmatter"
+run = ["python", "assurance/checks/skill_frontmatter_required.py"]   # repo-root-relative
+
+[core_checks.every_test_has_tier_marker]
+roots = ["capabilities/skills"]
+```
+
+A fragment holds only `[[steps]]` and `[core_checks.<name>]`; `include`, `name`,
+`fail_fast` and `max_workers` stay in the root. Paths inside a fragment (`run`,
+`cwd`, `paths`, `checks_dir`) are repo-root-relative. The resolved config is the
+root steps, then each fragment's steps in sorted path order; a step id declared
+twice is an error naming both files; `core_checks` lists union in order with
+duplicates dropped, and a scalar declared in two files must be equal. A pattern
+that matches nothing is allowed; an absolute or `..` pattern is an error. `**`
+recurses through the whole tree, so prefer patterns that name each fragment's
+directory. A failing step prints `declared in: <file>` under its `fix:`/`next:`.
 
 ### CORE checks
 

@@ -161,7 +161,6 @@ def test_loader_preserves_exact_source_bytes(tmp_path: Path) -> None:
 
 
 def test_yaml_duplicate_keys_are_rejected(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
     (tmp_path / "contract.yaml").write_text(
         "schema: tc-fitness/runtime-contract/v1\nschema: duplicate\n",
         encoding="utf-8",
@@ -175,7 +174,6 @@ def test_yaml_duplicate_keys_are_rejected(tmp_path: Path) -> None:
 
 
 def test_yaml_repeated_container_aliases_are_rejected_before_expansion(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
     aliases = ["seed: &level0 [value]"]
     for level in range(1, 19):
         aliases.append(f"level{level}: &level{level} [*level{level - 1}, *level{level - 1}]")

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "three-cubes-fitness"
-version = "0.19.0"
+version = "0.21.1"
 description = "Shared architecture-fitness primitives and the single runnable quality gate for Three Cubes repositories: hard-gating checks, agent-actionable diagnostics, the unified ratchet grammar, and catalogue-driven local/CI orchestration."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -37,7 +37,7 @@ classifiers = [
 # reports its version and degrades legibly.
 dependencies = [
     "coverage>=7.10",
-    "diff-cover>=9.2,<10",
+    "diff-cover>=9.2,<11",
     "packaging>=23.2",
     "PyYAML>=6.0",
 ]
@@ -52,9 +52,9 @@ tc-fitness-runtime-contract = "tc_fitness.runtime_contract:main"
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
-  "ruff>=0.15,<0.16",
+  "ruff>=0.15,<0.17",
   "mypy>=1.11",
-  "checkov==3.2.531",
+  "checkov==3.3.20",
 ]
 
 [tool.uv]
@@ -75,6 +75,7 @@ markers = [
   "contract: public input/output or protocol contract using controlled local collaborators",
   "integration: real package, filesystem, Git or child-process composition",
   "e2e: installed distribution through its supported user entrypoint",
+  "soak: slow cross-process work; runs in the nightly tier only; stacks on a tier marker",
 ]
 
 [tool.ruff]

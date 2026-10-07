@@ -164,7 +164,6 @@ def test_gate_keys_does_not_relativise_keys(tmp_path: Path) -> None:
 
 
 def test_load_yaml_success(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
     f = tmp_path / "ok.yaml"
     f.write_text("a: 1\nb: two\n")
     data, err = load_yaml(f)
@@ -173,7 +172,6 @@ def test_load_yaml_success(tmp_path: Path) -> None:
 
 
 def test_load_yaml_empty_returns_empty_dict(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
     f = tmp_path / "empty.yaml"
     f.write_text("")
     data, err = load_yaml(f)
@@ -182,7 +180,6 @@ def test_load_yaml_empty_returns_empty_dict(tmp_path: Path) -> None:
 
 
 def test_load_yaml_malformed_returns_error(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
     f = tmp_path / "bad.yaml"
     f.write_text("a: [unterminated\n")
     data, err = load_yaml(f)

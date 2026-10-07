@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import fnmatch
 import io
 import os
 import shutil
@@ -127,6 +128,8 @@ def _fix_next_text(step: StepSpec) -> str:
         lines.append(f"   fix: {step.fix}\n")
     if step.next:
         lines.append(f"   next: {step.next}\n")
+    if step.source is not None:
+        lines.append(f"   declared in: {step.source.as_posix()}\n")
     return "".join(lines)
 
 
@@ -356,6 +359,7 @@ def run_gate(
     changed_files: list[str] | None = None,
     shard: tuple[int, int] | None = None,
     tier: str | None = None,
+    affected_files: list[str] | None = None,
 ) -> GateOutcome:
     """Run the configured steps in order; return the aggregate outcome.
 
@@ -370,6 +374,10 @@ def run_gate(
     companion to the local staged smoke. The cheap legs (lint / format /
     branch-naming) run verbatim.
 
+    ``affected_files`` is the change under evaluation. A step that declares
+    ``paths`` runs only when one of those files matches them; the change set never
+    alters how the steps that do run evaluate. ``None`` runs every step.
+
     ``fail_fast`` (from the config) stops at the first gating failure.
     """
     fast_mode = staged or changed_files is not None
@@ -382,6 +390,8 @@ def run_gate(
     print(f"=== {banner} ===")
     if cfg.source is not None:
         print(f"    (config: {cfg.source})")
+    if cfg.fragments:
+        print(f"    (fragments: {', '.join(f.as_posix() for f in cfg.fragments)})")
 
     selected = cfg.steps
     if only:
@@ -427,6 +437,9 @@ def run_gate(
             _print_aggregate(cfg, outcome)
             return outcome
 
+    if affected_files is not None and _root_config_changed(cfg, repo_root, affected_files):
+        # The root config can change any step, and which fragments are read.
+        affected_files = None
     runner = _run_scheduled if _has_stages(selected) else _run_sequential
     outcome = runner(
         cfg,
@@ -437,10 +450,40 @@ def run_gate(
         changed_files=changed_files,
         shard=shard,
         fast_mode=fast_mode,
+        affected=affected_files,
     )
 
     _print_aggregate(cfg, outcome)
     return outcome
+
+
+def _root_config_changed(cfg: GateConfig, repo_root: Path, affected: list[str]) -> bool:
+    """Whether the affected files include the root gate config."""
+    if cfg.source is None:
+        return False
+    try:
+        rel = cfg.source.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return False
+    return rel in affected
+
+
+def _skip_reason(step: StepSpec, *, fast_mode: bool, affected: list[str] | None) -> str | None:
+    """Why ``step`` does not run in this invocation, or ``None`` when it runs."""
+    if fast_mode and step.skip_when_staged:
+        return "skip_when_staged — not in the <60s smoke"
+    if (
+        affected is not None
+        and step.paths
+        # The file that declares a step can change its command or scope.
+        and not (step.source is not None and step.source.as_posix() in affected)
+        and not any(fnmatch.fnmatchcase(path, pattern) for path in affected for pattern in step.paths)
+    ):
+        return (
+            f"no affected file under {', '.join(step.paths)}; "
+            "run without --affected-from to evaluate it anyway"
+        )
+    return None
 
 
 def _has_stages(steps: Sequence[StepSpec]) -> bool:
@@ -460,14 +503,16 @@ def _run_sequential(
     changed_files: list[str] | None,
     shard: tuple[int, int] | None,
     fast_mode: bool,
+    affected: list[str] | None = None,
 ) -> GateOutcome:
     """Today's path (v0.9.0): run ``selected`` sequentially, LIVE, in registration
     order. Physically preserved so a config without stages is byte-identical."""
     outcome = GateOutcome()
     for step in selected:
-        if fast_mode and step.skip_when_staged:
+        reason = _skip_reason(step, fast_mode=fast_mode, affected=affected)
+        if reason is not None:
             label = step.summary or step.id
-            print(f"{_YELLOW}SKIP [{step.id}]{_RESET} {label} (skip_when_staged — not in the <60s smoke)")
+            print(f"{_YELLOW}SKIP [{step.id}]{_RESET} {label} ({reason})")
             outcome.results.append(StepResult(step.id, "skip"))
             continue
         result = _run_step(
@@ -505,6 +550,7 @@ def _run_scheduled(
     changed_files: list[str] | None,
     shard: tuple[int, int] | None,
     fast_mode: bool,
+    affected: list[str] | None = None,
 ) -> GateOutcome:
     """Concern-parallel path: group ``selected`` into stages (dependency order),
     run each stage's members concurrently — subprocess legs on a bounded pool,
@@ -513,7 +559,8 @@ def _run_scheduled(
     stages: tuple[Stage, ...] = plan_stages(selected, strict=False)
     outcome = GateOutcome()
     for stage in stages:
-        runnable = [s for s in stage.steps if not (fast_mode and s.skip_when_staged)]
+        reasons = {s.id: _skip_reason(s, fast_mode=fast_mode, affected=affected) for s in stage.steps}
+        runnable = [s for s in stage.steps if reasons[s.id] is None]
         outcomes = _execute_stage(
             runnable,
             repo_root,
@@ -525,9 +572,9 @@ def _run_scheduled(
         )
         stage_failed = False
         for s in stage.steps:  # replay in registration order
-            if fast_mode and s.skip_when_staged:
+            if reasons[s.id] is not None:
                 label = s.summary or s.id
-                print(f"{_YELLOW}SKIP [{s.id}]{_RESET} {label} (skip_when_staged — not in the <60s smoke)")
+                print(f"{_YELLOW}SKIP [{s.id}]{_RESET} {label} ({reasons[s.id]})")
                 outcome.results.append(StepResult(s.id, "skip"))
                 continue
             oc = outcomes[s.id]
@@ -720,6 +767,12 @@ def main(argv: list[str] | None = None) -> int:
         help="the <60s CI smoke tier: run staged selection against a newline-delimited changed-file list",
     )
     run_p.add_argument(
+        "--affected-from",
+        metavar="PATH",
+        help="a newline-delimited list of changed repo-relative files; steps that declare "
+        "`paths` run only when one of these files matches them (others run as usual)",
+    )
+    run_p.add_argument(
         "--shard",
         metavar="I/N",
         help="run shard i of N (e.g. --shard 2/4): append each opted-in step's "
@@ -746,6 +799,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.gate,
                 args.staged,
                 args.changed_files_from,
+                args.affected_from,
                 args.shard,
                 args.tier,
             )
@@ -770,9 +824,19 @@ def main(argv: list[str] | None = None) -> int:
         changed_files = (
             paths_from_file(Path(args.changed_files_from).resolve()) if args.changed_files_from else None
         )
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         print(
             f"{_RED}FAIL --changed-files-from{_RESET} - cannot read {args.changed_files_from}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        affected_files = paths_from_file(Path(args.affected_from).resolve()) if args.affected_from else None
+    except (OSError, UnicodeError) as exc:
+        print(
+            f"{_RED}FAIL --affected-from{_RESET} - cannot read {args.affected_from}: {exc}; "
+            "fix: write the changed files to that path (e.g. `git diff --no-renames --name-only origin/main...HEAD`, so a rename lists its source too); "
+            "next: re-run tc-fitness run",
             file=sys.stderr,
         )
         return 2
@@ -791,6 +855,7 @@ def main(argv: list[str] | None = None) -> int:
         changed_files=changed_files,
         shard=shard,
         tier=args.tier,
+        affected_files=affected_files,
     )
     return outcome.exit_code
 

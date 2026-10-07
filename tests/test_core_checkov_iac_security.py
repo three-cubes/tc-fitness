@@ -38,6 +38,7 @@ def _iac_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.mark.soak
 def test_compliant_storage_fixture_passes_real_checkov() -> None:
     rule = CheckovIacSecurity(CONTRACT_ROOT / "compliant", scan_dir="infra")
 
@@ -55,6 +56,7 @@ def test_compliant_storage_fixture_passes_real_checkov() -> None:
     }
 
 
+@pytest.mark.soak
 def test_network_open_storage_fails_real_checkov_with_actionable_finding() -> None:
     rule = CheckovIacSecurity(CONTRACT_ROOT / "violation", scan_dir="infra")
 
@@ -67,6 +69,7 @@ def test_network_open_storage_fails_real_checkov_with_actionable_finding() -> No
     assert any("network access" in line.lower() for line in errors)
 
 
+@pytest.mark.soak
 def test_violation_run_returns_failure_and_emits_structured_checkov_finding(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -78,6 +81,7 @@ def test_violation_run_returns_failure_and_emits_structured_checkov_finding(
     assert "FAIL checkov_iac_security" in output
 
 
+@pytest.mark.soak
 def test_config_factory_and_public_run_use_the_configured_fixture(capsys: pytest.CaptureFixture[str]) -> None:
     rule = build(
         {"scan_dir": "compliant/infra", "framework": "bicep", "timeout": 60},
@@ -89,6 +93,7 @@ def test_config_factory_and_public_run_use_the_configured_fixture(capsys: pytest
     assert "PASS checkov_iac_security" in capsys.readouterr().out
 
 
+@pytest.mark.soak
 def test_affected_scan_rejects_changed_vulnerable_file(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
 
@@ -101,6 +106,7 @@ def test_affected_scan_rejects_changed_vulnerable_file(tmp_path: Path) -> None:
     assert any("CKV_AZURE_35" in error for error in errors)
 
 
+@pytest.mark.soak
 def test_affected_scan_excludes_unchanged_vulnerable_file_but_full_scan_finds_it(
     tmp_path: Path,
 ) -> None:
@@ -117,6 +123,7 @@ def test_affected_scan_excludes_unchanged_vulnerable_file_but_full_scan_finds_it
     assert full_meta["failed"] >= 1
 
 
+@pytest.mark.soak
 def test_affected_scan_includes_local_module_dependency_closure(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     (repo / "infra" / "safe.bicep").write_text(
@@ -132,6 +139,7 @@ def test_affected_scan_includes_local_module_dependency_closure(tmp_path: Path) 
     assert any("CKV_AZURE_35" in error for error in errors)
 
 
+@pytest.mark.soak
 def test_module_outside_scan_directory_is_reported_at_repository_path(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -155,6 +163,7 @@ def test_module_outside_scan_directory_is_reported_at_repository_path(
     )
 
 
+@pytest.mark.soak
 def test_changed_external_module_scans_unchanged_in_scope_importer(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     modules = repo / "modules"
@@ -196,6 +205,7 @@ def test_deleted_external_module_imported_by_unchanged_template_fails_closed(
     assert errors and "missing" in errors[0].lower()
 
 
+@pytest.mark.soak
 def test_affected_scan_ignores_deleted_bicep_and_scans_rename_destination(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     (repo / "infra" / "safe.bicep").unlink()
@@ -237,6 +247,7 @@ def test_missing_configured_scan_directory_fails_affected_scan(tmp_path: Path) -
     assert errors and "scan directory" in errors[0].lower()
 
 
+@pytest.mark.soak
 def test_ambient_checkov_skip_setting_cannot_hide_a_changed_finding(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     (repo / ".checkov.yaml").write_text("skip-check: CKV_AZURE_35\n", encoding="utf-8")
@@ -264,6 +275,7 @@ def test_ambient_checkov_skip_setting_cannot_hide_a_changed_finding(tmp_path: Pa
     assert any("CKV_AZURE_35" in error for error in errors)
 
 
+@pytest.mark.soak
 def test_explicit_changed_files_manifest_is_used_by_direct_cli(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     changed = repo / "changed-files.txt"
@@ -272,6 +284,7 @@ def test_explicit_changed_files_manifest_is_used_by_direct_cli(tmp_path: Path) -
     assert main(["--repo-root", str(repo), "--changed-files-from", str(changed)]) == 0
 
 
+@pytest.mark.soak
 def test_full_catalogue_mode_can_use_diff_scoped_checkov_config(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -350,6 +363,7 @@ def test_base_ref_rename_detects_unchanged_importer_of_old_module_path(tmp_path:
     assert errors and "missing" in errors[0].lower()
 
 
+@pytest.mark.soak
 def test_staged_runner_passes_its_changed_files_to_checkov(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     rules = (
@@ -411,6 +425,7 @@ def test_staged_runner_does_not_drop_changed_external_checkov_module(
     assert "CKV_AZURE_35" in capsys.readouterr().out
 
 
+@pytest.mark.soak
 def test_staged_runner_with_no_paths_runs_full_checkov_scan_fail_safe(tmp_path: Path) -> None:
     repo = _iac_repo(tmp_path)
     rules = (
@@ -436,6 +451,7 @@ def test_staged_runner_with_no_paths_runs_full_checkov_scan_fail_safe(tmp_path: 
     assert verdict.failures == ["checkov_iac_security"]
 
 
+@pytest.mark.soak
 def test_direct_cli_runs_the_real_scan_from_repository_root() -> None:
     assert main(["--repo-root", str(CONTRACT_ROOT / "compliant")]) == 0
 

@@ -42,6 +42,7 @@ markers =
     contract: public input/output contract
     integration: real local collaborators
     e2e: supported installed entrypoint
+    soak: slow cross-process work, stacked on a tier
 """
 
 

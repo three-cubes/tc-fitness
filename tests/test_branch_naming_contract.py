@@ -41,6 +41,15 @@ def test_current_branch_skips_when_git_cannot_resolve_a_branch(tmp_path: Path) -
     assert current_branch(tmp_path, env={}) is None
 
 
+def test_merge_queue_branch_is_exempt(capsys: pytest.CaptureFixture[str]) -> None:
+    """GitHub names merge-queue branches ``gh-readonly-queue/<base>/pr-<n>-<sha>``;
+    the gate runs on them in the queue and must not fail the convention there.
+    Sabotage: drop the ``^gh-readonly-queue/`` exempt pattern -> rc 1."""
+    rc = check_branch("gh-readonly-queue/main/pr-126-a4653c46fef7efde02733f5ff5741a81f7ff63fc")
+    assert rc == 0
+    assert "exempt pattern" in capsys.readouterr().out
+
+
 def test_module_entrypoint_exits_with_the_real_current_branch_gate() -> None:
     with pytest.warns(RuntimeWarning, match="found in sys.modules"):
         with pytest.raises(SystemExit) as result:

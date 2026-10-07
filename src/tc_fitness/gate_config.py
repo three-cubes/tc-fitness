@@ -64,6 +64,35 @@ The schema
     parallel = true                   # optional — parallel subprocess dispatch
 
 Exactly one of ``run`` / ``shell`` / ``catalogue`` is required per step.
+
+Fragments: gate configuration owned by the part of the repo it governs
+-----------------------------------------------------------------------
+``include`` names TOML fragments by repo-root-relative glob pattern (pathlib
+glob semantics; ``**`` recurses, so prefer narrow patterns that never walk a
+vendored or mirrored tree)::
+
+    [tool.tc_fitness]
+    include = ["capabilities/fitness.toml", "*/fitness.toml"]
+
+A fragment holds only ``[[steps]]`` (the step schema above) and
+``[core_checks.<module>]`` tables; ``include`` and the gate settings ``name`` /
+``fail_fast`` / ``max_workers`` stay in the root config, and any other key is
+rejected. Every path inside a fragment step (``run``, ``cwd``, ``paths``,
+``checks_dir``) is repo-root-relative, exactly as in the root config; nothing is
+resolved against the fragment's own directory.
+
+:func:`load_config` and :func:`load_core_check_configs` return the resolved
+configuration, so every consumer sees fragments transparently:
+
+- steps: the root steps first, then each fragment's steps, fragments in sorted
+  repo-relative path order. A step id declared twice anywhere is an error that
+  names both files. Each :class:`StepSpec` records the file that declared it.
+- ``core_checks.<module>``: a list value is the union of every declaration in
+  the same order (root first, then fragments), later duplicates dropped; a
+  non-list value declared in more than one place must be equal everywhere.
+- a pattern that matches nothing is allowed (a part of the repo adopts
+  fragments when it has steps to own); an absolute pattern, one containing
+  ``..``, or a match that resolves outside the repo is an error.
 """
 
 from __future__ import annotations
@@ -72,7 +101,7 @@ import heapq
 import tomllib  # stdlib since 3.11, so always present under requires-python
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -88,6 +117,12 @@ _DEDICATED_FILE = ".tc-fitness.toml"
 _PYPROJECT = "pyproject.toml"
 
 _DISPATCH_MODES = ("inprocess", "subprocess")
+
+#: The root-only key naming fragment glob patterns, and the keys a fragment may hold.
+_INCLUDE_KEY = "include"
+_STEPS_KEY = "steps"
+#: Gate-wide settings that only the root config may declare.
+_ROOT_ONLY_SETTINGS = ("name", "fail_fast", "max_workers", _INCLUDE_KEY)
 
 #: The sub-table under ``[tool.tc_fitness]`` keyed by CORE-check module name that
 #: carries each bound CORE check's config block. A consumer writes
@@ -173,6 +208,17 @@ class StepSpec:
     #: no named tier (it runs only in an untiered ``tc-fitness run``). Orthogonal
     #: to ``stage``: ``tags`` pick WHICH steps run; ``stage`` groups HOW they run.
     tags: tuple[str, ...] = ()
+    #: The paths this step evaluates, as ``fnmatch`` patterns over repo-relative
+    #: paths (``*`` crosses ``/``, so ``memory/*`` covers the whole subtree). When
+    #: ``tc-fitness run --affected-from LIST`` supplies the change set, a step whose
+    #: patterns match none of those files is skipped with its reason; without a
+    #: change set (main, the nightly tier) every step runs. Empty (the default)
+    #: means the step always runs.
+    paths: tuple[str, ...] = ()
+    #: The repo-root-relative file that declared this step: the root config
+    #: (``pyproject.toml`` / ``.tc-fitness.toml``) or an included fragment. Set by
+    #: :func:`load_config`; ``None`` when a step is built in memory.
+    source: Path | None = None
 
     @property
     def kind(self) -> str:
@@ -196,6 +242,8 @@ class GateConfig:
     max_workers: int = 8
     #: The file the config was read from (for the banner + error messages).
     source: Path | None = None
+    #: The repo-root-relative fragments ``include`` resolved to, in merge order.
+    fragments: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -314,7 +362,7 @@ def _raw_table(path: Path) -> dict[str, Any]:
     ``pyproject.toml`` it is the ``[tool.tc_fitness]`` sub-table."""
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise GateConfigError(
             f"could not parse gate config {path}: {exc}; "
             f"fix: correct the TOML syntax in {path.name}; "
@@ -362,17 +410,19 @@ def _coerce_env(value: Any, *, step_id: str) -> dict[str, str]:
     return dict(value)
 
 
-def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
+def _parse_step(raw: Any, *, index: int, source: Path, declared_in: Path | None = None) -> StepSpec:
+    # Name the file the step is written in: a fragment's, when it came from one.
+    where = declared_in.as_posix() if declared_in is not None else source.name
     if not isinstance(raw, dict):
         raise GateConfigError(
-            f"step #{index} in {source.name} is not a table; "
+            f"step #{index} in {where} is not a table; "
             "fix: declare each step as a [[tool.tc_fitness.steps]] table; "
             "next: re-run tc-fitness run"
         )
     step_id = raw.get("id")
     if not isinstance(step_id, str) or not step_id:
         raise GateConfigError(
-            f"step #{index} in {source.name} is missing a string `id`; "
+            f"step #{index} in {where} is missing a string `id`; "
             'fix: add `id = "<short-label>"` to the step; '
             "next: re-run tc-fitness run"
         )
@@ -443,6 +493,18 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         else ()
     )
     tags = _coerce_str_tuple(raw["tags"], field_name="tags", step_id=step_id) if "tags" in raw else ()
+    paths = _coerce_str_tuple(raw["paths"], field_name="paths", step_id=step_id) if "paths" in raw else ()
+    for pattern in paths:
+        # A pattern no repo-relative path can match would skip the step on every
+        # --affected-from run while the gate still passes.
+        posix = PurePosixPath(pattern.replace("\\", "/"))
+        if not pattern or posix.is_absolute() or PureWindowsPath(pattern).anchor or ".." in posix.parts:
+            raise GateConfigError(
+                f"step {step_id!r} `paths` entry {pattern!r} is not a repo-relative glob, so no "
+                "affected file can match it and the step would always be skipped; "
+                'fix: write it relative to the repository root, e.g. `paths = ["src/**"]`; '
+                "next: re-run tc-fitness run"
+            )
     stage = raw.get("stage")
     if stage is not None and (not isinstance(stage, str) or not stage):
         raise GateConfigError(
@@ -470,28 +532,56 @@ def _parse_step(raw: Any, *, index: int, source: Path) -> StepSpec:
         stage=stage,
         depends_on=depends_on,
         tags=tags,
+        paths=paths,
+        source=declared_in,
     )
 
 
-def parse_config(table: dict[str, Any], *, source: Path) -> GateConfig:
+def parse_config(
+    table: dict[str, Any],
+    *,
+    source: Path,
+    step_sources: Sequence[Path] | None = None,
+    fragments: Sequence[Path] = (),
+) -> GateConfig:
     """Validate a raw config table into a :class:`GateConfig`.
 
     Separated from the file read so tests can drive it from an in-memory dict.
+    ``include`` is resolved only by :func:`load_config`, which reads the
+    fragments from disk and passes the merged table here with ``step_sources``
+    (one repo-relative declaring file per step) and the resolved ``fragments``.
     """
-    steps_raw = table.get("steps")
+    if _INCLUDE_KEY in table:
+        raise GateConfigError(
+            f"gate config from {source.name} still carries `include`, which only "
+            "load_config resolves; "
+            "fix: load the config with load_config(repo_root) so the fragments are read and merged; "
+            "next: re-run tc-fitness run"
+        )
+    steps_raw = table.get(_STEPS_KEY)
     if not isinstance(steps_raw, list) or not steps_raw:
         raise GateConfigError(
             f"gate config in {source.name} has no `steps`; "
             "fix: add at least one [[tool.tc_fitness.steps]] table; "
             "next: re-run tc-fitness run"
         )
-    steps = tuple(_parse_step(raw, index=i, source=source) for i, raw in enumerate(steps_raw))
+    declared = list(step_sources) if step_sources is not None else [None] * len(steps_raw)
+    steps = tuple(
+        _parse_step(raw, index=i, source=source, declared_in=declared[i]) for i, raw in enumerate(steps_raw)
+    )
     ids = [s.id for s in steps]
     dupes = sorted({i for i in ids if ids.count(i) > 1})
     if dupes:
+        where = ""
+        if step_sources is not None:
+            where = "; ".join(
+                f"{d!r} in " + " and ".join(str(s.source) for s in steps if s.id == d) for d in dupes
+            )
+            where = f" ({where})"
         raise GateConfigError(
-            f"duplicate step id(s) {dupes} in {source.name}; "
-            "fix: give every step a unique `id`; next: re-run tc-fitness run"
+            f"duplicate step id(s) {dupes} in {source.name}{where}; "
+            "fix: give every step a unique `id`, or keep one declaration and delete the other; "
+            "next: re-run tc-fitness run"
         )
     plan_stages(steps, strict=True)  # validate stage references + reject dependency cycles at load time
     return GateConfig(
@@ -500,7 +590,159 @@ def parse_config(table: dict[str, Any], *, source: Path) -> GateConfig:
         fail_fast=bool(table.get("fail_fast", False)),
         max_workers=int(table.get("max_workers", 8)),
         source=source,
+        fragments=tuple(fragments),
     )
+
+
+@dataclass(frozen=True)
+class _Resolved:
+    """The root config table with every included fragment merged in."""
+
+    table: dict[str, Any]
+    step_sources: tuple[Path, ...]
+    fragments: tuple[Path, ...]
+
+
+def _fragment_paths(patterns: Any, *, repo_root: Path, source: Path) -> tuple[Path, ...]:
+    """Expand the root ``include`` patterns into sorted, de-duplicated fragment files."""
+    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+        raise GateConfigError(
+            f"`include` in {source.name} must be a list of glob patterns; "
+            'fix: write `include = ["capabilities/fitness.toml"]`; '
+            "next: re-run tc-fitness run"
+        )
+    root = repo_root.resolve()
+    found: set[Path] = set()
+    for pattern in patterns:
+        if not pattern or PurePosixPath(pattern).is_absolute() or PureWindowsPath(pattern).anchor:
+            raise GateConfigError(
+                f"`include` pattern {pattern!r} in {source.name} is not repo-root-relative; "
+                'fix: write the pattern relative to the repository root, e.g. "capabilities/fitness.toml"; '
+                "next: re-run tc-fitness run"
+            )
+        if ".." in PurePosixPath(pattern.replace("\\", "/")).parts:
+            raise GateConfigError(
+                f"`include` pattern {pattern!r} in {source.name} escapes the repository with `..`; "
+                "fix: name fragments inside the repository only; "
+                "next: re-run tc-fitness run"
+            )
+        for match in root.glob(pattern):
+            if not match.is_file():
+                continue
+            if not match.resolve().is_relative_to(root):
+                raise GateConfigError(
+                    f"`include` pattern {pattern!r} in {source.name} matched {match}, which resolves "
+                    "outside the repository; "
+                    "fix: replace the link with the fragment itself, inside the repository; "
+                    "next: re-run tc-fitness run"
+                )
+            found.add(match.relative_to(root))
+    return tuple(sorted(found, key=lambda p: p.as_posix()))
+
+
+def _read_fragment(path: Path, rel: Path) -> dict[str, Any]:
+    """Parse one fragment and reject keys a fragment may not declare."""
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise GateConfigError(
+            f"could not parse gate fragment {rel}: {exc}; "
+            f"fix: correct the TOML syntax in {rel}; "
+            "next: re-run tc-fitness run"
+        ) from exc
+    for key in data:
+        if key in _ROOT_ONLY_SETTINGS:
+            raise GateConfigError(
+                f"gate fragment {rel} declares `{key}`, which only the root config may set; "
+                f"fix: move `{key}` to the root [tool.tc_fitness] table, or delete it from {rel}; "
+                "next: re-run tc-fitness run"
+            )
+        if key not in (_STEPS_KEY, _CORE_CHECKS_KEY):
+            raise GateConfigError(
+                f"gate fragment {rel} declares unknown key `{key}`; a fragment holds only "
+                "[[steps]] and [core_checks.<module>] tables, written without a [tool.tc_fitness] prefix; "
+                f"fix: rename or remove `{key}` in {rel}; "
+                "next: re-run tc-fitness run"
+            )
+    steps = data.get(_STEPS_KEY, [])
+    if not isinstance(steps, list):
+        raise GateConfigError(
+            f"`steps` in gate fragment {rel} must be an array of tables; "
+            "fix: declare each step as a [[steps]] table; "
+            "next: re-run tc-fitness run"
+        )
+    return data
+
+
+def _is_ordered_list(key: str) -> bool:
+    """A list read as a command line, whose order and duplicates are its meaning.
+
+    Unioning two of them would build a third command neither file declared, so
+    files that both declare one must agree, like a scalar.
+    """
+    return key.endswith(("command", "args", "argv"))
+
+
+def _merge_core_checks(
+    merged: dict[str, dict[str, Any]],
+    origin: dict[tuple[str, str], Path],
+    blocks: Mapping[str, Mapping[str, Any]],
+    rel: Path,
+) -> None:
+    """Merge one file's ``core_checks`` blocks into ``merged`` (set-like lists union; command lists and scalars agree)."""
+    for module_name, block in blocks.items():
+        target = merged.setdefault(module_name, {})
+        for key, value in block.items():
+            if key not in target:
+                target[key] = list(value) if isinstance(value, list) else value
+                origin[(module_name, key)] = rel
+                continue
+            current = target[key]
+            if isinstance(current, list) and isinstance(value, list) and not _is_ordered_list(key):
+                current.extend(item for item in value if item not in current)
+                continue
+            if current != value:
+                raise GateConfigError(
+                    f"core_checks.{module_name}.{key} is {current!r} in {origin[(module_name, key)]} "
+                    f"but {value!r} in {rel}; "
+                    "fix: declare the value in one file only, or make both declarations equal; "
+                    "next: re-run tc-fitness run"
+                )
+
+
+def _resolve(source: Path, repo_root: Path) -> _Resolved:
+    """Read the root config and merge every fragment its ``include`` names."""
+    root_table = _raw_table(source)
+    root_rel = Path(source.name)
+    if _INCLUDE_KEY not in root_table:
+        steps_raw = root_table.get(_STEPS_KEY)
+        count = len(steps_raw) if isinstance(steps_raw, list) else 0
+        return _Resolved(table=root_table, step_sources=(root_rel,) * count, fragments=())
+
+    fragments = _fragment_paths(root_table[_INCLUDE_KEY], repo_root=repo_root, source=source)
+    table = {k: v for k, v in root_table.items() if k != _INCLUDE_KEY}
+    root_steps = root_table.get(_STEPS_KEY, [])
+    if not isinstance(root_steps, list):
+        raise GateConfigError(
+            f"`steps` in {source.name} must be an array of tables; "
+            "fix: declare each step as a [[tool.tc_fitness.steps]] table; "
+            "next: re-run tc-fitness run"
+        )
+    steps: list[Any] = list(root_steps)
+    step_sources: list[Path] = [root_rel] * len(steps)
+    merged: dict[str, dict[str, Any]] = {}
+    origin: dict[tuple[str, str], Path] = {}
+    _merge_core_checks(merged, origin, parse_core_check_configs(root_table, source=source), root_rel)
+    for rel in fragments:
+        data = _read_fragment(repo_root / rel, rel)
+        fragment_steps = data.get(_STEPS_KEY, [])
+        steps.extend(fragment_steps)
+        step_sources.extend([rel] * len(fragment_steps))
+        _merge_core_checks(merged, origin, parse_core_check_configs(data, source=repo_root / rel), rel)
+    table[_STEPS_KEY] = steps
+    if merged:
+        table[_CORE_CHECKS_KEY] = merged
+    return _Resolved(table=table, step_sources=tuple(step_sources), fragments=fragments)
 
 
 def load_config(repo_root: Path) -> GateConfig:
@@ -517,8 +759,13 @@ def load_config(repo_root: Path) -> GateConfig:
             f"fix: add a [tool.tc_fitness] block declaring the gate's steps; "
             "next: see tc_fitness.gate_config for the schema, then re-run tc-fitness run"
         )
-    table = _raw_table(source)
-    return parse_config(table, source=source)
+    resolved = _resolve(source, repo_root)
+    return parse_config(
+        resolved.table,
+        source=source,
+        step_sources=resolved.step_sources,
+        fragments=resolved.fragments,
+    )
 
 
 def parse_core_check_configs(table: Mapping[str, Any], *, source: Path) -> dict[str, Mapping[str, Any]]:
@@ -562,16 +809,16 @@ def load_core_check_configs(repo_root: Path) -> dict[str, Mapping[str, Any]]:
     """Resolve the ``[tool.tc_fitness.core_checks.<module>]`` config blocks.
 
     Reads the SAME config source the gate uses (``.tc-fitness.toml`` wins over
-    ``pyproject.toml``'s ``[tool.tc_fitness]``), so a consumer's CORE-check config
-    lives beside its gate declaration. Returns ``{}`` when no config file exists
-    (a repo with no gate config binds no CORE check), so a caller can always
-    treat the result as a plain mapping.
+    ``pyproject.toml``'s ``[tool.tc_fitness]``), merged with every fragment its
+    ``include`` names, so a consumer's CORE-check config lives beside its gate
+    declaration or in the part of the repo it scopes. Returns ``{}`` when no
+    config file exists (a repo with no gate config binds no CORE check), so a
+    caller can always treat the result as a plain mapping.
     """
     source = find_config_file(repo_root)
     if source is None:
         return {}
-    table = _raw_table(source)
-    return parse_core_check_configs(table, source=source)
+    return parse_core_check_configs(_resolve(source, repo_root).table, source=source)
 
 
 __all__ = [

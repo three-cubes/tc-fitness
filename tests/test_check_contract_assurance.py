@@ -233,6 +233,24 @@ main()
     assert not ledger.exists()
 
 
+def test_contract_mode_rejects_the_affected_file_list(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--affected-from scopes ordinary gate steps; a contract run must refuse it, not ignore it."""
+    from tc_fitness.gate import main
+
+    affected = tmp_path / "affected.txt"
+    affected.write_text("src/x.py\n")
+    argv = ["run", "--contract", str(tmp_path / "c.yaml"), "--case", "compliant"]
+    argv += ["--ledger", str(tmp_path / "ledger.json"), "--affected-from", str(affected)]
+
+    with pytest.raises(SystemExit) as exit_:
+        main(argv)
+
+    assert exit_.value.code == 2
+    assert "contract arguments cannot be combined with ordinary gate options" in capsys.readouterr().err
+
+
 def test_generic_dependency_declaration_cannot_synthesize_unavailable_detector_evidence(
     tmp_path: Path,
 ) -> None:

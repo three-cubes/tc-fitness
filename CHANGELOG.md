@@ -15,6 +15,72 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+### Fixed
+
+- `branch_naming` exempts GitHub merge-queue branches
+  (`gh-readonly-queue/<base>/pr-<n>-<sha>`), as the org branch-naming ruleset
+  does. The gate runs on the queue's branch, so every merge-queue run failed it.
+
+## [0.21.1] — 2026-10-07
+
+### Fixed
+
+- Coverage assurance (`tc-fitness assure-coverage`) measured a suite under a
+  fixed pytest profile that registered only the four tier markers, so with
+  `--strict-markers` it could not collect a test that stacks `soak` on its
+  tier. The profile now registers `soak`.
+- A step's `paths` entry that no repo-relative file can match (empty, absolute,
+  or escaping the repository with `..`) is now a config error. Before, the step
+  was skipped on every `--affected-from` run while the gate passed.
+- `tc-fitness run --contract` rejects `--affected-from`, like the other
+  ordinary gate options, instead of silently ignoring it.
+- A malformed step in a gate fragment is reported against the fragment file
+  that declares it, not the root `pyproject.toml`.
+- With `--affected-from`, a change to the root gate config runs every scoped
+  step, and a change to a fragment runs the steps it declares. Before, a
+  config-only change skipped the steps it altered.
+- `paths` validation also rejects Windows-style absolute and escaping patterns
+  (`C:/…`, `..\…`, UNC paths).
+- A non-UTF-8 `--affected-from` or `--changed-files-from` list, or a non-UTF-8
+  fragment, is a config error with exit 2, not a traceback.
+- A `core_checks` command list (a key ending in `command`, `args` or `argv`)
+  declared in two files must agree. Before, the two lists were unioned into a
+  third command neither file declared.
+- The suggested affected-file recipe, and `make check`, use
+  `git diff --no-renames --name-only`, so a rename lists its source path too.
+
+## [0.21.0] — 2026-10-05
+
+### Added
+
+- Gate fragments. `[tool.tc_fitness] include = ["<glob>", ...]` names TOML
+  fragments by repo-root-relative glob (pathlib semantics, `**` allowed). A
+  fragment holds `[[steps]]` and `[core_checks.<name>]` tables, so each part of
+  a repository owns its gate steps and CORE-check scopes and parallel changes
+  stop editing one root block. `load_config` and `load_core_check_configs`
+  return the merged result: root steps first, then fragments in sorted path
+  order; `core_checks` lists union in order with duplicates dropped. A step id
+  declared twice, a scalar declared differently in two files, a fragment that
+  sets `include`/`name`/`fail_fast`/`max_workers` or an unknown key, and an
+  absolute, `..` or out-of-repo pattern are each a `GateConfigError` with
+  `fix:`/`next:`. A pattern that matches nothing is allowed. Fragment paths
+  stay repo-root-relative.
+- `StepSpec.source` records the repo-relative file that declared each step,
+  `GateConfig.fragments` lists the merged fragments, `tc-fitness run` prints the
+  fragments in its banner and `declared in: <file>` under a failing step's
+  `fix:`/`next:`.
+
+## [0.20.0] — 2026-10-05
+
+### Added
+
+- Path-scoped steps. A step may declare `paths`, a list of `fnmatch` patterns
+  over repo-relative paths (`*` crosses `/`). `tc-fitness run --affected-from
+  LIST` takes a newline-delimited list of changed files: a step whose patterns
+  match none of them is skipped with its reason, and steps without `paths` run as
+  usual. Without `--affected-from`, every step runs. This lets one gate hold
+  several independent projects and evaluate only the ones a change touches.
+
 ## [0.19.0] — 2026-09-24
 
 ### Changed

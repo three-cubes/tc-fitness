@@ -67,6 +67,7 @@ def test_diagnostic_path_outside_the_evidence_root_stays_absolute(tmp_path: Path
     assert _evidence_relative(external_log, evidence) == str(external_log.resolve())
 
 
+@pytest.mark.soak
 @pytest.mark.parametrize("binding", ["valid", "malformed", "unregistered"])
 def test_fixed_profile_distinguishes_contract_fixtures_from_outer_tests(tmp_path: Path, binding: str) -> None:
     root = tmp_path / "repo"
@@ -183,6 +184,25 @@ def invoke(
     return result.returncode, json.loads(output.read_text()) if output.exists() else {"stderr": result.stderr}
 
 
+def test_fixed_profile_admits_soak_stacked_on_a_tier(tmp_path: Path) -> None:
+    """A suite may stack `soak` on a tier for slow cross-process tests; strict markers must accept it."""
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    test = root / "tests/test_subject.py"
+    test.write_text(
+        test.read_text().replace(
+            "pytestmark=pytest.mark.integration", "pytestmark=[pytest.mark.integration, pytest.mark.soak]"
+        )
+    )
+    candidate = commit(root)
+
+    code, payload = invoke(root, base, candidate, tmp_path / "result.json")
+
+    assert code == 0, payload
+    assert payload["status"] == "pass"
+
+
+@pytest.mark.soak
 def test_public_transaction_freshly_measures_both_commits_with_fixed_profile(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, candidate = repository(root)
@@ -229,6 +249,7 @@ def test_public_transaction_freshly_measures_both_commits_with_fixed_profile(tmp
     assert git(root, "worktree", "list", "--porcelain") == before
 
 
+@pytest.mark.soak
 def test_public_transaction_starts_exact_base_and_candidate_measurements_together(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, _ = repository(root)
@@ -277,6 +298,7 @@ def test_public_transaction_starts_exact_base_and_candidate_measurements_togethe
     assert json.loads((evidence / "transaction.json").read_text()) == result
 
 
+@pytest.mark.soak
 def test_public_transaction_rejects_uncovered_changed_and_critical_branches(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, candidate = repository(root, covered=False)
@@ -395,6 +417,7 @@ def test_transaction_ratchets_against_fresh_base_above_absolute_floor(tmp_path: 
     assert not any("below" in item for item in result.failures)
 
 
+@pytest.mark.soak
 def test_failed_base_is_not_replaced_by_a_passing_candidate_measurement(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     repository(root)
@@ -425,6 +448,7 @@ def test_failed_base_is_not_replaced_by_a_passing_candidate_measurement(tmp_path
     ("failing_sides", "expected_error_side"),
     [("candidate", "candidate"), ("base,candidate", "base")],
 )
+@pytest.mark.soak
 def test_parallel_measurement_retains_side_failures_and_selects_base_first(
     tmp_path: Path, failing_sides: str, expected_error_side: str
 ) -> None:
@@ -475,6 +499,7 @@ def test_parallel_measurement_retains_side_failures_and_selects_base_first(
     assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
 
 
+@pytest.mark.soak
 def test_interrupted_parallel_measurement_waits_for_children_and_cleans_worktrees(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, _ = repository(root)
@@ -546,6 +571,7 @@ def test_interrupted_parallel_measurement_waits_for_children_and_cleans_worktree
     assert git(root, "worktree", "list", "--porcelain") == before
 
 
+@pytest.mark.soak
 def test_transaction_measurements_are_immutable_and_never_reused(tmp_path: Path) -> None:
     from dataclasses import FrozenInstanceError
 
@@ -564,6 +590,7 @@ def test_transaction_measurements_are_immutable_and_never_reused(tmp_path: Path)
     assert second.failures == first.failures == ()
 
 
+@pytest.mark.soak
 def test_candidate_pytest_plugin_cannot_take_over_the_fixed_measurement_profile(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, _ = repository(root)
@@ -583,6 +610,7 @@ def test_candidate_pytest_plugin_cannot_take_over_the_fixed_measurement_profile(
     assert result["candidate"]["counts"]["covered_lines"] == 22
 
 
+@pytest.mark.soak
 def test_stale_candidate_lock_is_terminal_error_not_controller_environment_fallback(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, _ = repository(root)
@@ -614,6 +642,7 @@ def test_missing_uv_retains_real_provisioning_diagnostics(tmp_path: Path) -> Non
     assert "uv" in (tmp_path / "result.evidence" / result["stderr_log"]).read_text()
 
 
+@pytest.mark.soak
 def test_each_commit_uses_its_own_locked_pytest_version(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     base, _ = repository(root)
