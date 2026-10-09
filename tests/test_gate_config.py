@@ -459,6 +459,12 @@ def test_paths_must_be_repo_relative(tmp_path: Path, pattern: str) -> None:
         parse_config_table(f"[[steps]]\nid = 'm'\npaths = ['{pattern}']\nrun = ['true']\n", tmp_path)
 
 
+def test_windows_separators_in_paths_are_stored_as_git_writes_paths(tmp_path: Path) -> None:
+    """Affected files use `/`, so a backslash pattern would be accepted but never match."""
+    cfg = parse_config_table("[[steps]]\nid = 'm'\npaths = ['src\\*']\nrun = ['true']\n", tmp_path)
+    assert cfg.steps[0].paths == ("src/*",)
+
+
 def test_paths_must_be_a_list_of_strings(tmp_path: Path) -> None:
     with pytest.raises(GateConfigError, match="paths"):
         parse_config_table("[[steps]]\nid = 'm'\npaths = 'memory/*'\nrun = ['true']\n", tmp_path)

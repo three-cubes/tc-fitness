@@ -237,7 +237,9 @@ A config with no `stage`/`depends_on` runs the untouched sequential path,
 byte-identical to earlier versions.
 
 `tc-fitness run` flags: `--repo-root` (default CWD), `--only ID` (run a subset of
-steps, repeatable), `--gate ID` (target one architecture rule inside a catalogue
+steps, repeatable), `--skip ID` (drop steps, repeatable; a CI that splits one tier
+across jobs gives one job `--only` and another `--skip` with the same ids, and an
+id the config does not declare fails the run), `--gate ID` (target one architecture rule inside a catalogue
 step), `--staged` (the `<60s` fast tier — catalogue steps run through the *sound*
 per-rule `--staged` selection, and any step flagged `skip_when_staged` in config,
 e.g. a full `pytest`/`mypy` leg, is dropped), `--changed-files-from PATH`
@@ -326,8 +328,12 @@ it; keep any TAZ-specific paths and migration queue in tc-agent-zone, not in
 the shared engine.
 
 ```python
-RuleEntry(id="deterministic-tests", check="core:deterministic_tests",
-          category="test-integrity", summary="Tests are stable across seeds and orders.")
+RuleEntry(
+    id="deterministic-tests",
+    check="core:deterministic_tests",
+    category="test-integrity",
+    summary="Tests are stable across seeds and orders.",
+)
 ```
 
 A CORE check with **no config block is a vacuous pass** — the standard adoption
@@ -408,9 +414,7 @@ and validates its ledger:
 from pathlib import Path
 from tc_fitness.check_contract_execution import run_contract_case
 
-evidence = run_contract_case(
-    Path("path/to/contract.yaml"), "violation", Path("artifacts/violation.json")
-)
+evidence = run_contract_case(Path("path/to/contract.yaml"), "violation", Path("artifacts/violation.json"))
 ```
 
 `CheckContractError` means the assurance case failed. Missing evidence, unexpected
@@ -616,15 +620,32 @@ checks both build on):
 ```python
 from tc_fitness import (
     # hard gating (kairix surface)
-    gate, gate_keys, python_files, main_entry, repo_relative, REPO_ROOT,
+    gate,
+    gate_keys,
+    python_files,
+    main_entry,
+    repo_relative,
+    REPO_ROOT,
     # agent-actionable emit / YAML (tc-agent-zone surface)
-    actionable, remediation, emit_failures, emit_pass, load_yaml, missing_keys,
+    actionable,
+    remediation,
+    emit_failures,
+    emit_pass,
+    load_yaml,
+    missing_keys,
     # unified ratchet primitives
-    OVERRIDE_MIN_REASON_LEN, make_override_re, parse_overrides, Override,
-    COVERAGE_OVERRIDE_RE, MUTATION_OVERRIDE_RE,
-    is_vague_reason, VAGUE_OVERRIDE_RE,
-    SUPPRESSION_PATTERNS, BARE_SUPPRESSION_PATTERNS,
-    contains_suppression, is_bare_suppression,
+    OVERRIDE_MIN_REASON_LEN,
+    make_override_re,
+    parse_overrides,
+    Override,
+    COVERAGE_OVERRIDE_RE,
+    MUTATION_OVERRIDE_RE,
+    is_vague_reason,
+    VAGUE_OVERRIDE_RE,
+    SUPPRESSION_PATTERNS,
+    BARE_SUPPRESSION_PATTERNS,
+    contains_suppression,
+    is_bare_suppression,
 )
 ```
 
@@ -637,8 +658,11 @@ from tc_fitness import gate, main_entry
 # Low-level: fail on any current violation.
 exit_code = gate("f26-core-no-provider-imports", violations, REMEDIATION)
 
+
 # Convenience: scan roots, call a per-file predicate, gate the union.
 def file_has_violation(path: Path) -> bool: ...
+
+
 exit_code = main_entry(file_has_violation, "f26", REMEDIATION, "kairix")
 ```
 
@@ -655,7 +679,7 @@ fails = [actionable("kairix/x.py:12 leaks a secret", "redact it", "re-run check_
 if fails:
     emit_failures("f15-no-secret-logging", fails)  # → stderr
 else:
-    emit_pass("PASS f15-no-secret-logging")        # → stdout
+    emit_pass("PASS f15-no-secret-logging")  # → stdout
 ```
 
 ### YAML loading
@@ -663,7 +687,7 @@ else:
 ```python
 from tc_fitness import load_yaml, missing_keys
 
-data, err = load_yaml(Path("manifest.yaml"))   # (data, None) | (None, "error")
+data, err = load_yaml(Path("manifest.yaml"))  # (data, None) | (None, "error")
 if err is None:
     absent = missing_keys(data, ("name", "version"))
 ```
@@ -685,7 +709,7 @@ omitted (the default), the output is **byte-identical** to v0.1.0's 2-marker
 `<what>; fix: <fix>; next: <nxt>`.
 
 ```python
-actionable("X broke", "do Y", "rerun Z")                  # X broke; fix: do Y; next: rerun Z
+actionable("X broke", "do Y", "rerun Z")  # X broke; fix: do Y; next: rerun Z
 actionable("X broke", "do Y", "rerun Z", "python check.py")  # ...; next: rerun Z; run: python check.py
 ```
 
@@ -697,11 +721,15 @@ action markers on their own lines, optionally followed by a `Pass` and a
 ready to `print()`.
 
 ```python
-print(remediation(
-    "redact the secret", "re-run the check", "python scripts/checks/check_f15.py",
-    passing='logger.info("token redacted")',
-    forbidden='logger.info(f"token={token}")',
-))
+print(
+    remediation(
+        "redact the secret",
+        "re-run the check",
+        "python scripts/checks/check_f15.py",
+        passing='logger.info("token redacted")',
+        forbidden='logger.info(f"token={token}")',
+    )
+)
 # fix: redact the secret
 # next: re-run the check
 # run: python scripts/checks/check_f15.py
@@ -731,8 +759,8 @@ floor is a per-call choice, never a mutation of the shared default kairix depend
 on.
 
 ```python
-is_vague_reason("x" * 10)               # True  — vague at the default 40-floor
-is_vague_reason("x" * 10, min_len=10)   # False — clears taz's 10-floor
+is_vague_reason("x" * 10)  # True  — vague at the default 40-floor
+is_vague_reason("x" * 10, min_len=10)  # False — clears taz's 10-floor
 ```
 
 ### Discovery helpers (`REPO_ROOT` / `python_files` / `repo_relative`) cover taz unchanged
@@ -788,6 +816,7 @@ then its `run_checks.py` collapses to:
 ```python
 from tc_fitness.runner import main_cli
 from .catalogue import RULES
+
 raise SystemExit(main_cli(RULES))
 ```
 

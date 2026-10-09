@@ -14,7 +14,8 @@ The proofs:
 - ``allow_missing`` skips a missing program; without it a missing program FAILs;
 - a ``catalogue`` step dispatches the consumer's RuleEntry catalogue through the
   shared runner, and ``--gate ID`` targets one rule;
-- ``--only ID`` restricts to a subset; ``fail_fast`` stops at the first failure;
+- ``--only ID`` restricts to a subset and ``--skip ID`` drops one, so two runs
+  split a tier; ``fail_fast`` stops at the first failure;
 - the aggregate exit is 0 iff no gating step failed; a missing config exits 2.
 """
 
@@ -197,6 +198,133 @@ def test_only_restricts_to_named_steps(repo: Path, capsys: pytest.CaptureFixture
     assert "run [b]" not in out
 
 
+def test_skip_drops_named_steps_and_reports_them(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["false"]\n',  # would fail if run
+    )
+    outcome = run_gate(load_config(repo), repo, skip=["b"])
+    out = _plain(capsys.readouterr().out)
+    assert outcome.ok
+    assert "run [a]" in out
+    assert "SKIP [b] b (--skip: another invocation of this tier runs it)" in out
+    assert "run [b]" not in out
+
+
+def test_a_skipped_step_is_reported_before_the_run_and_counted(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--skip removes a step before anything is planned, says so up front, and counts it as skipped."""
+    _write_config(repo, '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["false"]\n')
+    outcome = run_gate(load_config(repo), repo, skip=["b"])
+    out = _plain(capsys.readouterr().out)
+    assert outcome.skipped == 1
+    assert [r.id for r in outcome.results] == ["b", "a"]
+    assert out.index("SKIP [b]") < out.index("run [a]")
+    assert "(1 ran, 1 skipped)" in out
+
+
+def test_skipping_every_step_reports_them_all_skipped(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "a"\nstage = "s"\nrun = ["false"]\n[[steps]]\nid = "b"\nstage = "s"\nrun = ["false"]\n',
+    )
+    outcome = run_gate(load_config(repo), repo, skip=["a", "b"])
+    assert outcome.ok and outcome.skipped == 2
+    assert "(0 ran, 2 skipped)" in _plain(capsys.readouterr().out)
+
+
+def test_a_skipped_step_cannot_reorder_the_stages_that_remain(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A skipped member's depends_on must not pull its stage after another, as planning it would.
+
+    Planned with b, stage s depends on x, so x (and c) would run before a. Without
+    b, s follows w by the sequential chain and runs before x.
+    """
+    _write_config(
+        repo,
+        '[[steps]]\nid = "w"\nstage = "w"\nrun = ["true"]\n'
+        '[[steps]]\nid = "a"\nstage = "s"\nrun = ["true"]\n'
+        '[[steps]]\nid = "b"\nstage = "s"\ndepends_on = ["x"]\nrun = ["true"]\n'
+        '[[steps]]\nid = "c"\nstage = "x"\ndepends_on = ["w"]\nrun = ["true"]\n',
+    )
+    run_gate(load_config(repo), repo, skip=["b"])
+    out = _plain(capsys.readouterr().out)
+    assert out.index("PASS [a]") < out.index("PASS [c]")
+
+
+def test_a_skipped_first_member_of_a_stage_is_reported_before_its_sibling_runs(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "skipped"\nstage = "s"\nrun = ["true"]\n'
+        '[[steps]]\nid = "runnable"\nstage = "s"\nrun = ["true"]\n',
+    )
+    run_gate(load_config(repo), repo, skip=["skipped"])
+    out = _plain(capsys.readouterr().out)
+    assert out.index("SKIP [skipped]") < out.index("run [runnable]")
+
+
+@pytest.mark.parametrize("staged", [False, True], ids=["sequential", "scheduled"])
+def test_fail_fast_still_reports_and_counts_every_skipped_step(
+    repo: Path, capsys: pytest.CaptureFixture[str], staged: bool
+) -> None:
+    """Fail-fast stops later commands, but a step --skip removed is still reported and counted."""
+    stages = [
+        'stage = "one"\n',
+        'stage = "two"\ndepends_on = ["one"]\n',
+        'stage = "three"\ndepends_on = ["two"]\n',
+    ]
+    if not staged:
+        stages = ["", "", ""]
+    _write_config(
+        repo,
+        "fail_fast = true\n"
+        f'[[steps]]\nid = "a"\nrun = ["false"]\n{stages[0]}'
+        f'[[steps]]\nid = "b"\nrun = ["true"]\n{stages[1]}'
+        f'[[steps]]\nid = "c"\nrun = ["true"]\n{stages[2]}',
+    )
+    outcome = run_gate(load_config(repo), repo, skip=["c"])
+    out = _plain(capsys.readouterr().out)
+    assert outcome.gating_failures == ["a"]
+    assert outcome.skipped == 1
+    assert "SKIP [c]" in out and "run [b]" not in out
+
+
+def test_only_and_skip_split_a_tier_into_complementary_runs(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "a"\nrun = ["true"]\ntags = ["full"]\n'
+        '[[steps]]\nid = "b"\nrun = ["true"]\ntags = ["full"]\n'
+        '[[steps]]\nid = "c"\nrun = ["true"]\ntags = ["nightly"]\n',
+    )
+    cfg = load_config(repo)
+    run_gate(cfg, repo, tier="full", skip=["b"])
+    first = _plain(capsys.readouterr().out)
+    run_gate(cfg, repo, tier="full", only=["b"])
+    second = _plain(capsys.readouterr().out)
+    assert ("run [a]" in first, "run [b]" in first) == (True, False)
+    assert ("run [a]" in second, "run [b]" in second) == (False, True)
+    assert "run [c]" not in first + second
+
+
+def test_unknown_skip_id_fails_the_gate_and_names_the_valid_ids(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_config(repo, '[[steps]]\nid = "known"\nrun = ["true"]\n')
+
+    outcome = run_gate(load_config(repo), repo, skip=["renamed"])
+
+    assert not outcome.ok
+    out = _plain(capsys.readouterr().out)
+    assert "FAIL --skip - unknown step id(s): ['renamed']; fix: pass an id from ['known']" in out
+    assert "run [known]" not in out
+
+
 def test_fail_fast_stops_at_first_gating_failure(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_config(
         repo,
@@ -230,6 +358,58 @@ def _write_synthetic_catalogue(repo: Path) -> None:
         "    RuleEntry(id='B1', gate='b1', check='beta', summary='beta'),\n"
         ")\n"
     )
+
+
+_BAD_RATCHET = "[core_checks.python_dependency_surface]\nratchets = ['src/app.py']\n"
+_CATALOGUE = (
+    '[[steps]]\nid = "fitness"\ncatalogue = "scripts.checks.synthetic_cat:ALL_ENTRIES"\n'
+    'checks_dir = "scripts/checks"\n'
+)
+
+
+def test_a_malformed_core_check_config_is_a_cli_config_error(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """tc-fitness run reports a bad ratchet as a config error (exit 2) before any step runs."""
+    _write_synthetic_catalogue(repo)
+    _write_config(repo, _CATALOGUE + _BAD_RATCHET)
+
+    assert main(["run", "--repo-root", str(repo)]) == 2
+    captured = capsys.readouterr()
+    err = _plain(captured.err)
+    assert "FAIL tc-fitness run" in err
+    assert "python_dependency_surface.ratchets must be an array of tables" in err
+    assert "Traceback" not in err + captured.out
+    assert "run [fitness]" not in _plain(captured.out)
+
+
+def test_a_catalogue_step_fails_cleanly_on_a_malformed_core_check_config(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Through the API, the catalogue step that reads the bad config fails; it does not raise."""
+    _write_synthetic_catalogue(repo)
+    _write_config(repo, _CATALOGUE + _BAD_RATCHET)
+
+    outcome = run_gate(load_config(repo), repo)
+
+    assert outcome.gating_failures == ["fitness"]
+    assert "could not read the core_checks config" in _plain(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("gate_id", ["Z9", None], ids=["unknown-rule", "unloadable-catalogue"])
+def test_a_failed_gate_selection_keeps_the_skipped_steps(
+    repo: Path, capsys: pytest.CaptureFixture[str], gate_id: str | None
+) -> None:
+    """--skip results stay in the outcome when --gate selection fails before anything runs."""
+    _write_synthetic_catalogue(repo)
+    catalogue = _CATALOGUE if gate_id else _CATALOGUE.replace("synthetic_cat", "missing_cat")
+    _write_config(repo, catalogue + '[[steps]]\nid = "other"\nrun = ["true"]\n')
+
+    outcome = run_gate(load_config(repo), repo, gate_id=gate_id or "A1", skip=["other"])
+
+    assert not outcome.ok
+    assert outcome.skipped == 1
+    assert [r.id for r in outcome.results] == ["other", "--gate"]
 
 
 def test_catalogue_step_dispatches_rules(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -641,6 +821,16 @@ def test_main_only_flag_threads_through(repo: Path) -> None:
     assert main(["run", "--repo-root", str(repo), "--only", "a"]) == 0
 
 
+def test_main_skip_flag_threads_through(repo: Path) -> None:
+    _write_config(
+        repo,
+        '[[steps]]\nid = "a"\nrun = ["true"]\n[[steps]]\nid = "b"\nrun = ["false"]\n',
+    )
+    # --skip b drops the failing b → exit 0; an unknown id fails the run.
+    assert main(["run", "--repo-root", str(repo), "--skip", "b"]) == 0
+    assert main(["run", "--repo-root", str(repo), "--skip", "missing"]) == 1
+
+
 # --------------------------------------------------------------------------- #
 # concern-parallelism: stage / depends_on / tags / --tier (v0.10.0)
 # --------------------------------------------------------------------------- #
@@ -995,7 +1185,7 @@ def test_an_affected_list_that_is_not_utf8_is_a_config_error(
     assert main(["run", "--repo-root", str(repo), "--affected-from", str(affected)]) == 2
     err = _plain(capsys.readouterr().err)
     assert "FAIL --affected-from" in err
-    assert "git diff --no-renames --name-only" in err
+    assert "git -c core.quotePath=false diff --no-renames --name-only" in err
 
 
 def test_without_a_change_set_every_scoped_step_runs(repo: Path) -> None:

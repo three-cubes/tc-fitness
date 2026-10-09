@@ -202,6 +202,21 @@ def test_fixed_profile_admits_soak_stacked_on_a_tier(tmp_path: Path) -> None:
     assert payload["status"] == "pass"
 
 
+def test_the_distribution_qualification_is_not_measured_inside_the_transaction(tmp_path: Path) -> None:
+    """It nests coverage transactions of installed copies; CI runs it as its own job instead."""
+    root = tmp_path / "repo"
+    base, _ = repository(root)
+    (root / "tests/test_distribution_qualification.py").write_text(
+        "import pytest\npytestmark=pytest.mark.e2e\ndef test_distribution():\n    assert False, 'must not run here'\n"
+    )
+    candidate = commit(root)
+
+    code, payload = invoke(root, base, candidate, tmp_path / "result.json")
+
+    assert code == 0, payload
+    assert payload["status"] == "pass"
+
+
 @pytest.mark.soak
 def test_public_transaction_freshly_measures_both_commits_with_fixed_profile(tmp_path: Path) -> None:
     root = tmp_path / "repo"

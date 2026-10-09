@@ -437,6 +437,248 @@ def test_a_fragment_that_is_not_utf8_is_a_config_error(tmp_path: Path) -> None:
         load_config(tmp_path)
 
 
+_CATALOGUE_STEP = (
+    '[[tool.tc_fitness.steps]]\nid = "catalogue"\ncatalogue = "frag_core_cat_missing:ENTRIES"\n'
+    'paths = ["src/*"]\n'
+)
+
+
+def test_a_fragment_change_runs_every_catalogue_step(tmp_path: Path) -> None:
+    """A catalogue step reads every fragment's core_checks, so a fragment can change what it checks."""
+    _root(tmp_path, ["layer/fitness.toml"], _CATALOGUE_STEP)
+    _fragment(tmp_path, "layer/fitness.toml", "[core_checks.no_bare_except]\nroots = ['layer']\n")
+
+    outcome = run_gate(load_config(tmp_path), tmp_path, affected_files=["layer/fitness.toml"])
+
+    assert outcome.gating_failures == ["catalogue"]
+
+
+def test_a_deleted_fragment_still_runs_every_catalogue_step(tmp_path: Path) -> None:
+    """A fragment the change deleted no longer resolves, but its include pattern still names it."""
+    _root(tmp_path, ["*/fitness.toml"], _CATALOGUE_STEP)
+
+    outcome = run_gate(load_config(tmp_path), tmp_path, affected_files=["layer/fitness.toml"])
+
+    assert outcome.gating_failures == ["catalogue"]
+
+
+def test_a_deleted_top_level_fragment_matches_a_double_star_include(tmp_path: Path) -> None:
+    """`**/` spans zero directories when include resolves, so a top-level fragment matches it too."""
+    _root(tmp_path, ["**/fitness.toml"], _CATALOGUE_STEP)
+
+    outcome = run_gate(load_config(tmp_path), tmp_path, affected_files=["fitness.toml"])
+
+    assert outcome.gating_failures == ["catalogue"]
+
+
+def test_include_matching_follows_the_hosts_case_rules() -> None:
+    """Path.glob resolves `include` case-insensitively on Windows, so a deleted fragment matches the same way."""
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    from tc_fitness.gate import _include_matches
+
+    assert _include_matches("layer/fitness.toml", "Layer/fitness.toml", PureWindowsPath)
+    assert not _include_matches("layer/fitness.toml", "Layer/fitness.toml", PurePosixPath)
+    assert _include_matches("fitness.toml", "**/fitness.toml", PureWindowsPath)
+
+
+@pytest.mark.parametrize("staged", [False, True], ids=["sequential", "scheduled"])
+def test_each_runner_takes_the_fragment_change_from_the_gate(tmp_path: Path, staged: bool) -> None:
+    """run_gate decides once whether a fragment changed; a runner never rescans the affected paths."""
+    from tc_fitness.gate import _run_scheduled, _run_sequential
+
+    stage = 'stage = "checks"\n' if staged else ""
+    _root(tmp_path, ["layer/fitness.toml"], _CATALOGUE_STEP + stage)
+    cfg = load_config(tmp_path)
+    runner = _run_scheduled if staged else _run_sequential
+
+    outcome = runner(
+        cfg,
+        tmp_path,
+        cfg.steps,
+        gate_id=None,
+        staged=False,
+        changed_files=None,
+        shard=None,
+        fast_mode=False,
+        affected=["docs/readme.md"],
+        fragment_changed=True,
+    )
+
+    assert [result.id for result in outcome.results if result.status == "fail"] == ["catalogue"]
+
+
+def test_a_fragment_of_another_checkout_is_not_a_change_here(tmp_path: Path) -> None:
+    """A same-named file changed in this checkout is not the external config's fragment."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _root(elsewhere, ["layer/fitness.toml"], _CATALOGUE_STEP)
+    _fragment(elsewhere, "layer/fitness.toml", "[core_checks.no_bare_except]\nroots = ['layer']\n")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    assert run_gate(load_config(elsewhere), checkout, affected_files=["layer/fitness.toml"]).ok
+
+
+def test_an_in_memory_config_has_no_fragment_to_change(tmp_path: Path) -> None:
+    """A config built in code is read from no file, so no affected file can be its fragment."""
+    from tc_fitness.gate_config import GateConfig, StepSpec
+
+    step = StepSpec(id="catalogue", catalogue="frag_core_cat_missing:ENTRIES", paths=("src/*",))
+    config = GateConfig(name="in-memory", steps=(step,), fragments=(Path("layer/fitness.toml"),))
+
+    assert run_gate(config, tmp_path, affected_files=["layer/fitness.toml"]).ok
+
+
+def test_a_fragment_change_leaves_other_scoped_steps_skipped(tmp_path: Path) -> None:
+    _root(
+        tmp_path,
+        ["layer/fitness.toml"],
+        '[[tool.tc_fitness.steps]]\nid = "src"\npaths = ["src/*"]\nrun = ["false"]\n',
+    )
+    _fragment(tmp_path, "layer/fitness.toml", "[core_checks.no_bare_except]\nroots = ['layer']\n")
+
+    assert run_gate(load_config(tmp_path), tmp_path, affected_files=["layer/fitness.toml"]).ok
+
+
+def test_a_catalogue_step_skips_when_no_config_or_scoped_file_changed(tmp_path: Path) -> None:
+    _root(tmp_path, ["layer/fitness.toml"], _CATALOGUE_STEP)
+    _fragment(tmp_path, "layer/fitness.toml", "[core_checks.no_bare_except]\nroots = ['layer']\n")
+
+    assert run_gate(load_config(tmp_path), tmp_path, affected_files=["docs/readme.md"]).ok
+
+
+_RATCHET = (
+    "path = 'src/app.py'\nrule = 'direct-import'\nmax_count = {count}\ncontents = ['import requests']\n"
+)
+
+
+def test_a_ratchet_declared_twice_with_different_values_is_an_error(tmp_path: Path) -> None:
+    """The check enforces the first matching ratchet, so a second, different one would be ignored."""
+    _root(
+        tmp_path,
+        ["layer/fitness.toml"],
+        "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\n" + _RATCHET.format(count=2),
+    )
+    _fragment(
+        tmp_path,
+        "layer/fitness.toml",
+        "[[core_checks.python_dependency_surface.ratchets]]\n" + _RATCHET.format(count=1),
+    )
+
+    with pytest.raises(
+        GateConfigError, match=r"python_dependency_surface\.ratchets declares .*src/app\.py.* twice"
+    ):
+        load_core_check_configs(tmp_path)
+
+
+def test_ratchets_union_across_files_and_an_equal_repeat_is_kept_once(tmp_path: Path) -> None:
+    _root(
+        tmp_path,
+        ["layer/fitness.toml"],
+        "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\n" + _RATCHET.format(count=1),
+    )
+    _fragment(
+        tmp_path,
+        "layer/fitness.toml",
+        "[[core_checks.python_dependency_surface.ratchets]]\n"
+        + _RATCHET.format(count=1)
+        + "[[core_checks.python_dependency_surface.ratchets]]\n"
+        + _RATCHET.format(count=1).replace("src/app.py", "src/other.py"),
+    )
+
+    ratchets = load_core_check_configs(tmp_path)["python_dependency_surface"]["ratchets"]
+
+    assert [item["path"] for item in ratchets] == ["src/app.py", "src/other.py"]
+
+
+def test_a_ratchet_that_is_not_a_table_is_an_error(tmp_path: Path) -> None:
+    _root(
+        tmp_path,
+        ["layer/fitness.toml"],
+        "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\n" + _RATCHET.format(count=1),
+    )
+    _fragment(
+        tmp_path, "layer/fitness.toml", "[core_checks.python_dependency_surface]\nratchets = ['src/app.py']\n"
+    )
+
+    with pytest.raises(
+        GateConfigError, match=r"python_dependency_surface\.ratchets must be an array of tables"
+    ):
+        load_core_check_configs(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "bad", ["path = ['src/app.py']\nrule = 'direct-import'\n", "path = 'src/app.py'\nrule = { name = 'x' }\n"]
+)
+def test_a_ratchet_identity_that_is_not_a_string_is_an_error(tmp_path: Path, bad: str) -> None:
+    """An array or table cannot identify a ratchet; it is a config error, not a traceback."""
+    _root(
+        tmp_path,
+        ["layer/fitness.toml"],
+        "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\n" + _RATCHET.format(count=1),
+    )
+    _fragment(tmp_path, "layer/fitness.toml", "[[core_checks.python_dependency_surface.ratchets]]\n" + bad)
+
+    with pytest.raises(GateConfigError, match=r"must name `path` and `rule` as strings; fix: .*next: "):
+        load_core_check_configs(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "[tool.tc_fitness.core_checks.python_dependency_surface]\nratchets = ['src/app.py']\n",
+        "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\npath = ['src/app.py']\nrule = 'r'\n",
+    ],
+    ids=["not-a-table", "non-string-path"],
+)
+@pytest.mark.parametrize("include", [True, False], ids=["with-include", "no-include"])
+def test_a_single_ratchet_declaration_is_validated_too(
+    tmp_path: Path, declaration: str, include: bool
+) -> None:
+    """A ratchet declared in one file is never merged, but must be as valid as a merged one."""
+    if include:
+        _root(tmp_path, ["layer/fitness.toml"], declaration)
+    else:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.tc_fitness]\nname = "g"\n[[tool.tc_fitness.steps]]\nid = "s"\nrun = ["true"]\n'
+            + declaration
+        )
+
+    with pytest.raises(GateConfigError, match=r"python_dependency_surface\.ratchets .*fix: .*next: "):
+        load_core_check_configs(tmp_path)
+
+
+@pytest.mark.parametrize("include", [True, False], ids=["with-include", "no-include"])
+def test_one_declaration_holding_conflicting_ratchets_is_an_error(tmp_path: Path, include: bool) -> None:
+    """Two entries for one path and rule in one file: the check would read only the first."""
+    declaration = (
+        "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\n"
+        + _RATCHET.format(count=1)
+        + "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\n"
+        + _RATCHET.format(count=2)
+    )
+    if include:
+        _root(tmp_path, ["layer/fitness.toml"], declaration)
+    else:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.tc_fitness]\nname = "g"\n[[tool.tc_fitness.steps]]\nid = "s"\nrun = ["true"]\n'
+            + declaration
+        )
+
+    with pytest.raises(GateConfigError, match=r"ratchets declares .*src/app\.py.* twice"):
+        load_core_check_configs(tmp_path)
+
+
+def test_one_declaration_may_repeat_an_identical_ratchet(tmp_path: Path) -> None:
+    entry = "[[tool.tc_fitness.core_checks.python_dependency_surface.ratchets]]\n" + _RATCHET.format(count=1)
+    _root(tmp_path, ["layer/fitness.toml"], entry + entry)
+
+    ratchets = load_core_check_configs(tmp_path)["python_dependency_surface"]["ratchets"]
+
+    assert len(ratchets) == 2
+
+
 def test_command_lists_declared_twice_must_agree(tmp_path: Path) -> None:
     """Unioning two ordered commands would run a third that neither file declared."""
     _root(

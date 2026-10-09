@@ -49,7 +49,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from tc_fitness.catalogue import RuleEntry
 from tc_fitness.gate_config import (
@@ -296,7 +296,12 @@ def _run_catalogue_step(
         argv = ["--staged"]
     else:
         argv = ["--all"]
-    core_check_configs = load_core_check_configs(repo_root)
+    try:
+        core_check_configs = load_core_check_configs(repo_root)
+    except GateConfigError as exc:
+        print(f"{_RED}FAIL [{step.id}]{_RESET} could not read the core_checks config: {exc}")
+        _print_fix_next(step)
+        return StepResult(step.id, "fail", gating=not step.continue_on_error)
     rc = main_cli(
         rules,
         argv,
@@ -360,11 +365,16 @@ def run_gate(
     shard: tuple[int, int] | None = None,
     tier: str | None = None,
     affected_files: list[str] | None = None,
+    skip: list[str] | None = None,
 ) -> GateOutcome:
     """Run the configured steps in order; return the aggregate outcome.
 
     ``only`` restricts to the named step ids (in config order); ``gate_id`` is
     threaded into a catalogue step so a single fitness rule can be targeted.
+    ``skip`` drops the named step ids, so a tier can run as several invocations
+    (``--only`` in one, ``--skip`` in the other) that together run every step.
+    A ``skip`` id the config does not declare fails the gate: the split it was
+    meant to make no longer holds.
 
     ``staged`` selects the ``<60s`` smoke tier: catalogue steps run through the
     runner's sound per-rule ``--staged`` selection, and every step a repo has
@@ -406,6 +416,32 @@ def run_gate(
     if tier is not None:
         # Tier selector: keep only steps tagged `tier` (silently, like --only).
         selected = tuple(s for s in selected if tier in s.tags)
+    if skip:
+        unknown_skip = set(skip) - {s.id for s in cfg.steps}
+        if unknown_skip:
+            print(
+                f"{_RED}FAIL --skip{_RESET} - unknown step id(s): {sorted(unknown_skip)}; "
+                f"fix: pass an id from {[s.id for s in cfg.steps]}; next: re-run tc-fitness run"
+            )
+            outcome = GateOutcome([StepResult("--skip", "fail")])
+            _print_aggregate(cfg, outcome)
+            return outcome
+    # A skipped step leaves this invocation before anything is planned, so the
+    # remaining steps run in exactly the order, stages and fail-fast reach they
+    # would have without it. It is reported now, in config order, and counted.
+    dropped = frozenset(skip or ())
+    skipped_results: list[StepResult] = []
+    for step in selected:
+        if step.id in dropped:
+            print(f"{_YELLOW}SKIP [{step.id}]{_RESET} {step.summary or step.id} ({_SKIPPED_BY_FLAG})")
+            skipped_results.append(StepResult(step.id, "skip"))
+    selected = tuple(s for s in selected if s.id not in dropped)
+
+    def finish(outcome: GateOutcome) -> GateOutcome:
+        """Report and return ``outcome`` with the --skip results first, on every path."""
+        outcome.results[:0] = skipped_results
+        _print_aggregate(cfg, outcome)
+        return outcome
 
     if gate_id is not None:
         # A rule selector is meaningful only inside catalogue steps.  Never run
@@ -420,22 +456,16 @@ def run_gate(
             )
         except (ImportError, AttributeError, ValueError) as exc:
             print(f"{_RED}could not resolve catalogue target [{gate_id}]{_RESET}: {exc}")
-            outcome = GateOutcome([StepResult("--gate", "fail")])
-            _print_aggregate(cfg, outcome)
-            return outcome
+            return finish(GateOutcome([StepResult("--gate", "fail")]))
         if not selected:
             print(
                 f"{_RED}unknown catalogue target [{gate_id}]{_RESET}; no configured catalogue owns that rule"
             )
-            outcome = GateOutcome([StepResult("--gate", "fail")])
-            _print_aggregate(cfg, outcome)
-            return outcome
+            return finish(GateOutcome([StepResult("--gate", "fail")]))
         if len(selected) > 1:
             owners = ", ".join(step.id for step in selected)
             print(f"{_RED}ambiguous catalogue target [{gate_id}]{_RESET}; owned by: {owners}")
-            outcome = GateOutcome([StepResult("--gate", "fail")])
-            _print_aggregate(cfg, outcome)
-            return outcome
+            return finish(GateOutcome([StepResult("--gate", "fail")]))
 
     if affected_files is not None and _root_config_changed(cfg, repo_root, affected_files):
         # The root config can change any step, and which fragments are read.
@@ -451,10 +481,10 @@ def run_gate(
         shard=shard,
         fast_mode=fast_mode,
         affected=affected_files,
+        # Once per run: it scans every affected path against every include pattern.
+        fragment_changed=_fragment_changed(cfg, repo_root, affected_files),
     )
-
-    _print_aggregate(cfg, outcome)
-    return outcome
+    return finish(outcome)
 
 
 def _root_config_changed(cfg: GateConfig, repo_root: Path, affected: list[str]) -> bool:
@@ -468,7 +498,45 @@ def _root_config_changed(cfg: GateConfig, repo_root: Path, affected: list[str]) 
     return rel in affected
 
 
-def _skip_reason(step: StepSpec, *, fast_mode: bool, affected: list[str] | None) -> str | None:
+def _fragment_changed(cfg: GateConfig, repo_root: Path, affected: list[str] | None) -> bool:
+    """Whether the affected files include a fragment of this repository's gate config.
+
+    A fragment the change deleted no longer resolves, so the root ``include``
+    patterns are matched too. A config read from another checkout has no
+    fragment among this repository's changes.
+    """
+    if affected is None or cfg.source is None:
+        return False
+    if not cfg.source.resolve().is_relative_to(repo_root.resolve()):
+        return False
+    fragments = {fragment.as_posix() for fragment in cfg.fragments}
+    return any(
+        path in fragments or any(_include_matches(path, pattern) for pattern in cfg.include)
+        for path in affected
+    )
+
+
+def _include_matches(path: str, pattern: str, flavour: type[PurePath] = PurePath) -> bool:
+    """Whether ``pattern`` names ``path`` as ``include`` resolved it with ``Path.glob``.
+
+    Segment by segment, `**` spanning zero or more directories (so
+    `**/fitness.toml` names a top-level one too), and with the host's case rules:
+    case-insensitive on Windows, as the glob that resolved the fragment was.
+    """
+    return flavour(path).full_match(pattern)
+
+
+#: Why a step named by ``--skip`` does not run in this invocation.
+_SKIPPED_BY_FLAG = "--skip: another invocation of this tier runs it"
+
+
+def _skip_reason(
+    step: StepSpec,
+    *,
+    fast_mode: bool,
+    affected: list[str] | None,
+    fragment_changed: bool = False,
+) -> str | None:
     """Why ``step`` does not run in this invocation, or ``None`` when it runs."""
     if fast_mode and step.skip_when_staged:
         return "skip_when_staged — not in the <60s smoke"
@@ -477,6 +545,9 @@ def _skip_reason(step: StepSpec, *, fast_mode: bool, affected: list[str] | None)
         and step.paths
         # The file that declares a step can change its command or scope.
         and not (step.source is not None and step.source.as_posix() in affected)
+        # A catalogue step reads the core_checks every fragment declares, so a
+        # changed fragment can change what it checks wherever the step is declared.
+        and not (step.catalogue is not None and fragment_changed)
         and not any(fnmatch.fnmatchcase(path, pattern) for path in affected for pattern in step.paths)
     ):
         return (
@@ -504,12 +575,18 @@ def _run_sequential(
     shard: tuple[int, int] | None,
     fast_mode: bool,
     affected: list[str] | None = None,
+    fragment_changed: bool = False,
 ) -> GateOutcome:
     """Today's path (v0.9.0): run ``selected`` sequentially, LIVE, in registration
     order. Physically preserved so a config without stages is byte-identical."""
     outcome = GateOutcome()
     for step in selected:
-        reason = _skip_reason(step, fast_mode=fast_mode, affected=affected)
+        reason = _skip_reason(
+            step,
+            fast_mode=fast_mode,
+            affected=affected,
+            fragment_changed=fragment_changed,
+        )
         if reason is not None:
             label = step.summary or step.id
             print(f"{_YELLOW}SKIP [{step.id}]{_RESET} {label} ({reason})")
@@ -551,6 +628,7 @@ def _run_scheduled(
     shard: tuple[int, int] | None,
     fast_mode: bool,
     affected: list[str] | None = None,
+    fragment_changed: bool = False,
 ) -> GateOutcome:
     """Concern-parallel path: group ``selected`` into stages (dependency order),
     run each stage's members concurrently — subprocess legs on a bounded pool,
@@ -559,7 +637,10 @@ def _run_scheduled(
     stages: tuple[Stage, ...] = plan_stages(selected, strict=False)
     outcome = GateOutcome()
     for stage in stages:
-        reasons = {s.id: _skip_reason(s, fast_mode=fast_mode, affected=affected) for s in stage.steps}
+        reasons = {
+            s.id: _skip_reason(s, fast_mode=fast_mode, affected=affected, fragment_changed=fragment_changed)
+            for s in stage.steps
+        }
         runnable = [s for s in stage.steps if reasons[s.id] is None]
         outcomes = _execute_stage(
             runnable,
@@ -718,6 +799,7 @@ def main(argv: list[str] | None = None) -> int:
 
     * ``run`` — load ``[tool.tc_fitness]`` and run the declared gate.
       ``--repo-root`` overrides CWD; ``--only ID`` runs a subset of steps;
+      ``--skip ID`` drops steps, so two invocations can split one tier;
       ``--gate ID`` targets a single fitness rule inside a catalogue step;
       ``--staged`` runs the ``<60s`` smoke tier (catalogue steps in sound
       per-rule ``--staged`` selection; ``skip_when_staged`` legs dropped);
@@ -749,6 +831,12 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         metavar="ID",
         help="run only the named step id(s) (repeatable)",
+    )
+    run_p.add_argument(
+        "--skip",
+        action="append",
+        metavar="ID",
+        help="drop the named step id(s) (repeatable); composes with --only and --tier",
     )
     run_p.add_argument(
         "--gate",
@@ -796,6 +884,7 @@ def main(argv: list[str] | None = None) -> int:
             (
                 args.repo_root is not None,
                 args.only,
+                args.skip,
                 args.gate,
                 args.staged,
                 args.changed_files_from,
@@ -817,6 +906,9 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(args.repo_root or ".").resolve()
     try:
         cfg = load_config(repo_root)
+        # The CORE-check config is read again by each catalogue step; reading it
+        # here first makes a malformed block a config error before any step runs.
+        load_core_check_configs(repo_root)
     except GateConfigError as exc:
         print(f"{_RED}FAIL tc-fitness run{_RESET} — {exc}", file=sys.stderr)
         return 2
@@ -835,7 +927,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeError) as exc:
         print(
             f"{_RED}FAIL --affected-from{_RESET} - cannot read {args.affected_from}: {exc}; "
-            "fix: write the changed files to that path (e.g. `git diff --no-renames --name-only origin/main...HEAD`, so a rename lists its source too); "
+            "fix: write the changed files to that path (e.g. `git -c core.quotePath=false diff --no-renames --name-only origin/main...HEAD`, so a rename lists its source too and a non-ASCII path is written as-is); "
             "next: re-run tc-fitness run",
             file=sys.stderr,
         )
@@ -856,6 +948,7 @@ def main(argv: list[str] | None = None) -> int:
         shard=shard,
         tier=args.tier,
         affected_files=affected_files,
+        skip=args.skip,
     )
     return outcome.exit_code
 

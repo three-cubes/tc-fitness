@@ -244,6 +244,9 @@ class GateConfig:
     source: Path | None = None
     #: The repo-root-relative fragments ``include`` resolved to, in merge order.
     fragments: tuple[Path, ...] = ()
+    #: The root ``include`` patterns, with `/` separators. A fragment deleted by
+    #: the change under test is matched by them, though it no longer resolves.
+    include: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -493,14 +496,17 @@ def _parse_step(raw: Any, *, index: int, source: Path, declared_in: Path | None 
         else ()
     )
     tags = _coerce_str_tuple(raw["tags"], field_name="tags", step_id=step_id) if "tags" in raw else ()
-    paths = _coerce_str_tuple(raw["paths"], field_name="paths", step_id=step_id) if "paths" in raw else ()
-    for pattern in paths:
+    raw_paths = _coerce_str_tuple(raw["paths"], field_name="paths", step_id=step_id) if "paths" in raw else ()
+    # Affected files are Git's repo-relative, `/`-separated paths, so a pattern
+    # written with Windows separators is matched in the same form.
+    paths = tuple(pattern.replace("\\", "/") for pattern in raw_paths)
+    for raw_pattern, pattern in zip(raw_paths, paths, strict=True):
         # A pattern no repo-relative path can match would skip the step on every
         # --affected-from run while the gate still passes.
-        posix = PurePosixPath(pattern.replace("\\", "/"))
-        if not pattern or posix.is_absolute() or PureWindowsPath(pattern).anchor or ".." in posix.parts:
+        posix = PurePosixPath(pattern)
+        if not pattern or posix.is_absolute() or PureWindowsPath(raw_pattern).anchor or ".." in posix.parts:
             raise GateConfigError(
-                f"step {step_id!r} `paths` entry {pattern!r} is not a repo-relative glob, so no "
+                f"step {step_id!r} `paths` entry {raw_pattern!r} is not a repo-relative glob, so no "
                 "affected file can match it and the step would always be skipped; "
                 'fix: write it relative to the repository root, e.g. `paths = ["src/**"]`; '
                 "next: re-run tc-fitness run"
@@ -543,6 +549,7 @@ def parse_config(
     source: Path,
     step_sources: Sequence[Path] | None = None,
     fragments: Sequence[Path] = (),
+    include: Sequence[str] = (),
 ) -> GateConfig:
     """Validate a raw config table into a :class:`GateConfig`.
 
@@ -591,6 +598,7 @@ def parse_config(
         max_workers=int(table.get("max_workers", 8)),
         source=source,
         fragments=tuple(fragments),
+        include=tuple(include),
     )
 
 
@@ -601,6 +609,7 @@ class _Resolved:
     table: dict[str, Any]
     step_sources: tuple[Path, ...]
     fragments: tuple[Path, ...]
+    include: tuple[str, ...] = ()
 
 
 def _fragment_paths(patterns: Any, *, repo_root: Path, source: Path) -> tuple[Path, ...]:
@@ -683,6 +692,46 @@ def _is_ordered_list(key: str) -> bool:
     return key.endswith(("command", "args", "argv"))
 
 
+#: Lists of tables whose entries name one thing, keyed by these fields. Two
+#: files may declare the same entry only identically: a check reads the first
+#: matching entry, so a second, different one would be silently ignored.
+_TABLE_IDENTITY: dict[str, tuple[str, ...]] = {"ratchets": ("path", "rule")}
+
+
+def _check_table_entries(module_name: str, key: str, items: Any, where: str) -> None:
+    """Reject a list of tables whose entries are not tables, or whose identity fields are not strings."""
+    fields = _TABLE_IDENTITY[key]
+    if not isinstance(items, list) or not all(isinstance(item, Mapping) for item in items):
+        raise GateConfigError(
+            f"core_checks.{module_name}.{key} must be an array of tables ({where}); "
+            f"fix: declare each entry as a [[core_checks.{module_name}.{key}]] table; next: re-run tc-fitness run"
+        )
+    held: dict[tuple[Any, ...], Mapping[str, Any]] = {}
+    for item in items:
+        if not all(isinstance(item.get(f), str) for f in fields):
+            raise GateConfigError(
+                f"core_checks.{module_name}.{key} entry {dict(item)!r} ({where}) must name "
+                + " and ".join(f"`{f}`" for f in fields)
+                + " as strings; fix: write each as a quoted string; next: re-run tc-fitness run"
+            )
+        # A check reads the first entry for an identity, so a second, different
+        # one in the same declaration would be silently ignored.
+        identity = tuple(item.get(f) for f in fields)
+        if identity in held and held[identity] != item:
+            raise GateConfigError(
+                f"core_checks.{module_name}.{key} declares {dict(zip(fields, identity, strict=True))} twice "
+                f"with different values ({dict(held[identity])!r} and {dict(item)!r}, {where}); "
+                "fix: keep one entry for it; next: re-run tc-fitness run"
+            )
+        held.setdefault(identity, item)
+
+
+def _union_tables(module_name: str, key: str, current: list[Any], value: list[Any], where: str) -> None:
+    """Append ``value``'s new entries to ``current``; a second, different entry for one identity is rejected."""
+    _check_table_entries(module_name, key, [*current, *value], where)
+    current.extend(item for item in value if item not in current)
+
+
 def _merge_core_checks(
     merged: dict[str, dict[str, Any]],
     origin: dict[tuple[str, str], Path],
@@ -698,6 +747,9 @@ def _merge_core_checks(
                 origin[(module_name, key)] = rel
                 continue
             current = target[key]
+            if isinstance(current, list) and isinstance(value, list) and key in _TABLE_IDENTITY:
+                _union_tables(module_name, key, current, value, f"in {origin[(module_name, key)]} and {rel}")
+                continue
             if isinstance(current, list) and isinstance(value, list) and not _is_ordered_list(key):
                 current.extend(item for item in value if item not in current)
                 continue
@@ -742,7 +794,8 @@ def _resolve(source: Path, repo_root: Path) -> _Resolved:
     table[_STEPS_KEY] = steps
     if merged:
         table[_CORE_CHECKS_KEY] = merged
-    return _Resolved(table=table, step_sources=tuple(step_sources), fragments=fragments)
+    include = tuple(pattern.replace("\\", "/") for pattern in root_table[_INCLUDE_KEY])
+    return _Resolved(table=table, step_sources=tuple(step_sources), fragments=fragments, include=include)
 
 
 def load_config(repo_root: Path) -> GateConfig:
@@ -765,6 +818,7 @@ def load_config(repo_root: Path) -> GateConfig:
         source=source,
         step_sources=resolved.step_sources,
         fragments=resolved.fragments,
+        include=resolved.include,
     )
 
 
@@ -818,7 +872,13 @@ def load_core_check_configs(repo_root: Path) -> dict[str, Mapping[str, Any]]:
     source = find_config_file(repo_root)
     if source is None:
         return {}
-    return parse_core_check_configs(_resolve(source, repo_root).table, source=source)
+    configs = parse_core_check_configs(_resolve(source, repo_root).table, source=source)
+    # A list of tables declared in one file only is never merged, so it is
+    # validated here too: every declaration, merged or not, reaches a check valid.
+    for module_name, block in configs.items():
+        for key in _TABLE_IDENTITY.keys() & block.keys():
+            _check_table_entries(module_name, key, block[key], f"in {source.name} or its fragments")
+    return configs
 
 
 __all__ = [
