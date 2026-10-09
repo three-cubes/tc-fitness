@@ -700,6 +700,7 @@ def test_case_runner_invokes_and_validates_the_public_command(tmp_path: Path, ca
     [
         ["--repo-root", "."],
         ["--only", "ruff"],
+        ["--skip", "ruff"],
         ["--gate", "anything"],
         ["--staged"],
         ["--changed-files-from", "paths.txt"],

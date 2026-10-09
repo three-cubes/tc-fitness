@@ -32,6 +32,7 @@ from tc_fitness.coverage_admission import (
 from tc_fitness.runner import run_bounded_process
 
 _ROOTS = ("src/tc_fitness",)
+_DISTRIBUTION_QUALIFICATION = "tests/test_distribution_qualification.py"
 _CRITICAL = tuple(
     "src/tc_fitness/" + name + ".py" for name in ("gate", "runner", "gate_config", "runtime_contract")
 )
@@ -238,6 +239,11 @@ def _fresh_measurement(
     if bytes_digest((snapshot / "uv.lock").read_bytes()) != lock:
         raise ValueError("locked environment provisioning changed the bound lockfile")
     command = ["-m", "pytest", "-q", "-c", str(settings), "--rootdir", str(snapshot), "tests"]
+    # The distribution qualification builds and installs the engine twice and
+    # runs a coverage transaction on each, so measuring it would nest
+    # transactions inside this one. Its installed copies are never measured here,
+    # and CI runs it as its own job (scripts/qualification/distribution.sh).
+    command.extend(["--ignore", str(snapshot / _DISTRIBUTION_QUALIFICATION)])
     registry = snapshot / "tests/check_contracts"
     if registry.is_dir() and not registry.is_symlink():
         for path in sorted(registry.iterdir()):

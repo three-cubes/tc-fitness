@@ -113,6 +113,14 @@ def test_inline_marker_explains_disable_even_when_short(tmp_path: Path) -> None:
     assert rule.file_has_violation(source) is False
 
 
+def test_inline_marker_without_its_own_hash_explains_disable(tmp_path: Path) -> None:
+    """Trailing text that is not a comment still counts when it carries a marker, however short."""
+    source = _seed(tmp_path, "scripts/dash.sh", "# shellcheck disable=SC1090 -- fix: x\n")
+    rule = build({"roots": ["scripts"]}, repo_root=tmp_path)
+
+    assert rule.file_has_violation(source) is False
+
+
 def test_empty_preceding_comment_does_not_explain_disable(tmp_path: Path) -> None:
     _seed(tmp_path, "scripts/empty-comment.sh", "#\n# shellcheck disable=SC1090\n")
     rule = build({"roots": ["scripts"]}, repo_root=tmp_path)

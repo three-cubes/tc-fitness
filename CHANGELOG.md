@@ -15,16 +15,51 @@ Python at runtime (PyYAML supplies required manifest parsing) and must never imp
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-10-08
+
+### Added
+
+- `tc-fitness run --skip ID` (repeatable) drops the named steps, the complement
+  of `--only`. A CI that runs one tier as several jobs gives one job `--only`
+  and another `--skip` with the same ids, and together they run every step.
+  An id the config does not declare fails the run, so a renamed step cannot
+  fall out of both jobs. A skipped step leaves the run before anything is
+  planned, so the remaining steps run in exactly the order, stages and
+  fail-fast reach they would have without it. Skipped steps are reported up
+  front, in config order, and counted in the run's skipped total.
+
 ### Fixed
 
-- `branch_naming` exempts GitHub merge-queue branches
-  (`gh-readonly-queue/<base>/pr-<n>-<sha>`), as the org branch-naming ruleset
-  does. The gate runs on the queue's branch, so every merge-queue run failed it.
+- With `--affected-from`, a change to any included fragment runs every
+  catalogue step. A catalogue step reads the `core_checks` that every fragment
+  declares, so a fragment can change what it checks even when another file
+  declares the step. A deleted fragment counts, matched by the root `include`
+  patterns; a fragment of a config read from another checkout does not.
+- A step's `paths` entry written with Windows separators (`src\*`) is stored
+  with `/`, so it matches Git's repo-relative paths. Before, it was accepted but
+  never matched, and the step was skipped.
+- Two files that declare the same `python_dependency_surface` ratchet (one
+  `path` and `rule`) with different values are a config error. Before, both were
+  kept, and the check enforced whichever came first in merge order. A ratchet
+  that is not a table, or whose `path` or `rule` is not a string, is a config
+  error too, not a traceback, whether it is declared in one file or merged from
+  several, and so are two different entries for one `path` and `rule` in a
+  single declaration.
+- Coverage assurance no longer measures `tests/test_distribution_qualification.py`.
+  It builds and installs the engine twice and runs a coverage transaction on
+  each, so measuring it nested transactions inside every coverage run; CI runs
+  it as its own job.
+- The suggested affected-file recipe, and agent-platform's `make check` and
+  `make check-pr`, add `-c core.quotePath=false`, so Git writes a non-ASCII path as-is rather than
+  quoted, and a scope can match it.
 
 ## [0.21.1] — 2026-10-07
 
 ### Fixed
 
+- `branch_naming` exempts GitHub merge-queue branches
+  (`gh-readonly-queue/<base>/pr-<n>-<sha>`), as the org branch-naming ruleset
+  does. The gate runs on the queue's branch, so every merge-queue run failed it.
 - Coverage assurance (`tc-fitness assure-coverage`) measured a suite under a
   fixed pytest profile that registered only the four tier markers, so with
   `--strict-markers` it could not collect a test that stacks `soak` on its
