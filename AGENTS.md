@@ -4,11 +4,7 @@ The `three-cubes-fitness` package: the gate orchestrator (`tc-fitness run`), the
 
 ## Read-only mirror — changes land in agent-platform (ADR-0001 D6)
 
-This repository is the one-way, read-only mirror of the `assurance/fitness/` directory of `three-cubes/agent-platform`.
-Do not change it here. Make the change in agent-platform under `assurance/fitness/`, with its tests; it reaches this
-repository only through the export, which opens a pull request from the export identity. A pull request here from
-anyone else is closed and redone in agent-platform. The org ruleset `org-export-mirrors` lets only the export identity
-and the maintainers create branches here.
+The source of this code is `assurance/fitness/` in `three-cubes/agent-platform`. The `three-cubes/tc-fitness` repository is its one-way, read-only mirror. Make every change in agent-platform, under `assurance/fitness/`, with its tests; it reaches `three-cubes/tc-fitness` only through the export, which opens a pull request from the export identity. A pull request to `three-cubes/tc-fitness` from anyone else is closed and redone in agent-platform. The org ruleset `org-export-mirrors` admits only the export identity and the maintainers to create branches there. If the mirror holds a change agent-platform lacks, port it into `assurance/fitness/` with its tests first.
 
 ## Working here
 
