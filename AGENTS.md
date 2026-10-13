@@ -2,6 +2,14 @@
 
 The `three-cubes-fitness` package: the gate orchestrator (`tc-fitness run`), the CORE checks every repository runs, and the coverage and ratchet machinery. It is generic across repositories and is exported one way to the public `three-cubes/tc-fitness` repository (ADR-0001 D6). Checks specific to agent-platform belong in `assurance/checks/`, not here.
 
+## Read-only mirror — changes land in agent-platform (ADR-0001 D6)
+
+This repository is the one-way, read-only mirror of the `assurance/fitness/` directory of `three-cubes/agent-platform`.
+Do not change it here. Make the change in agent-platform under `assurance/fitness/`, with its tests; it reaches this
+repository only through the export, which opens a pull request from the export identity. A pull request here from
+anyone else is closed and redone in agent-platform. The org ruleset `org-export-mirrors` lets only the export identity
+and the maintainers create branches here.
+
 ## Working here
 
 - Add or improve a CORE check through [`CONTRIBUTING.md`](CONTRIBUTING.md): the check under `src/tc_fitness/core_checks/`, its contract test under `tests/`, and a `CHANGELOG.md` entry.
